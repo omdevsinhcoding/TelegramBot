@@ -62,7 +62,7 @@ def verify_paytm_response(
     """
     try:
         status = response.get("STATUS", "UNKNOWN")
-        response_amount = float(response.get("TXNAMOUNT", "0"))
+        response_amount = float(response.get("TXNAMOUNT") or "0")
         mid_from_response = response.get("MID", "")
         orderid_from_response = response.get("ORDERID", "")
 
