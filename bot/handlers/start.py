@@ -28,8 +28,8 @@ async def cmd_start(message: types.Message):
         f"🌟 *Welcome to DreamX Store\\!*\n\n"
         f"Hey *{first}*\\! 👋\n\n"
         f"🛍️ Browse exclusive coupons & deals\n"
-        f"💰 Manage your wallet balance\n"
-        f"⚡ Instant UPI payments\n"
+        f"💰 Direct UPI payments\n"
+        f"⚡ Instant payment verification\n"
         f"🔒 Secure & verified transactions\n\n"
         f"Use the buttons below to get started 👇"
     )

@@ -13,9 +13,9 @@ from bot.config import Config
 def main_menu_kb(user_id: int) -> ReplyKeyboardMarkup:
     """Build a persistent Reply keyboard (static buttons at bottom of chat).
 
-    Layout (matches the reference design):
+    Layout:
       [ 🛍️ Buy Vouchers ] [ 📦 My Orders  ]
-      [ 👑 My Rank      ] [ 📊 View Stock ]
+      [ 📊 View Stock                      ]
       [       🎟️ Recover Coupon           ]
       [ ⚠️ Disclaimer   ] [ 📢 Our Channels ]
       [       👑 Admin Panel (admin only)  ]
@@ -26,7 +26,6 @@ def main_menu_kb(user_id: int) -> ReplyKeyboardMarkup:
             KeyboardButton(text="📦 My Orders"),
         ],
         [
-            KeyboardButton(text="💰 Wallet"),
             KeyboardButton(text="📊 View Stock"),
         ],
         [
@@ -54,7 +53,6 @@ def main_menu_inline_kb(user_id: int) -> InlineKeyboardMarkup:
     """Inline keyboard fallback used inside callback-based views."""
     buttons = [
         [InlineKeyboardButton(text="🛍️ Buy Vouchers", callback_data="browse_coupons")],
-        [InlineKeyboardButton(text="💰 Wallet", callback_data="wallet_menu")],
         [InlineKeyboardButton(text="📦 My Orders", callback_data="my_orders")],
         [InlineKeyboardButton(text="ℹ️ Help & Support", callback_data="help_menu")],
     ]

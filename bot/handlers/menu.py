@@ -78,24 +78,6 @@ async def text_my_orders(message: types.Message):
     await message.answer(text, parse_mode="MarkdownV2")
 
 
-@router.message(F.text == "💰 Wallet")
-@error_handler
-async def text_wallet(message: types.Message):
-    """Route 'Wallet' button press."""
-    from bot.services.wallet_service import get_balance
-    from bot.keyboards.wallet_kb import wallet_menu_kb
-    from bot.utils.helpers import format_currency
-
-    balance = await get_balance(message.from_user.id)
-    bal_str = escape_md(format_currency(balance))
-    text = (
-        f"💰 *Your Wallet*\n\n"
-        f"💎 Balance: *{bal_str}*\n\n"
-        f"Choose an option:"
-    )
-    await message.answer(
-        text, parse_mode="MarkdownV2", reply_markup=wallet_menu_kb()
-    )
 
 
 @router.message(F.text == "📊 View Stock")
@@ -301,8 +283,9 @@ async def cb_help(callback: types.CallbackQuery):
     text = (
         "ℹ️ *Help & Support*\n\n"
         "🛒 *Buy Coupons* — Browse & purchase deals\n"
-        "💰 *Wallet* — Top\\-up & view transactions\n"
-        "📦 *My Orders* — Track your purchases\n\n"
+        "💰 *Direct Payment* — Pay via UPI instantly\n"
+        "📦 *My Orders* — Track your purchases\n"
+        "🎟️ *Recover Coupon* — Get your code by Order ID\n\n"
         "💬 Need help\\? Contact support\\.\n"
         "🔒 All payments are verified & secure\\."
     )

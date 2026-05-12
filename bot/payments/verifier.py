@@ -99,8 +99,38 @@ def verify_paytm_response(
 
 
 def is_payment_failed(response: dict) -> bool:
-    """Check if Paytm payment definitively failed."""
-    return response.get("STATUS") == "TXN_FAILURE"
+    """Check if Paytm payment definitively failed.
+    
+    IMPORTANT: Paytm returns TXN_FAILURE for orders it doesn't know about
+    (e.g. when we generate UPI QR directly). We must NOT treat "order not found"
+    as a real payment failure. Only return True when user actually attempted
+    payment and it was declined.
+    """
+    if response.get("STATUS") != "TXN_FAILURE":
+        return False
+
+    # These responses mean the order doesn't exist in Paytm yet — NOT a real failure
+    resp_msg = str(response.get("RESPMSG", "")).lower()
+    not_found_indicators = [
+        "order not found",
+        "no record found",
+        "invalid order",
+        "order does not exist",
+        "no transaction",
+    ]
+    for indicator in not_found_indicators:
+        if indicator in resp_msg:
+            logger.debug(f"Paytm order not found (not a real failure): {resp_msg}")
+            return False
+
+    # If there's a TXNID or BANKTXNID, the user actually attempted payment and it failed
+    if response.get("TXNID") or response.get("BANKTXNID"):
+        logger.info(f"Paytm payment genuinely failed: {resp_msg}")
+        return True
+
+    # For other TXN_FAILURE cases without transaction IDs, be conservative — don't mark as failed
+    logger.debug(f"Paytm TXN_FAILURE but no txn IDs, treating as pending: {resp_msg}")
+    return False
 
 
 # ══════════════════════════════════════════════════════════════
