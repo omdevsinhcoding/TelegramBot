@@ -284,19 +284,21 @@ async def msg_bharatpe_utr(message: types.Message, state: FSMContext):
         # Payment verified! Clear FSM state
         await state.clear()
 
-        # Store UTR in the transaction record
-        txn_row = await pool.fetchrow(
-            "SELECT txn_ref FROM transactions WHERE order_id = $1 ORDER BY created_at DESC LIMIT 1",
-            order_id,
-        )
-        if txn_row:
-            txn_ref = txn_row["txn_ref"]
-            await pool.execute(
-                "UPDATE transactions SET utr = $1, raw_response = $2 WHERE txn_ref = $3",
-                utr, json.dumps(details), txn_ref,
+        # Store UTR in the transaction record (non-critical — don't let this block order completion)
+        txn_ref = utr  # fallback
+        try:
+            txn_row = await pool.fetchrow(
+                "SELECT txn_ref FROM transactions WHERE order_id = $1 ORDER BY created_at DESC LIMIT 1",
+                order_id,
             )
-        else:
-            txn_ref = utr
+            if txn_row:
+                txn_ref = txn_row["txn_ref"]
+                await pool.execute(
+                    "UPDATE transactions SET utr = $1, raw_response = $2 WHERE txn_ref = $3",
+                    utr, json.dumps(details), txn_ref,
+                )
+        except Exception as e:
+            logger.error(f"Non-critical: failed to save UTR/response for {order_id}: {e}")
 
         # Complete order (reduce stock + deliver coupon)
         from bot.services.order_service import complete_order

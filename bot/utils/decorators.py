@@ -4,6 +4,7 @@ Access control and error handling decorators.
 """
 
 import functools
+import traceback
 from aiogram import types
 from bot.config import Config
 from bot.utils.logger import logger
@@ -40,6 +41,10 @@ def admin_only(handler):
 def error_handler(handler):
     """Decorator to catch and log exceptions in handlers.
     
+    IMPORTANT: This decorator ensures that unhandled exceptions in handlers
+    do NOT crash the bot. Errors are logged with full tracebacks and
+    a user-friendly message is sent back.
+    
     Properly passes through *args and **kwargs (including FSMContext 'state',
     'bot', etc.) so that decorated handlers receive all their parameters.
     """
@@ -49,7 +54,12 @@ def error_handler(handler):
         try:
             return await handler(event, *args, **kwargs)
         except Exception as e:
-            logger.exception(f"Error in handler {handler.__name__}: {e}")
+            # Log full traceback for debugging
+            logger.error(
+                f"Error in handler {handler.__name__}: {e}\n"
+                f"{traceback.format_exc()}"
+            )
+            # Send user-friendly error message
             try:
                 if isinstance(event, types.CallbackQuery):
                     await event.answer(
@@ -57,8 +67,11 @@ def error_handler(handler):
                         show_alert=True,
                     )
                 elif isinstance(event, types.Message):
-                    await event.answer("❌ An error occurred. Please try again later.")
+                    await event.answer(
+                        "❌ An error occurred. Please try again later.\n"
+                        "If you made a payment, contact support with your Order ID."
+                    )
             except Exception:
-                pass
+                pass  # Can't even send error message — just log it
 
     return wrapper
