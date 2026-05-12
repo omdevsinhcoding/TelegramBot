@@ -33,6 +33,8 @@ class Config:
     BHARATPE_MERCHANT_ID: str = os.getenv("BHARATPE_MERCHANT_ID", "")
     BHARATPE_TOKEN: str = os.getenv("BHARATPE_TOKEN", "")
     BHARATPE_UPI_ID: str = os.getenv("BHARATPE_UPI_ID", "")
+    BHARATPE_QR_IMAGE: str = os.getenv("BHARATPE_QR_IMAGE", "")  # path to static QR image
+    BHARATPE_MIN_RECHARGE: float = float(os.getenv("BHARATPE_MIN_RECHARGE", "10"))
 
     # ── Payment ───────────────────────────────────────────
     PAYMENT_TIMEOUT: int = int(os.getenv("PAYMENT_TIMEOUT_SECONDS", "600"))
