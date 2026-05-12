@@ -1,0 +1,364 @@
+# ============================================================
+#  HOW TO RUN DREAMX COUPON BOT — COMPLETE GUIDE
+#  For beginners with ZERO knowledge
+# ============================================================
+#
+#  Total time: ~25 minutes
+#
+#  What you need before starting:
+#    - A phone/PC with Telegram
+#    - A web browser
+#    - Your Paytm Merchant ID (from Paytm business dashboard)
+#    - Your BharatPe Merchant ID + Token (from BharatPe dashboard)
+#
+# ============================================================
+
+
+# ============================================================
+# STEP 1: CREATE A TELEGRAM BOT (2 minutes)
+# ============================================================
+#
+# This gives you the BOT_TOKEN — the password that lets your
+# code control the bot.
+#
+# 1. Open Telegram on your phone or PC
+# 2. Search for @BotFather and open it
+# 3. Tap "Start"
+# 4. Send this message:  /newbot
+# 5. BotFather asks "What name?" → Type: DreamX Coupon Store
+# 6. BotFather asks "Choose a username" → Type: DreamXCouponBot
+#    (must end in "bot". If taken, try: DreamX_Store_Bot)
+# 7. BotFather replies with a TOKEN like:
+#
+#      7123456789:AAF-xxxxxxxxxxxxxxxxxxxxxxxxxxx
+#
+# 8. COPY THIS TOKEN and save it in Notepad
+#
+# WARNING: Never share this token with anyone!
+
+
+# ============================================================
+# STEP 2: FIND YOUR TELEGRAM USER ID (1 minute)
+# ============================================================
+#
+# This number tells the bot that YOU are the admin.
+#
+# 1. In Telegram, search for @userinfobot and open it
+# 2. Tap "Start"
+# 3. It replies with your info:
+#
+#      Id: 1234567890
+#
+# 4. COPY THIS NUMBER — this is your ADMIN_IDS
+
+
+# ============================================================
+# STEP 3: CREATE AN ALWAYSDATA ACCOUNT (3 minutes)
+# ============================================================
+#
+# AlwaysData is free hosting where your bot runs 24/7.
+#
+# 1. Open browser → go to: www.alwaysdata.com
+# 2. Click "Sign up"
+# 3. Fill in email, password
+# 4. Choose an account name (example: dreamxbot)
+#    REMEMBER THIS NAME — you use it everywhere!
+# 5. Verify your email
+# 6. Log in at: admin.alwaysdata.com
+
+
+# ============================================================
+# STEP 4: CREATE POSTGRESQL DATABASE (2 minutes)
+# ============================================================
+#
+# 1. Log in to admin.alwaysdata.com
+# 2. Left sidebar → Databases → PostgreSQL
+# 3. Click "Add a database"
+# 4. Name: coupon_bot (becomes dreamxbot_coupon_bot)
+# 5. Click Submit
+#
+# YOUR DATABASE DETAILS:
+#   Host:     postgresql-dreamxbot.alwaysdata.net
+#   Database: dreamxbot_coupon_bot
+#   Username: dreamxbot
+#   Password: (your AlwaysData account password)
+#
+# YOUR DATABASE_URL:
+#   postgresql://dreamxbot:YOURPASSWORD@postgresql-dreamxbot.alwaysdata.net:5432/dreamxbot_coupon_bot
+#
+# Replace "dreamxbot" with YOUR account name everywhere!
+# Replace "YOURPASSWORD" with YOUR actual password!
+
+
+# ============================================================
+# STEP 5: UPLOAD BOT FILES TO ALWAYSDATA (5 minutes)
+# ============================================================
+#
+# --- METHOD A: Using SCP (Command Prompt) ---
+#
+# 1. On your PC, press Windows+R → type "cmd" → press Enter
+# 2. Type this command:
+#
+#    scp -r "C:\Users\Ombha\Desktop\TelegramBot" dreamxbot@ssh-dreamxbot.alwaysdata.net:~/
+#
+# 3. Type "yes" when asked about connecting
+# 4. Enter your AlwaysData password (you won't see it — that's normal)
+# 5. Wait for all files to upload
+#
+#
+# --- METHOD B: Using FileZilla (Easier — drag and drop) ---
+#
+# 1. Download FileZilla from: filezilla-project.org
+# 2. Open FileZilla
+# 3. At the top enter:
+#      Host:     ftp-dreamxbot.alwaysdata.net
+#      Username: dreamxbot
+#      Password: your password
+#      Port:     21
+# 4. Click "Quickconnect"
+# 5. LEFT side:  navigate to C:\Users\Ombha\Desktop\TelegramBot
+# 6. RIGHT side: you see your server files
+# 7. Drag the whole TelegramBot folder from LEFT → RIGHT
+
+
+# ============================================================
+# STEP 6: CREATE THE .env FILE ON SERVER (5 minutes)
+# ============================================================
+#
+# --- 6A: Connect to your server ---
+#
+# 1. Open Command Prompt (Windows+R → cmd)
+# 2. Type:
+#
+#    ssh dreamxbot@ssh-dreamxbot.alwaysdata.net
+#
+# 3. Enter your password
+# 4. You should see:  dreamxbot@ssh:~$
+#    (You are now INSIDE your server!)
+#
+#
+# --- 6B: Go to bot folder ---
+#
+#    cd ~/TelegramBot
+#
+#
+# --- 6C: Create the .env file ---
+#
+#    nano .env
+#
+#
+# --- 6D: Paste this (change the values to YOUR real ones!) ---
+#
+#    BOT_TOKEN=7123456789:AAF-xxxxxxxxxxxxxxxxxxxxxxxxxxx
+#    ADMIN_IDS=1234567890
+#    DATABASE_URL=postgresql://dreamxbot:YOURPASSWORD@postgresql-dreamxbot.alwaysdata.net:5432/dreamxbot_coupon_bot
+#    PAYTM_MERCHANT_ID=YOUR_PAYTM_MID
+#    PAYTM_UPI_ID=YOUR_PAYTM_UPI_VPA
+#    PAYTM_QR_CODE=YOUR_PAYTM_QR_CODE
+#    BHARATPE_MERCHANT_ID=YOUR_BHARATPE_MID
+#    BHARATPE_TOKEN=YOUR_BHARATPE_TOKEN
+#    PAYMENT_TIMEOUT_SECONDS=600
+#    PAYMENT_POLL_INTERVAL=2
+#    UPI_PAYEE_NAME=Paytm Merchant
+#    BOT_USERNAME=DreamXCouponBot
+#    SUPPORT_USERNAME=YourTelegramUsername
+#    LOG_LEVEL=INFO
+#    LOG_FILE=bot.log
+#
+#
+# --- 6E: Save and exit ---
+#
+#    Press Ctrl+O → press Enter (saves)
+#    Press Ctrl+X (exits)
+#
+#
+# --- WHAT TO REPLACE: ---
+#
+#    7123456789:AAF-xxx...     → Your bot token (Step 1)
+#    1234567890                → Your Telegram ID (Step 2)
+#    dreamxbot                 → Your AlwaysData account name
+#    YOURPASSWORD              → Your AlwaysData password
+#    YOUR_PAYTM_MID            → Paytm Merchant ID
+#    YOUR_PAYTM_UPI_VPA        → Paytm UPI ID (like paytmqr...@paytm)
+#    YOUR_PAYTM_QR_CODE        → Paytm QR code value
+#    YOUR_BHARATPE_MID         → BharatPe Merchant ID
+#    YOUR_BHARATPE_TOKEN       → BharatPe API token
+#    DreamXCouponBot           → Your bot username (without @)
+
+
+# ============================================================
+# STEP 7: INSTALL PYTHON PACKAGES (2 minutes)
+# ============================================================
+#
+# Still in SSH, run:
+#
+#    cd ~/TelegramBot
+#    pip install --user -r requirements.txt
+#
+# If "pip" doesn't work, try:
+#
+#    pip3 install --user -r requirements.txt
+#
+# Wait until you see "Successfully installed ..."
+
+
+# ============================================================
+# STEP 8: INITIALIZE DATABASE (1 minute)
+# ============================================================
+#
+# Still in SSH, run:
+#
+#    cd ~/TelegramBot
+#    PGPASSWORD=YOURPASSWORD psql -h postgresql-dreamxbot.alwaysdata.net -U dreamxbot -d dreamxbot_coupon_bot -f sql/schema.sql
+#
+# Replace YOURPASSWORD and dreamxbot with your values.
+#
+# You should see:
+#    CREATE TABLE
+#    CREATE INDEX
+#    ...
+#
+# NOTE: If this gives errors, don't worry!
+# The bot auto-creates tables on first run too.
+
+
+# ============================================================
+# STEP 9: TEST THE BOT — FIRST RUN! (2 minutes)
+# ============================================================
+#
+# Still in SSH, run:
+#
+#    cd ~/TelegramBot
+#    python3 run.py
+#
+#
+# IF IT WORKS, you see:
+#
+#    INFO | Connecting to PostgreSQL...
+#    INFO | Database schema applied.
+#    INFO | Database pool ready.
+#    INFO | Bot started: @DreamXCouponBot
+#    INFO | Payment polling service started.
+#
+# Now open Telegram → find your bot → send /start
+# You should see the welcome message with buttons!
+#
+# Press Ctrl+C to stop the test.
+#
+#
+# IF YOU SEE ERRORS:
+#
+#    "BOT_TOKEN is required"
+#    → Your .env file is wrong. Run: nano .env and check token
+#
+#    "DATABASE_URL is required"
+#    → Missing DATABASE_URL. Run: nano .env and add it
+#
+#    "PAYTM_MERCHANT_ID is required"
+#    → Missing Paytm MID. Run: nano .env and add it
+#
+#    "Connection refused"
+#    → DATABASE_URL host/username/password is wrong
+#
+#    "password authentication failed"
+#    → Wrong database password in DATABASE_URL
+#
+#    "database does not exist"
+#    → Wrong database name — check Step 4
+#
+#    "ModuleNotFoundError"
+#    → Run: pip3 install --user -r requirements.txt
+#
+#    "Permission denied"
+#    → Run: chmod +x run.py and try again
+
+
+# ============================================================
+# STEP 10: MAKE BOT RUN 24/7 FOREVER (2 minutes)
+# ============================================================
+#
+# Without this step, the bot STOPS when you close SSH!
+#
+# 1. Go to admin.alwaysdata.com
+# 2. Left sidebar → Advanced → Processes
+# 3. Click "Add a process"
+# 4. Fill in:
+#
+#    Command:           python3 /home/dreamxbot/TelegramBot/run.py
+#    Working directory: /home/dreamxbot/TelegramBot
+#
+#    (Replace "dreamxbot" with YOUR account name!)
+#
+# 5. Click Submit
+#
+# DONE! Your bot now runs 24/7!
+#
+# It will:
+#   ✓ Run forever (even after you close browser/SSH)
+#   ✓ Auto-restart if it crashes
+#   ✓ Survive server reboots
+
+
+# ============================================================
+# AFTER SETUP: ADD YOUR FIRST COUPON
+# ============================================================
+#
+# 1. Open your bot in Telegram → send /start
+# 2. Tap "Admin Panel" button
+# 3. Tap "Manage Coupons" → "Add New Coupon"
+# 4. Enter: title, description, original price, sale price, stock
+# 5. After creating → tap your coupon → "Add Codes"
+# 6. Send coupon codes (one per line):
+#
+#    CODE-ABC-123
+#    CODE-DEF-456
+#    CODE-GHI-789
+#
+# Now users can buy coupons through your bot!
+
+
+# ============================================================
+# USEFUL SSH COMMANDS (for later)
+# ============================================================
+#
+# Connect to server:
+#    ssh dreamxbot@ssh-dreamxbot.alwaysdata.net
+#
+# Go to bot folder:
+#    cd ~/TelegramBot
+#
+# View your config:
+#    cat .env
+#
+# Edit your config:
+#    nano .env
+#
+# Watch live logs:
+#    tail -f bot.log
+#
+# Last 20 log lines:
+#    tail -20 bot.log
+#
+# Manual test run:
+#    python3 run.py
+
+
+# ============================================================
+# FAQ
+# ============================================================
+#
+# Q: How do I update bot code?
+# A: Upload new files → AlwaysData → Advanced → Processes → Restart
+#
+# Q: How to check if bot is running?
+# A: AlwaysData → Advanced → Processes → see status
+#
+# Q: How to add more admins?
+# A: Edit .env → ADMIN_IDS=111,222,333 → Restart process
+#
+# Q: Bot stopped responding?
+# A: 1. Check logs: tail -50 ~/TelegramBot/bot.log
+#    2. Restart: AlwaysData → Processes → Restart
+#
+# Q: How to stop the bot?
+# A: AlwaysData → Advanced → Processes → Stop or Delete

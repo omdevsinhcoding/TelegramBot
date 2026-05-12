@@ -1,0 +1,4 @@
+2026-05-12 11:32:05 │ INFO     │ dreamx_bot           │ Generated UPI URL: txn=TXN_1778565725_siAGmKi9, amount=99.00
+2026-05-12 11:32:37 | INFO     | dreamx_bot           | Generated UPI URL: txn=TXN_1778565757_qgn9WJXH, amount=99.00
+2026-05-12 11:32:38 | INFO     | dreamx_bot           | Payment VERIFIED: order=TXN_123_abc, amount=99.0, UTR=utr456, TXNID=abc123
+2026-05-12 11:44:47 | INFO     | dreamx_bot           | Generated UPI URL: txn=TXN_1778566487_vmmDPbHK, amount=99.00
