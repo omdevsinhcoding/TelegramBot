@@ -43,7 +43,6 @@ def admin_coupon_edit_kb(coupon_id: int, is_active: bool) -> InlineKeyboardMarku
         [InlineKeyboardButton(text="✏️ Edit Title", callback_data=f"admin_edit_field:{coupon_id}:title")],
         [InlineKeyboardButton(text="💰 Edit Price", callback_data=f"admin_edit_field:{coupon_id}:price")],
         [InlineKeyboardButton(text="📝 Edit Description", callback_data=f"admin_edit_field:{coupon_id}:desc")],
-        [InlineKeyboardButton(text="📦 Edit Stock", callback_data=f"admin_edit_field:{coupon_id}:stock")],
         [InlineKeyboardButton(text="🔑 Add Codes", callback_data=f"admin_add_codes:{coupon_id}")],
         [InlineKeyboardButton(text=toggle_text, callback_data=toggle_data)],
         [InlineKeyboardButton(text="🗑️ Delete Coupon", callback_data=f"admin_coupon_del:{coupon_id}")],

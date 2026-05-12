@@ -34,8 +34,8 @@ class AdminStates(StatesGroup):
     add_description = State()
     add_original_price = State()
     add_discounted_price = State()
-    add_stock = State()
-    add_coupon_codes = State()     # NEW: ask for coupon codes after stock
+    add_discounted_price = State()
+    add_coupon_codes = State()     # ask for coupon codes directly after price
     # Edit fields
     edit_field_value = State()
     # Add codes
@@ -188,26 +188,7 @@ async def msg_add_disc_price(message: types.Message, state: FSMContext):
     logger.info(f"Admin {message.from_user.id} — discounted price: ₹{price}")
     await message.answer(
         f"✅ Sale price: *{escape_md(format_currency(price))}*\n\n"
-        f"📦 *Step 5/6* — Enter the *initial stock count*:",
-        parse_mode="MarkdownV2",
-    )
-    await state.set_state(AdminStates.add_stock)
-
-
-@router.message(AdminStates.add_stock)
-@error_handler
-async def msg_add_stock(message: types.Message, state: FSMContext):
-    try:
-        stock = int(message.text.strip())
-    except ValueError:
-        await message.answer("⚠️ Enter a valid integer.")
-        return
-
-    await state.update_data(stock=stock)
-    logger.info(f"Admin {message.from_user.id} — stock count: {stock}")
-    await message.answer(
-        f"✅ Stock set: *{stock}*\n\n"
-        f"🔑 *Step 6/6* — Send *coupon codes* \\(one per line\\)\\.\n\n"
+        f"🔑 *Step 5/5* — Send *coupon codes* \\(one per line\\)\\.\n\n"
         f"Or type *skip* to add codes later:",
         parse_mode="MarkdownV2",
     )
@@ -224,15 +205,13 @@ async def msg_add_coupon_codes(message: types.Message, state: FSMContext):
     description = data["description"]
     original_price = data["original_price"]
     discounted_price = data["discounted_price"]
-    stock = data["stock"]
+
+    # Initial stock is 0 until codes are added
+    stock = 0
 
     # Create the coupon first
     coupon_id = await add_coupon(
         title, description, original_price, discounted_price, stock
-    )
-    await db.add_admin_log(
-        message.from_user.id, "add_coupon", "coupon", str(coupon_id),
-        f"Title: {title}, Price: ₹{discounted_price}, Stock: {stock}"
     )
 
     # Add coupon codes if provided
@@ -245,8 +224,14 @@ async def msg_add_coupon_codes(message: types.Message, state: FSMContext):
         codes_added = len(codes)
         # Update stock to match actual codes
         if codes_added > 0:
-            await edit_coupon(coupon_id, stock=codes_added)
+            stock = codes_added
+            await edit_coupon(coupon_id, stock=stock)
             logger.info(f"Admin {message.from_user.id} — added {codes_added} codes to coupon {coupon_id}")
+
+    await db.add_admin_log(
+        message.from_user.id, "add_coupon", "coupon", str(coupon_id),
+        f"Title: {title}, Price: ₹{discounted_price}, Stock: {stock}"
+    )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_coupons")]])
 
@@ -277,7 +262,7 @@ async def cb_edit_field(callback: types.CallbackQuery, state: FSMContext):
     coupon_id = int(parts[1])
     field = parts[2]
 
-    field_labels = {"title": "title", "price": "discounted price", "desc": "description", "stock": "stock count"}
+    field_labels = {"title": "title", "price": "discounted price", "desc": "description"}
     label = field_labels.get(field, field)
 
     await state.update_data(edit_coupon_id=coupon_id, edit_field=field)
@@ -308,12 +293,6 @@ async def msg_edit_field_value(message: types.Message, state: FSMContext):
             update["discounted_price"] = float(value)
         except ValueError:
             await message.answer("⚠️ Enter a valid number.")
-            return
-    elif field == "stock":
-        try:
-            update["stock"] = int(value)
-        except ValueError:
-            await message.answer("⚠️ Enter a valid integer.")
             return
 
     await edit_coupon(coupon_id, **update)
