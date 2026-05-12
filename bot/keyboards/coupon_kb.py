@@ -40,3 +40,12 @@ def payment_pending_kb(order_id: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🔄 Check Payment", callback_data=f"check_pay:{order_id}")],
         [InlineKeyboardButton(text="❌ Cancel Order", callback_data=f"cancel_order:{order_id}")],
     ])
+
+
+def gateway_selection_kb(coupon_id: int) -> InlineKeyboardMarkup:
+    """Show payment gateway options when user clicks Buy Now."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💳 Pay via Paytm", callback_data=f"pay_gateway:paytm:{coupon_id}")],
+        [InlineKeyboardButton(text="🏦 Pay via BharatPe", callback_data=f"pay_gateway:bharatpe:{coupon_id}")],
+        [back_button("browse_coupons")],
+    ])

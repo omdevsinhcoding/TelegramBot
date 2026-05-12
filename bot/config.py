@@ -32,6 +32,7 @@ class Config:
     # ── BharatPe (GET transactions with token header) ─────
     BHARATPE_MERCHANT_ID: str = os.getenv("BHARATPE_MERCHANT_ID", "")
     BHARATPE_TOKEN: str = os.getenv("BHARATPE_TOKEN", "")
+    BHARATPE_UPI_ID: str = os.getenv("BHARATPE_UPI_ID", "")
 
     # ── Payment ───────────────────────────────────────────
     PAYMENT_TIMEOUT: int = int(os.getenv("PAYMENT_TIMEOUT_SECONDS", "600"))

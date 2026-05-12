@@ -23,15 +23,52 @@ from bot.utils.logger import logger
 router = Router()
 
 
-# ── Buy Coupon → Create Order + Generate Unique QR ───────
+# ── Buy Coupon → Show Gateway Selection ──────────────────
 
 @router.callback_query(F.data.startswith("buy_coupon:"))
 @error_handler
 async def cb_buy_coupon(callback: types.CallbackQuery):
-    """User clicked Buy Now — create order with unique txn_ref and QR."""
+    """User clicked Buy Now — show payment gateway options."""
     coupon_id = int(callback.data.split(":")[1])
     coupon = await get_coupon_detail(coupon_id)
 
+    if not coupon:
+        await callback.answer("Coupon not found.", show_alert=True)
+        return
+
+    if coupon["stock"] <= 0:
+        await callback.answer("Sorry, this coupon is out of stock!", show_alert=True)
+        return
+
+    title = escape_md(coupon["title"])
+    amt = escape_md(format_currency(float(coupon["discounted_price"])))
+
+    from bot.keyboards.coupon_kb import gateway_selection_kb
+
+    text = (
+        f"💳 *Select Payment Gateway*\n\n"
+        f"🏷️ {title}\n"
+        f"💰 Amount: *{amt}*\n\n"
+        f"Choose your preferred payment method:"
+    )
+    await callback.message.edit_text(
+        text, parse_mode="MarkdownV2",
+        reply_markup=gateway_selection_kb(coupon_id),
+    )
+    await callback.answer()
+
+
+# ── Gateway Selected → Create Order + Generate QR ────────
+
+@router.callback_query(F.data.startswith("pay_gateway:"))
+@error_handler
+async def cb_pay_gateway(callback: types.CallbackQuery):
+    """User selected a payment gateway — create order and generate unique QR."""
+    parts = callback.data.split(":")
+    gateway = parts[1]       # "paytm" or "bharatpe"
+    coupon_id = int(parts[2])
+
+    coupon = await get_coupon_detail(coupon_id)
     if not coupon:
         await callback.answer("Coupon not found.", show_alert=True)
         return
@@ -44,34 +81,37 @@ async def cb_buy_coupon(callback: types.CallbackQuery):
     amount = float(coupon["discounted_price"])
 
     # Create order — generates unique order_id + unique txn_ref per user
-    order_info = await create_purchase_order(user_id, coupon_id, amount)
+    order_info = await create_purchase_order(user_id, coupon_id, amount, gateway)
     order_id = order_info["order_id"]
     txn_ref = order_info["txn_ref"]
 
-    # Generate UNIQUE dynamic QR for this specific transaction
-    upi_url = generate_upi_intent_url(amount, txn_ref, f"Order {order_id}")
+    # Generate UNIQUE dynamic QR for the selected gateway
+    upi_url = generate_upi_intent_url(amount, txn_ref, f"Order {order_id}", gateway)
     qr_buf = create_qr_buffer(upi_url, amount, txn_ref)
 
     timeout_min = Config.PAYMENT_TIMEOUT // 60
 
+    gateway_name = "Paytm" if gateway == "paytm" else "BharatPe"
     title = escape_md(coupon["title"])
     amt = escape_md(format_currency(amount))
     oid = escape_md(order_id)
     ref = escape_md(txn_ref)
+    gw = escape_md(gateway_name)
 
     caption = (
         f"💳 *Payment Required*\n\n"
         f"🏷️ {title}\n"
         f"💰 Amount: *{amt}*\n"
         f"🧾 Order: `{oid}`\n"
-        f"🔖 Ref: `{ref}`\n\n"
+        f"🔖 Ref: `{ref}`\n"
+        f"🏦 Gateway: *{gw}*\n\n"
         f"⏰ Expires in {timeout_min} minutes\n\n"
         f"Scan the QR code with any UPI app to pay\\.\n\n"
         f"_Payment will be auto\\-detected\\. "
         f"You can also click Check Payment below\\._"
     )
 
-    # Delete the coupon detail message
+    # Delete the gateway selection message
     try:
         await callback.message.delete()
     except Exception:
@@ -84,7 +124,7 @@ async def cb_buy_coupon(callback: types.CallbackQuery):
         reply_markup=payment_pending_kb(order_id),
     )
     await callback.answer()
-    logger.info(f"QR generated for user {user_id}, order={order_id}, txn={txn_ref}, amount={amount}")
+    logger.info(f"QR generated [{gateway}] for user {user_id}, order={order_id}, txn={txn_ref}, amount={amount}")
 
 
 # ── Check Payment (Manual Verification) ──────────────────

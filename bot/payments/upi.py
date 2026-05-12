@@ -32,33 +32,44 @@ def generate_upi_intent_url(
     amount: float,
     txn_ref_id: str,
     note: str = "Coupon Purchase",
+    gateway: str = "paytm",
 ) -> str:
     """
     Generate UPI deep-link URL for payment.
-    Mirrors the user's get.php format:
-      upi://pay?pa={vpa}&pn={payee}&paytmqr={qr_id}&tr={txn_ref}&tn={note}&am={amount}
+    
+    gateway='paytm'   → uses Paytm UPI ID + paytmqr param
+    gateway='bharatpe' → uses BharatPe UPI ID (no paytmqr)
     """
-    vpa = Config.PAYTM_UPI_ID
     payee = Config.UPI_PAYEE_NAME
-    paytmqr = Config.PAYTM_QR_CODE
 
-    url = (
-        f"upi://pay?pa={vpa}"
-        f"&pn={payee}"
-    )
+    if gateway == "bharatpe" and Config.BHARATPE_UPI_ID:
+        vpa = Config.BHARATPE_UPI_ID
+        url = (
+            f"upi://pay?pa={vpa}"
+            f"&pn={payee}"
+            f"&tr={txn_ref_id}"
+            f"&tn={note}"
+            f"&am={amount:.2f}"
+            f"&cu=INR"
+        )
+    else:
+        # Paytm gateway
+        vpa = Config.PAYTM_UPI_ID
+        paytmqr = Config.PAYTM_QR_CODE
+        url = (
+            f"upi://pay?pa={vpa}"
+            f"&pn={payee}"
+        )
+        if paytmqr:
+            url += f"&paytmqr={paytmqr}"
+        url += (
+            f"&tr={txn_ref_id}"
+            f"&tn={note}"
+            f"&am={amount:.2f}"
+            f"&cu=INR"
+        )
 
-    # Add paytmqr param if configured (matches user's get.php)
-    if paytmqr:
-        url += f"&paytmqr={paytmqr}"
-
-    url += (
-        f"&tr={txn_ref_id}"
-        f"&tn={note}"
-        f"&am={amount:.2f}"
-        f"&cu=INR"
-    )
-
-    logger.info(f"Generated UPI URL: txn={txn_ref_id}, amount={amount:.2f}")
+    logger.info(f"Generated UPI URL [{gateway}]: txn={txn_ref_id}, amount={amount:.2f}")
     return url
 
 
