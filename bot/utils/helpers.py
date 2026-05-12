@@ -57,7 +57,11 @@ def mask_string(s: str, visible: int = 4) -> str:
 
 
 def escape_md(text: str) -> str:
-    """Escape Markdown V2 special characters."""
+    """Escape ALL MarkdownV2 special characters.
+
+    Per Telegram API docs, these characters must be escaped:
+    _ * [ ] ( ) ~ ` > # + - = | { } . !
+    """
     special = r"_*[]()~`>#+-=|{}.!"
     for ch in special:
         text = text.replace(ch, f"\\{ch}")

@@ -249,11 +249,21 @@ async def mark_code_sold(code_id: int, user_id: int, order_id: str):
 
 async def add_admin_log(admin_id: int, action: str, target_type: str = None,
                          target_id: str = None, details: str = None):
+    import json
     pool = await get_pool()
+    # Schema uses JSONB; wrap plain strings in a JSON object
+    details_json = None
+    if details is not None:
+        if isinstance(details, str):
+            details_json = json.dumps({"info": details})
+        elif isinstance(details, dict):
+            details_json = json.dumps(details)
+        else:
+            details_json = json.dumps({"info": str(details)})
     await pool.execute("""
         INSERT INTO admin_logs (admin_id, action, target_type, target_id, details)
-        VALUES ($1, $2, $3, $4, $5)
-    """, admin_id, action, target_type, target_id, details)
+        VALUES ($1, $2, $3, $4, $5::jsonb)
+    """, admin_id, action, target_type, target_id, details_json)
 
 
 async def get_admin_logs(limit: int = 20):

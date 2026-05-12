@@ -9,7 +9,7 @@ from aiogram.fsm.state import StatesGroup, State
 from bot.services.wallet_service import get_balance, get_history
 from bot.keyboards.wallet_kb import wallet_menu_kb, topup_amounts_kb
 from bot.keyboards.common import back_button
-from bot.utils.helpers import format_currency, format_datetime
+from bot.utils.helpers import format_currency, format_datetime, escape_md
 from bot.utils.decorators import error_handler
 
 router = Router()
@@ -23,10 +23,11 @@ class WalletStates(StatesGroup):
 @error_handler
 async def cb_wallet(callback: types.CallbackQuery):
     balance = await get_balance(callback.from_user.id)
+    bal_str = escape_md(format_currency(balance))
     text = (
         f"💰 *Your Wallet*\n\n"
-        f"💎 Balance: *{format_currency(balance)}*\n\n"
-        f"Choose an option\\:"
+        f"💎 Balance: *{bal_str}*\n\n"
+        f"Choose an option:"
     )
     await callback.message.edit_text(
         text, parse_mode="MarkdownV2", reply_markup=wallet_menu_kb()
@@ -37,7 +38,7 @@ async def cb_wallet(callback: types.CallbackQuery):
 @router.callback_query(F.data == "wallet_topup")
 @error_handler
 async def cb_topup(callback: types.CallbackQuery):
-    text = "➕ *Top\\-Up Wallet*\n\nSelect an amount or enter custom\\:"
+    text = "➕ *Top\\-Up Wallet*\n\nSelect an amount or enter custom:"
     await callback.message.edit_text(
         text, parse_mode="MarkdownV2", reply_markup=topup_amounts_kb()
     )
@@ -63,14 +64,16 @@ async def cb_history(callback: types.CallbackQuery):
     lines = ["📜 *Transaction History*\n"]
     for h in history:
         emoji = "➕" if h["txn_type"] in ("topup", "refund", "admin_credit") else "➖"
+        ttype = escape_md(h["txn_type"].upper())
+        amt = escape_md(format_currency(h["amount"]))
+        bal = escape_md(format_currency(h["balance_after"]))
+        dt = escape_md(format_datetime(h["created_at"]))
         lines.append(
-            f"{emoji} {h['txn_type'].upper()} — {format_currency(h['amount'])}\n"
-            f"   Balance: {format_currency(h['balance_after'])} | {format_datetime(h['created_at'])}"
+            f"{emoji} {ttype} — {amt}\n"
+            f"   Balance: {bal} │ {dt}"
         )
 
     text = "\n".join(lines)
-    text = text.replace(".", "\\.").replace("-", "\\-").replace("!", "\\!")
-
     kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("wallet_menu")]])
     await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
     await callback.answer()
@@ -80,7 +83,7 @@ async def cb_history(callback: types.CallbackQuery):
 @error_handler
 async def cb_topup_custom(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
-        "💬 Enter the amount you want to add \\(min ₹10, max ₹10,000\\)\\:",
+        "💬 Enter the amount you want to add \\(min ₹10, max ₹10,000\\):",
         parse_mode="MarkdownV2",
     )
     await state.set_state(WalletStates.waiting_custom_amount)

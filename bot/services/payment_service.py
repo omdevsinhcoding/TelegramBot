@@ -18,6 +18,7 @@ from bot.config import Config
 from bot.database import queries as db
 from bot.services.order_service import complete_order, expire_orders
 from bot.payments.verifier import check_upi_status, verify_payment, is_payment_failed
+from bot.utils.helpers import escape_md
 from bot.utils.logger import logger
 
 
@@ -49,10 +50,11 @@ async def poll_payment_status(bot: Bot):
                     if order and order["status"] == "expired":
                         await db.update_transaction(txn_ref, "expired")
                         try:
+                            oid = escape_md(order_id)
                             await bot.send_message(
                                 user_id,
                                 f"⏰ *Payment Expired*\n\n"
-                                f"Order `{order_id}` has expired\\.\n"
+                                f"Order `{oid}` has expired\\.\n"
                                 f"Please create a new order\\.",
                                 parse_mode="MarkdownV2",
                             )
@@ -72,10 +74,11 @@ async def poll_payment_status(bot: Bot):
                     await db.update_order_status(order_id, "cancelled")
                     await db.update_transaction(txn_ref, "failed", str(response))
                     try:
+                        oid = escape_md(order_id)
                         await bot.send_message(
                             user_id,
                             f"❌ *Payment Failed*\n\n"
-                            f"Order `{order_id}` payment was declined\\.\n"
+                            f"Order `{oid}` payment was declined\\.\n"
                             f"Please try again with a new order\\.",
                             parse_mode="MarkdownV2",
                         )
@@ -98,16 +101,21 @@ async def poll_payment_status(bot: Bot):
                         code_row = await db.get_available_code(order["coupon_id"])
                         code_text = ""
                         if code_row:
-                            code_text = f"\n\n🔑 Your coupon code:\n`{code_row['code']}`"
+                            code_val = escape_md(code_row["code"])
+                            code_text = f"\n\n🔑 Your coupon code:\n`{code_val}`"
 
                         try:
+                            oid = escape_md(order_id)
+                            utr_esc = escape_md(utr)
+                            txn_esc = escape_md(txn_id)
+                            amt_esc = escape_md(f"₹{amount:.2f}")
                             await bot.send_message(
                                 user_id,
                                 f"✅ *Payment Successful\\!*\n\n"
-                                f"📦 Order: `{order_id}`\n"
-                                f"💰 Amount: ₹{amount:.2f}\n"
-                                f"🔢 UTR: `{utr}`\n"
-                                f"🔗 TXN ID: `{txn_id}`"
+                                f"📦 Order: `{oid}`\n"
+                                f"💰 Amount: {amt_esc}\n"
+                                f"🔢 UTR: `{utr_esc}`\n"
+                                f"🔗 TXN ID: `{txn_esc}`"
                                 f"{code_text}\n\n"
                                 f"Thank you for your purchase\\! 🎉",
                                 parse_mode="MarkdownV2",

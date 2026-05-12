@@ -7,7 +7,7 @@ from aiogram import Router, types, F
 from bot.services.coupon_service import list_active_coupons, get_coupon_detail
 from bot.keyboards.coupon_kb import coupons_list_kb, coupon_detail_kb
 from bot.keyboards.common import back_button
-from bot.utils.helpers import format_currency
+from bot.utils.helpers import format_currency, escape_md
 from bot.utils.decorators import error_handler
 
 router = Router()
@@ -29,7 +29,7 @@ async def cb_browse(callback: types.CallbackQuery):
         await callback.answer()
         return
 
-    text = "🛒 *Available Coupons*\n\nSelect a coupon to view details\\:"
+    text = "🛒 *Available Coupons*\n\nSelect a coupon to view details:"
     await callback.message.edit_text(
         text,
         parse_mode="MarkdownV2",
@@ -55,16 +55,19 @@ async def cb_coupon_detail(callback: types.CallbackQuery):
             (1 - coupon["discounted_price"] / coupon["original_price"]) * 100
         )
 
+    title = escape_md(coupon["title"])
+    desc = escape_md(coupon["description"] or "No description")
+    orig_price = escape_md(f"₹{coupon['original_price']:.2f}")
+    sale_price = escape_md(f"₹{coupon['discounted_price']:.2f}")
+
     text = (
-        f"🏷️ *{coupon['title']}*\n\n"
-        f"{coupon['description'] or 'No description'}\n\n"
-        f"💰 Original Price: ~₹{coupon['original_price']:.2f}~\n"
-        f"🔥 Sale Price: *₹{coupon['discounted_price']:.2f}*\n"
+        f"🏷️ *{title}*\n\n"
+        f"{desc}\n\n"
+        f"💰 Original Price: ~{orig_price}~\n"
+        f"🔥 Sale Price: *{sale_price}*\n"
         f"💎 Discount: *{discount_pct}% OFF*\n"
         f"{stock_text}\n"
     )
-    # Escape special chars for MarkdownV2
-    text = text.replace(".", "\\.").replace("-", "\\-").replace("!", "\\!")
 
     in_stock = coupon["stock"] > 0
     await callback.message.edit_text(

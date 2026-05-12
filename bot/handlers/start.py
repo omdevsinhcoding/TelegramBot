@@ -1,6 +1,6 @@
 """
 DreamX Coupon Bot — /start Command Handler
-Registers user and shows welcome screen.
+Registers user and shows welcome screen with persistent reply keyboard.
 """
 
 from aiogram import Router, types
@@ -8,6 +8,7 @@ from aiogram.filters import CommandStart
 
 from bot.services.user_service import register_user
 from bot.keyboards.main_menu import main_menu_kb
+from bot.utils.helpers import escape_md
 from bot.utils.decorators import error_handler
 from bot.utils.logger import logger
 
@@ -21,14 +22,16 @@ async def cmd_start(message: types.Message):
     await register_user(user.id, user.username, user.full_name)
     logger.info(f"/start from {user.id} (@{user.username})")
 
+    first = escape_md(user.first_name or "there")
+
     welcome = (
         f"🌟 *Welcome to DreamX Store\\!*\n\n"
-        f"Hey *{user.first_name or 'there'}*\\! 👋\n\n"
+        f"Hey *{first}*\\! 👋\n\n"
         f"🛍️ Browse exclusive coupons & deals\n"
         f"💰 Manage your wallet balance\n"
         f"⚡ Instant UPI payments\n"
         f"🔒 Secure & verified transactions\n\n"
-        f"Choose an option below to get started\\:"
+        f"Use the buttons below to get started 👇"
     )
 
     await message.answer(

@@ -15,7 +15,7 @@ from bot.keyboards.coupon_kb import payment_pending_kb
 from bot.keyboards.common import back_button
 from bot.database import queries as db
 from bot.config import Config
-from bot.utils.helpers import format_currency, format_datetime
+from bot.utils.helpers import format_currency, format_datetime, escape_md
 from bot.utils.decorators import error_handler
 from bot.utils.logger import logger
 
@@ -50,16 +50,20 @@ async def cb_buy_coupon(callback: types.CallbackQuery):
 
     timeout_min = Config.PAYMENT_TIMEOUT // 60
 
+    title = escape_md(coupon["title"])
+    amt = escape_md(format_currency(amount))
+    oid = escape_md(order_id)
+    ref = escape_md(txn_ref)
+
     caption = (
         f"💳 *Payment Required*\n\n"
-        f"🏷️ {coupon['title']}\n"
-        f"💰 Amount: *{format_currency(amount)}*\n"
-        f"🧾 Order: `{order_id}`\n"
-        f"🔖 Ref: `{txn_ref}`\n\n"
+        f"🏷️ {title}\n"
+        f"💰 Amount: *{amt}*\n"
+        f"🧾 Order: `{oid}`\n"
+        f"🔖 Ref: `{ref}`\n\n"
         f"⏰ Expires in {timeout_min} minutes\n\n"
         f"Scan the QR code with any UPI app to pay\\."
     )
-    caption = caption.replace(".", "\\.").replace("-", "\\-").replace("!", "\\!")
 
     await callback.message.delete()
     await callback.message.answer_photo(
@@ -84,13 +88,20 @@ async def cb_check_payment(callback: types.CallbackQuery):
     if order["status"] == "paid" or order["status"] == "delivered":
         coupon = await get_coupon_detail(order["coupon_id"])
         code_row = await get_delivered_code(order_id, order["coupon_id"])
-        code_text = f"\n\n🔑 Code: `{code_row['code']}`" if code_row else ""
+        code_text = ""
+        if code_row:
+            code_val = escape_md(code_row["code"])
+            code_text = f"\n\n🔑 Code: `{code_val}`"
+
+        coupon_title = escape_md(coupon["title"]) if coupon else "Coupon"
+        amt = escape_md(format_currency(float(order["amount"])))
+        oid = escape_md(order_id)
 
         text = (
             f"✅ *Payment Successful\\!*\n\n"
-            f"🏷️ {coupon['title'] if coupon else 'Coupon'}\n"
-            f"💰 Amount: {format_currency(float(order['amount']))}\n"
-            f"📦 Order: `{order_id}`"
+            f"🏷️ {coupon_title}\n"
+            f"💰 Amount: {amt}\n"
+            f"📦 Order: `{oid}`"
             f"{code_text}\n\n"
             f"Thank you for your purchase\\! 🎉"
         )
@@ -119,8 +130,9 @@ async def cb_cancel_order(callback: types.CallbackQuery):
     if success:
         from aiogram.types import InlineKeyboardMarkup
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("main_menu")]])
+        oid = escape_md(order_id)
         await callback.message.edit_caption(
-            caption=f"❌ Order `{order_id}` has been cancelled\\.",
+            caption=f"❌ Order `{oid}` has been cancelled\\.",
             parse_mode="MarkdownV2",
             reply_markup=kb,
         )
@@ -156,9 +168,11 @@ async def cb_my_orders(callback: types.CallbackQuery):
     lines = ["📦 *My Orders*\n"]
     for o in orders:
         emoji = status_emoji.get(o["status"], "❓")
+        amt = escape_md(format_currency(float(o["amount"])))
+        oid = escape_md(o["order_id"])
+        st = escape_md(o["status"])
         lines.append(
-            f"{emoji} `{o['order_id']}` — {format_currency(float(o['amount']))} "
-            f"\\({o['status']}\\)"
+            f"{emoji} `{oid}` — {amt} \\({st}\\)"
         )
 
     text = "\n".join(lines)
@@ -191,11 +205,15 @@ async def initiate_topup_payment(message: types.Message, amount: float):
 
     timeout_min = Config.PAYMENT_TIMEOUT // 60
 
+    amt = escape_md(format_currency(amount))
+    oid = escape_md(order_id)
+    ref = escape_md(txn_ref)
+
     caption = (
         f"💳 *Wallet Top\\-Up*\n\n"
-        f"💰 Amount: *{format_currency(amount)}*\n"
-        f"🧾 Order: `{order_id}`\n"
-        f"🔖 Ref: `{txn_ref}`\n\n"
+        f"💰 Amount: *{amt}*\n"
+        f"🧾 Order: `{oid}`\n"
+        f"🔖 Ref: `{ref}`\n\n"
         f"⏰ Expires in {timeout_min} minutes\n\n"
         f"Scan the QR code to add funds\\."
     )
