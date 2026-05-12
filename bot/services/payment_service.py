@@ -84,6 +84,12 @@ async def _process_pending_transaction(bot: Bot, txn):
         if order and order["status"] == "expired":
             await db.update_transaction(txn_ref, "expired")
             try:
+                # Delete QR message if stored
+                if order.get("qr_message_id"):
+                    await bot.delete_message(user_id, order["qr_message_id"])
+            except Exception:
+                pass
+            try:
                 oid = escape_md(order_id)
                 await bot.send_message(
                     user_id,
@@ -154,21 +160,35 @@ async def _process_pending_transaction(bot: Bot, txn):
                 code_text = f"\n\n🔑 Your coupon code:\n`{code_val}`"
 
             try:
+                # Delete QR message if stored
+                if order.get("qr_message_id"):
+                    await bot.delete_message(user_id, order["qr_message_id"])
+            except Exception:
+                pass
+
+            try:
                 oid = escape_md(order_id)
                 utr_esc = escape_md(utr)
                 txn_esc = escape_md(txn_id)
                 amt_esc = escape_md(f"₹{amount:.2f}")
+                
+                # Fetch coupon title for eye-catchy message
+                pool = await db.get_pool()
+                coupon_row = await pool.fetchrow("SELECT title FROM coupons WHERE id = $1", order["coupon_id"])
+                coupon_title = escape_md(coupon_row["title"]) if coupon_row else "Coupon"
+                
                 await bot.send_message(
                     user_id,
-                    f"✅ *Payment Successful\\!*\n\n"
-                    f"📦 Order: `{oid}`\n"
-                    f"💰 Amount: {amt_esc}\n"
-                    f"🔢 UTR: `{utr_esc}`\n"
-                    f"🔗 TXN ID: `{txn_esc}`"
+                    f"🎉 *WOOHOO! PAYMENT SUCCESSFUL!* 🎉\n\n"
+                    f"🛍️ *Item:* {coupon_title}\n"
+                    f"💸 *Amount Paid:* {amt_esc}\n"
+                    f"📦 *Order ID:* `{oid}`\n"
+                    f"🔢 *UTR:* `{utr_esc}`\n"
+                    f"🔗 *TXN ID:* `{txn_esc}`\n"
                     f"{code_text}\n\n"
-                    f"💾 *Save this Order ID to recover your coupon later:*\n"
+                    f"💾 *Please save your Order ID for future reference:*\n"
                     f"`{oid}`\n\n"
-                    f"Thank you for your purchase\\! 🎉",
+                    f"🎊 *Thank you for your purchase! Enjoy!* 🎊",
                     parse_mode="MarkdownV2",
                 )
             except Exception as e:

@@ -129,12 +129,13 @@ async def cb_pay_paytm(callback: types.CallbackQuery):
     except Exception:
         pass
 
-    await callback.message.answer_photo(
+    msg = await callback.message.answer_photo(
         photo=BufferedInputFile(qr_buf.read(), filename="payment_qr.png"),
         caption=caption,
         parse_mode="MarkdownV2",
         reply_markup=payment_pending_kb(order_id),
     )
+    await db.update_order_qr_message_id(order_id, msg.message_id)
     await callback.answer()
     logger.info(f"QR generated [paytm] for user {user_id}, order={order_id}, txn={txn_ref}, amount={amount}")
 
@@ -210,12 +211,13 @@ async def cb_pay_bharatpe(callback: types.CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="❌ Cancel Order", callback_data=f"cancel_order:{order_id}")],
     ])
 
-    await callback.message.answer_photo(
+    msg = await callback.message.answer_photo(
         photo=photo,
         caption=caption,
         parse_mode="MarkdownV2",
         reply_markup=kb,
     )
+    await db.update_order_qr_message_id(order_id, msg.message_id)
     await callback.answer()
 
     # Set FSM state — waiting for UTR input
@@ -318,21 +320,28 @@ async def msg_bharatpe_utr(message: types.Message, state: FSMContext):
             utr_esc = escape_md(utr)
 
             text = (
-                f"✅ *Payment Successful\\!*\n\n"
-                f"🏷️ {coupon_title}\n"
-                f"💰 Amount: {amt}\n"
-                f"📦 Order: `{oid}`\n"
-                f"🔢 UTR: `{utr_esc}`"
+                f"🎉 *WOOHOO! PAYMENT SUCCESSFUL!* 🎉\n\n"
+                f"🛍️ *Item:* {coupon_title}\n"
+                f"💸 *Amount Paid:* {amt}\n"
+                f"📦 *Order ID:* `{oid}`\n"
+                f"🔢 *UTR:* `{utr_esc}`\n"
                 f"{code_text}\n\n"
-                f"💾 *Save this Order ID to recover your coupon later:*\n"
+                f"💾 *Please save your Order ID for future reference:*\n"
                 f"`{oid}`\n\n"
-                f"Thank you for your purchase\\! 🎉"
+                f"🎊 *Thank you for your purchase! Enjoy!* 🎊"
             )
 
             try:
                 await checking_msg.delete()
             except Exception:
                 pass
+            
+            # Delete the QR code message
+            try:
+                if order.get("qr_message_id"):
+                    await message.bot.delete_message(message.chat.id, order["qr_message_id"])
+            except Exception as e:
+                logger.error(f"Could not delete QR message: {e}")
 
             kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("main_menu")]])
             await message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
@@ -397,25 +406,30 @@ async def cb_check_payment(callback: types.CallbackQuery):
         oid = escape_md(order_id)
 
         text = (
-            f"✅ *Payment Successful\\!*\n\n"
-            f"🏷️ {coupon_title}\n"
-            f"💰 Amount: {amt}\n"
-            f"📦 Order: `{oid}`"
+            f"🎉 *WOOHOO! PAYMENT SUCCESSFUL!* 🎉\n\n"
+            f"🛍️ *Item:* {coupon_title}\n"
+            f"💸 *Amount Paid:* {amt}\n"
+            f"📦 *Order ID:* `{oid}`\n"
             f"{code_text}\n\n"
-            f"💾 *Save this Order ID to recover your coupon later:*\n"
+            f"💾 *Please save your Order ID for future reference:*\n"
             f"`{oid}`\n\n"
-            f"Thank you for your purchase\\! 🎉"
+            f"🎊 *Thank you for your purchase! Enjoy!* 🎊"
         )
 
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("main_menu")]])
+        
+        # Delete QR message if stored
         try:
-            await callback.message.edit_caption(caption=text, parse_mode="MarkdownV2", reply_markup=kb)
+            if order.get("qr_message_id"):
+                await callback.message.bot.delete_message(callback.message.chat.id, order["qr_message_id"])
         except Exception:
-            try:
-                await callback.message.delete()
-            except Exception:
-                pass
-            await callback.message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
+            pass
+
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        await callback.message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
         await callback.answer("Payment verified! ✅", show_alert=True)
         return
 
@@ -468,27 +482,30 @@ async def cb_check_payment(callback: types.CallbackQuery):
                     oid = escape_md(order_id)
 
                     text = (
-                        f"✅ *Payment Successful\\!*\n\n"
-                        f"🏷️ {coupon_title}\n"
-                        f"💰 Amount: {amt}\n"
-                        f"📦 Order: `{oid}`"
+                        f"🎉 *WOOHOO! PAYMENT SUCCESSFUL!* 🎉\n\n"
+                        f"🛍️ *Item:* {coupon_title}\n"
+                        f"💸 *Amount Paid:* {amt}\n"
+                        f"📦 *Order ID:* `{oid}`\n"
                         f"{code_text}\n\n"
-                        f"💾 *Save this Order ID to recover your coupon later:*\n"
+                        f"💾 *Please save your Order ID for future reference:*\n"
                         f"`{oid}`\n\n"
-                        f"Thank you for your purchase\\! 🎉"
+                        f"🎊 *Thank you for your purchase! Enjoy!* 🎊"
                     )
 
                     kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("main_menu")]])
+                    
+                    # Delete QR message if stored
                     try:
-                        await callback.message.edit_caption(
-                            caption=text, parse_mode="MarkdownV2", reply_markup=kb
-                        )
+                        if order.get("qr_message_id"):
+                            await callback.message.bot.delete_message(callback.message.chat.id, order["qr_message_id"])
                     except Exception:
-                        try:
-                            await callback.message.delete()
-                        except Exception:
-                            pass
-                        await callback.message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
+                        pass
+                        
+                    try:
+                        await callback.message.delete()
+                    except Exception:
+                        pass
+                    await callback.message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
                     await callback.answer("Payment verified! ✅", show_alert=True)
                     return
 

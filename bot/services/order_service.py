@@ -21,9 +21,9 @@ async def create_purchase_order(user_id: int, coupon_id: int, amount: float,
     """
     order_id = generate_order_id()           # human-readable: DX-xxxxx-XXXXXX
     txn_ref = generate_unique_txn_id()       # Paytm ORDERID: TXN_{timestamp}_{random}
-    expires_at = datetime.now(timezone.utc) + timedelta(seconds=Config.PAYMENT_TIMEOUT)
+    timeout_sec = Config.PAYMENT_TIMEOUT
 
-    await db.create_order(order_id, user_id, coupon_id, amount, expires_at)
+    await db.create_order(order_id, user_id, coupon_id, amount, timeout_sec)
 
     # Use correct merchant ID based on selected gateway
     if gateway == "bharatpe":
@@ -42,7 +42,6 @@ async def create_purchase_order(user_id: int, coupon_id: int, amount: float,
         "order_id": order_id,
         "txn_ref": txn_ref,
         "amount": amount,
-        "expires_at": expires_at,
         "coupon_id": coupon_id,
         "gateway": gateway,
     }

@@ -42,6 +42,9 @@ async def init_db() -> asyncpg.Pool:
             await conn.execute("""
                 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS utr VARCHAR(32);
             """)
+            await conn.execute("""
+                ALTER TABLE orders ADD COLUMN IF NOT EXISTS qr_message_id BIGINT;
+            """)
         except Exception:
             pass  # Column already exists or other non-critical issue
 

@@ -133,12 +133,12 @@ async def reduce_stock(coupon_id: int) -> bool:
 # ── ORDER QUERIES ─────────────────────────────────────────
 
 async def create_order(order_id: str, user_id: int, coupon_id: int,
-                        amount: float, expires_at):
+                        amount: float, timeout_sec: int):
     pool = await get_pool()
     await pool.execute("""
         INSERT INTO orders (order_id, user_id, coupon_id, amount, expires_at)
-        VALUES ($1, $2, $3, $4, $5)
-    """, order_id, user_id, coupon_id, amount, expires_at)
+        VALUES ($1, $2, $3, $4, NOW() + interval '1 second' * $5)
+    """, order_id, user_id, coupon_id, amount, timeout_sec)
 
 
 async def get_order(order_id: str):
@@ -158,6 +158,13 @@ async def update_order_status(order_id: str, status: str, txn_id: str = None):
             "UPDATE orders SET status = $2, updated_at = NOW() WHERE order_id = $1",
             order_id, status
         )
+
+async def update_order_qr_message_id(order_id: str, message_id: int):
+    pool = await get_pool()
+    await pool.execute(
+        "UPDATE orders SET qr_message_id = $2 WHERE order_id = $1",
+        order_id, message_id
+    )
 
 
 async def get_pending_orders():
