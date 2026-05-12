@@ -10,7 +10,11 @@ from bot.utils.logger import logger
 
 
 def admin_only(handler):
-    """Decorator to restrict handler to admin users only."""
+    """Decorator to restrict handler to admin users only.
+    
+    Properly passes through *args and **kwargs (including FSMContext 'state',
+    'bot', etc.) so that decorated handlers receive all their parameters.
+    """
 
     @functools.wraps(handler)
     async def wrapper(event, *args, **kwargs):
@@ -34,7 +38,11 @@ def admin_only(handler):
 
 
 def error_handler(handler):
-    """Decorator to catch and log exceptions in handlers."""
+    """Decorator to catch and log exceptions in handlers.
+    
+    Properly passes through *args and **kwargs (including FSMContext 'state',
+    'bot', etc.) so that decorated handlers receive all their parameters.
+    """
 
     @functools.wraps(handler)
     async def wrapper(event, *args, **kwargs):

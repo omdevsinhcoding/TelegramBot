@@ -62,8 +62,8 @@ async def poll_payment_status(bot: Bot):
                             pass
                     continue
 
-                # Query payment gateway (mirrors check_upi_status from user's script)
-                response = await check_upi_status(order_id, gateway)
+                # Query payment gateway using txn_ref (Paytm ORDERID = txn_ref)
+                response = await check_upi_status(txn_ref, gateway)
 
                 # Check for API errors
                 if response.get("STATUS") == "API_ERROR" or "error" in response:
@@ -87,8 +87,8 @@ async def poll_payment_status(bot: Bot):
                     logger.info(f"Payment FAILED for order {order_id}")
                     continue
 
-                # Verify payment success (mirrors the full verification from user's script)
-                is_paid, details = verify_payment(response, amount, order_id, gateway)
+                # Verify payment success (Paytm ORDERID = txn_ref)
+                is_paid, details = verify_payment(response, amount, txn_ref, gateway)
 
                 if is_paid:
                     success = await complete_order(order_id, txn_ref, user_id)
@@ -97,8 +97,12 @@ async def poll_payment_status(bot: Bot):
                         utr = details.get("utr", "N/A") if details else "N/A"
                         txn_id = details.get("txn_id", "N/A") if details else "N/A"
 
-                        # Check if there's a delivered coupon code
-                        code_row = await db.get_available_code(order["coupon_id"])
+                        # Get the delivered coupon code for THIS order (already sold by complete_order)
+                        pool = await db.get_pool()
+                        code_row = await pool.fetchrow(
+                            "SELECT code FROM coupon_codes WHERE order_id = $1 AND is_sold = TRUE",
+                            order_id,
+                        )
                         code_text = ""
                         if code_row:
                             code_val = escape_md(code_row["code"])
@@ -117,6 +121,8 @@ async def poll_payment_status(bot: Bot):
                                 f"🔢 UTR: `{utr_esc}`\n"
                                 f"🔗 TXN ID: `{txn_esc}`"
                                 f"{code_text}\n\n"
+                                f"💾 *Save this Order ID to recover your coupon later:*\n"
+                                f"`{oid}`\n\n"
                                 f"Thank you for your purchase\\! 🎉",
                                 parse_mode="MarkdownV2",
                             )

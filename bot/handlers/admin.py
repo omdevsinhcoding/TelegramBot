@@ -3,7 +3,7 @@ DreamX Coupon Bot — Admin Panel Handlers
 Full admin CRUD for coupons, users, orders, analytics, broadcasts.
 """
 
-from aiogram import Router, types, F, Bot
+from aiogram import Router, types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.types import InlineKeyboardMarkup
@@ -363,12 +363,29 @@ async def cb_delete_confirm(callback: types.CallbackQuery):
 @error_handler
 async def cb_delete_exec(callback: types.CallbackQuery):
     coupon_id = int(callback.data.split(":")[1])
-    await remove_coupon(coupon_id)
-    await db.add_admin_log(
-        callback.from_user.id, "delete_coupon", "coupon", str(coupon_id)
-    )
-    logger.info(f"Admin {callback.from_user.id} deleted coupon {coupon_id}")
-    await callback.answer("Coupon deleted.", show_alert=True)
+    try:
+        pool = await db.get_pool()
+        # Delete in FK order: transactions → orders → coupon_codes → coupon
+        # 1. Delete transactions that reference orders for this coupon
+        await pool.execute(
+            "DELETE FROM transactions WHERE order_id IN (SELECT order_id FROM orders WHERE coupon_id = $1)",
+            coupon_id,
+        )
+        # 2. Delete orders referencing this coupon
+        await pool.execute("DELETE FROM orders WHERE coupon_id = $1", coupon_id)
+        # 3. Delete coupon codes (also has ON DELETE CASCADE but be explicit)
+        await pool.execute("DELETE FROM coupon_codes WHERE coupon_id = $1", coupon_id)
+        # 4. Delete the coupon itself
+        await remove_coupon(coupon_id)
+        await db.add_admin_log(
+            callback.from_user.id, "delete_coupon", "coupon", str(coupon_id)
+        )
+        logger.info(f"Admin {callback.from_user.id} deleted coupon {coupon_id}")
+        await callback.answer("Coupon deleted.", show_alert=True)
+    except Exception as e:
+        logger.error(f"Failed to delete coupon {coupon_id}: {e}")
+        await callback.answer(f"Delete failed: {str(e)[:100]}", show_alert=True)
+        return
     await cb_admin_coupons(callback)
 
 
@@ -566,22 +583,42 @@ async def cb_broadcast(callback: types.CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.broadcast_message)
 @error_handler
-async def msg_broadcast(message: types.Message, state: FSMContext, bot: Bot):
+async def msg_broadcast(message: types.Message, state: FSMContext):
     await state.clear()
+
+    # Handle None text (e.g. if user sends a sticker/photo instead of text)
+    if not message.text:
+        await message.answer("⚠️ Please send a text message for broadcast.")
+        return
+
     text = message.text.strip()
+    if not text:
+        await message.answer("⚠️ Broadcast message cannot be empty.")
+        return
+
+    # Use message.bot instead of DI-injected bot parameter
+    bot_instance = message.bot
+
     users = await db.get_all_users()
     total = len(users)
     bid = await db.create_broadcast(message.from_user.id, text, total)
     await db.update_broadcast(bid, 0, 0, "running")
     logger.info(f"Admin {message.from_user.id} started broadcast #{bid} to {total} users")
 
+    # Send progress message
+    progress_msg = await message.answer(
+        f"📢 Broadcasting to {total} users\\.\\.\\.",
+        parse_mode="MarkdownV2",
+    )
+
     sent = 0
     failed = 0
     for u in users:
         try:
-            await bot.send_message(u["telegram_id"], text)
+            await bot_instance.send_message(u["telegram_id"], text)
             sent += 1
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Broadcast to {u['telegram_id']} failed: {e}")
             failed += 1
 
     await db.update_broadcast(bid, sent, failed, "completed")
@@ -592,6 +629,10 @@ async def msg_broadcast(message: types.Message, state: FSMContext, bot: Bot):
     logger.info(f"Broadcast #{bid} completed: sent={sent}, failed={failed}, total={total}")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_panel")]])
+    try:
+        await progress_msg.delete()
+    except Exception:
+        pass
     await message.answer(
         f"📢 *Broadcast Complete*\n\n"
         f"✅ Sent: {sent}\n❌ Failed: {failed}\n📊 Total: {total}",

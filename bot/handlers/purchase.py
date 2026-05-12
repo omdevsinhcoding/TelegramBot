@@ -4,13 +4,14 @@ Buy coupon → generate QR → verify → deliver.
 """
 
 from aiogram import Router, types, F
-from aiogram.types import BufferedInputFile
+from aiogram.types import BufferedInputFile, InlineKeyboardMarkup
 
 from bot.services.coupon_service import get_coupon_detail
 from bot.services.order_service import (
     create_purchase_order, cancel_order, get_delivered_code
 )
 from bot.payments.upi import generate_upi_intent_url, create_qr_buffer
+from bot.payments.verifier import check_upi_status, verify_payment
 from bot.keyboards.coupon_kb import payment_pending_kb
 from bot.keyboards.common import back_button
 from bot.database import queries as db
@@ -103,12 +104,20 @@ async def cb_check_payment(callback: types.CallbackQuery):
             f"💰 Amount: {amt}\n"
             f"📦 Order: `{oid}`"
             f"{code_text}\n\n"
+            f"💾 *Save this Order ID to recover your coupon later:*\n"
+            f"`{oid}`\n\n"
             f"Thank you for your purchase\\! 🎉"
         )
 
-        from aiogram.types import InlineKeyboardMarkup
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("main_menu")]])
-        await callback.message.edit_caption(caption=text, parse_mode="MarkdownV2", reply_markup=kb)
+        try:
+            await callback.message.edit_caption(caption=text, parse_mode="MarkdownV2", reply_markup=kb)
+        except Exception:
+            # If edit_caption fails (e.g. no photo), try edit_text
+            try:
+                await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+            except Exception:
+                pass
         await callback.answer("Payment verified! ✅", show_alert=True)
 
     elif order["status"] == "expired":
@@ -125,17 +134,117 @@ async def cb_check_payment(callback: types.CallbackQuery):
 @error_handler
 async def cb_cancel_order(callback: types.CallbackQuery):
     order_id = callback.data.split(":")[1]
+    order = await db.get_order(order_id)
+
+    if not order:
+        await callback.answer("Order not found.", show_alert=True)
+        return
+
+    # Already completed orders cannot be cancelled
+    if order["status"] in ("paid", "delivered"):
+        await callback.answer(
+            "❌ Cannot cancel — payment already received for this order.",
+            show_alert=True,
+        )
+        return
+
+    if order["status"] in ("expired", "cancelled"):
+        await callback.answer(
+            f"This order is already {order['status']}.",
+            show_alert=True,
+        )
+        return
+
+    # Only pending orders: first check with gateway if payment was received
+    try:
+        # Get the transaction ref for this order
+        pool = await db.get_pool()
+        txn_row = await pool.fetchrow(
+            "SELECT txn_ref, gateway, amount FROM transactions WHERE order_id = $1 ORDER BY created_at DESC LIMIT 1",
+            order_id,
+        )
+
+        if txn_row:
+            txn_ref = txn_row["txn_ref"]
+            gateway = txn_row["gateway"]
+            amount = float(txn_row["amount"])
+
+            # Check with Paytm if payment was actually made
+            response = await check_upi_status(txn_ref, gateway)
+
+            # If payment was received, don't allow cancellation — complete the order instead
+            if response.get("STATUS") != "API_ERROR" and "error" not in response:
+                is_paid, details = verify_payment(response, amount, txn_ref, gateway)
+                if is_paid:
+                    # Payment was received! Complete the order instead of cancelling
+                    from bot.services.order_service import complete_order
+                    success = await complete_order(order_id, txn_ref, order["user_id"])
+                    if success:
+                        coupon = await get_coupon_detail(order["coupon_id"])
+                        code_row = await get_delivered_code(order_id, order["coupon_id"])
+                        code_text = ""
+                        if code_row:
+                            code_val = escape_md(code_row["code"])
+                            code_text = f"\n\n🔑 Code: `{code_val}`"
+
+                        coupon_title = escape_md(coupon["title"]) if coupon else "Coupon"
+                        amt = escape_md(format_currency(float(order["amount"])))
+                        oid = escape_md(order_id)
+
+                        text = (
+                            f"✅ *Payment Already Received\\!*\n\n"
+                            f"🏷️ {coupon_title}\n"
+                            f"💰 Amount: {amt}\n"
+                            f"📦 Order: `{oid}`"
+                            f"{code_text}\n\n"
+                            f"💾 *Save this Order ID to recover your coupon later:*\n"
+                            f"`{oid}`\n\n"
+                            f"Your order has been placed\\! 🎉"
+                        )
+
+                        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("main_menu")]])
+                        try:
+                            await callback.message.edit_caption(
+                                caption=text, parse_mode="MarkdownV2", reply_markup=kb
+                            )
+                        except Exception:
+                            try:
+                                await callback.message.edit_text(
+                                    text, parse_mode="MarkdownV2", reply_markup=kb
+                                )
+                            except Exception:
+                                pass
+                        await callback.answer(
+                            "Payment was already received! Order completed. ✅",
+                            show_alert=True,
+                        )
+                        return
+    except Exception as e:
+        logger.error(f"Error checking payment before cancel: {e}")
+        # Continue with cancellation if API check fails
+
+    # No payment received — safe to cancel
     success = await cancel_order(order_id)
 
     if success:
-        from aiogram.types import InlineKeyboardMarkup
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("main_menu")]])
         oid = escape_md(order_id)
-        await callback.message.edit_caption(
-            caption=f"❌ Order `{oid}` has been cancelled\\.",
-            parse_mode="MarkdownV2",
-            reply_markup=kb,
-        )
+        try:
+            await callback.message.edit_caption(
+                caption=f"❌ Order `{oid}` has been cancelled\\.",
+                parse_mode="MarkdownV2",
+                reply_markup=kb,
+            )
+        except Exception:
+            # If edit_caption fails, try edit_text
+            try:
+                await callback.message.edit_text(
+                    f"❌ Order `{oid}` has been cancelled\\.",
+                    parse_mode="MarkdownV2",
+                    reply_markup=kb,
+                )
+            except Exception:
+                pass
         await callback.answer("Order cancelled.", show_alert=True)
     else:
         await callback.answer("Cannot cancel this order.", show_alert=True)
@@ -147,7 +256,6 @@ async def cb_cancel_order(callback: types.CallbackQuery):
 @error_handler
 async def cb_my_orders(callback: types.CallbackQuery):
     from bot.services.order_service import get_user_order_history
-    from aiogram.types import InlineKeyboardMarkup
 
     orders = await get_user_order_history(callback.from_user.id, 10)
 

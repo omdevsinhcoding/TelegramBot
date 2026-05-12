@@ -5,6 +5,8 @@ Handles navigation from the persistent reply keyboard and callback queries.
 
 from aiogram import Router, types, F
 from aiogram.types import InlineKeyboardMarkup
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import StatesGroup, State
 
 from bot.keyboards.main_menu import main_menu_kb, main_menu_inline_kb
 from bot.keyboards.common import back_button
@@ -13,6 +15,11 @@ from bot.utils.decorators import error_handler
 from bot.config import Config
 
 router = Router()
+
+
+# ── FSM State for Recover Coupon by Order ID ──────────────
+class RecoverStates(StatesGroup):
+    waiting_order_id = State()
 
 
 # ── Persistent Reply Keyboard Text Handlers ───────────────
@@ -118,33 +125,88 @@ async def text_view_stock(message: types.Message):
 
 @router.message(F.text == "🎟️ Recover Coupon")
 @error_handler
-async def text_recover_coupon(message: types.Message):
-    """Route 'Recover Coupon' — show delivered codes for this user."""
+async def text_recover_coupon(message: types.Message, state: FSMContext):
+    """Route 'Recover Coupon' — ask user for order ID to recover their coupon code."""
+    await message.answer(
+        "🎟️ *Recover Coupon*\n\n"
+        "Enter your *Order ID* to recover your coupon code:\n\n"
+        "Example: `DX\\-12345678\\-ABCDEF`\n\n"
+        "_You can find this in your payment success message\\._",
+        parse_mode="MarkdownV2",
+    )
+    await state.set_state(RecoverStates.waiting_order_id)
+
+
+@router.message(RecoverStates.waiting_order_id)
+@error_handler
+async def msg_recover_by_order_id(message: types.Message, state: FSMContext):
+    """Look up coupon code by order ID."""
+    await state.clear()
+
+    if not message.text:
+        await message.answer("⚠️ Please enter a valid Order ID.")
+        return
+
+    order_id = message.text.strip()
     from bot.database import queries as db
 
-    pool = await db.get_pool()
-    codes = await pool.fetch(
-        "SELECT cc.code, c.title, cc.sold_at "
-        "FROM coupon_codes cc JOIN coupons c ON cc.coupon_id = c.id "
-        "WHERE cc.sold_to = $1 AND cc.is_sold = TRUE "
-        "ORDER BY cc.sold_at DESC LIMIT 10",
-        message.from_user.id,
-    )
-
-    if not codes:
+    # Look up the order
+    order = await db.get_order(order_id)
+    if not order:
         await message.answer(
-            "🎟️ *Recover Coupon*\n\nYou have no purchased coupons yet\\.",
+            "❌ *Order not found\\.*\n\n"
+            "Please check the Order ID and try again\\.",
             parse_mode="MarkdownV2",
         )
         return
 
-    lines = ["🎟️ *Your Purchased Coupons*\n"]
-    for c in codes:
-        title = escape_md(c["title"])
-        code = escape_md(c["code"])
-        lines.append(f"🏷️ *{title}*\n   🔑 `{code}`\n")
+    # Verify this order belongs to the requesting user
+    if order["user_id"] != message.from_user.id:
+        await message.answer(
+            "❌ *This order does not belong to you\\.*",
+            parse_mode="MarkdownV2",
+        )
+        return
 
-    await message.answer("\n".join(lines), parse_mode="MarkdownV2")
+    # Check order status
+    if order["status"] not in ("paid", "delivered"):
+        st = escape_md(order["status"])
+        await message.answer(
+            f"⚠️ *Order status: {st}*\n\n"
+            f"Coupon codes are only available for paid/delivered orders\\.",
+            parse_mode="MarkdownV2",
+        )
+        return
+
+    # Look up delivered code
+    pool = await db.get_pool()
+    code_row = await pool.fetchrow(
+        "SELECT cc.code, c.title FROM coupon_codes cc "
+        "JOIN coupons c ON cc.coupon_id = c.id "
+        "WHERE cc.order_id = $1 AND cc.is_sold = TRUE",
+        order_id,
+    )
+
+    if code_row:
+        title = escape_md(code_row["title"])
+        code = escape_md(code_row["code"])
+        oid = escape_md(order_id)
+        await message.answer(
+            f"✅ *Coupon Recovered\\!*\n\n"
+            f"📦 Order: `{oid}`\n"
+            f"🏷️ Product: *{title}*\n"
+            f"🔑 Code: `{code}`\n\n"
+            f"_Keep this code safe\\!_",
+            parse_mode="MarkdownV2",
+        )
+    else:
+        oid = escape_md(order_id)
+        await message.answer(
+            f"⚠️ *No coupon code found for order* `{oid}`\\.\n\n"
+            f"This may happen if codes were not yet assigned\\.\n"
+            f"Please contact support\\.",
+            parse_mode="MarkdownV2",
+        )
 
 
 @router.message(F.text == "⚠️ Disclaimer")
