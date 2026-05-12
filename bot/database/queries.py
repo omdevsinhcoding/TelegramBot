@@ -291,11 +291,17 @@ async def create_broadcast(admin_id: int, message_text: str, total_users: int):
 
 async def update_broadcast(broadcast_id: int, sent: int, failed: int, status: str):
     pool = await get_pool()
-    await pool.execute("""
-        UPDATE broadcasts SET sent_count = $2, failed_count = $3, status = $4,
-        completed_at = CASE WHEN $4 = 'completed' THEN NOW() ELSE completed_at END
-        WHERE id = $1
-    """, broadcast_id, sent, failed, status)
+    if status == 'completed':
+        await pool.execute("""
+            UPDATE broadcasts SET sent_count = $2, failed_count = $3, status = $4,
+            completed_at = NOW()
+            WHERE id = $1
+        """, broadcast_id, sent, failed, status)
+    else:
+        await pool.execute("""
+            UPDATE broadcasts SET sent_count = $2, failed_count = $3, status = $4
+            WHERE id = $1
+        """, broadcast_id, sent, failed, status)
 
 
 # ── ANALYTICS ─────────────────────────────────────────────
