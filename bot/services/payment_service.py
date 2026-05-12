@@ -62,6 +62,10 @@ async def poll_payment_status(bot: Bot):
                             pass
                     continue
 
+                # Skip BharatPe — it uses manual UTR verification, not auto-polling
+                if gateway == "bharatpe":
+                    continue
+
                 # Query payment gateway using txn_ref (Paytm ORDERID = txn_ref)
                 response = await check_upi_status(txn_ref, gateway)
 

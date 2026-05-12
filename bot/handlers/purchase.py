@@ -1,17 +1,29 @@
 """
 DreamX Coupon Bot — Purchase Flow Handlers
-Buy coupon → generate unique QR per user → auto-detect/manual verify → deliver.
+
+Two payment gateways with DIFFERENT flows:
+
+1. Paytm:  Dynamic QR → auto-poll Paytm status API → auto-detect payment
+2. BharatPe: Static QR shown to user → user pays manually → enters UTR →
+             bot verifies UTR against BharatPe transaction API
 """
 
+import os
+
 from aiogram import Router, types, F
-from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    BufferedInputFile, FSInputFile,
+    InlineKeyboardMarkup, InlineKeyboardButton,
+)
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import StatesGroup, State
 
 from bot.services.coupon_service import get_coupon_detail
 from bot.services.order_service import (
     create_purchase_order, cancel_order, get_delivered_code
 )
 from bot.payments.upi import generate_upi_intent_url, create_qr_buffer
-from bot.payments.verifier import check_upi_status, verify_payment
+from bot.payments.verifier import check_upi_status, verify_payment, verify_bharatpe_utr
 from bot.keyboards.coupon_kb import payment_pending_kb
 from bot.keyboards.common import back_button
 from bot.database import queries as db
@@ -21,6 +33,11 @@ from bot.utils.decorators import error_handler
 from bot.utils.logger import logger
 
 router = Router()
+
+
+# ── FSM States for BharatPe UTR Entry ────────────────────
+class BharatPeStates(StatesGroup):
+    waiting_utr = State()
 
 
 # ── Buy Coupon → Show Gateway Selection ──────────────────
@@ -58,21 +75,20 @@ async def cb_buy_coupon(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# ── Gateway Selected → Create Order + Generate QR ────────
+# ══════════════════════════════════════════════════════════════
+# PAYTM GATEWAY — Dynamic QR + Auto-Poll
+# ══════════════════════════════════════════════════════════════
 
-@router.callback_query(F.data.startswith("pay_gateway:"))
+@router.callback_query(F.data.startswith("pay_gateway:paytm:"))
 @error_handler
-async def cb_pay_gateway(callback: types.CallbackQuery):
-    """User selected a payment gateway — create order and generate unique QR."""
-    parts = callback.data.split(":")
-    gateway = parts[1]       # "paytm" or "bharatpe"
-    coupon_id = int(parts[2])
-
+async def cb_pay_paytm(callback: types.CallbackQuery):
+    """Paytm selected — create order, generate dynamic QR, auto-poll detects payment."""
+    coupon_id = int(callback.data.split(":")[2])
     coupon = await get_coupon_detail(coupon_id)
+
     if not coupon:
         await callback.answer("Coupon not found.", show_alert=True)
         return
-
     if coupon["stock"] <= 0:
         await callback.answer("Sorry, this coupon is out of stock!", show_alert=True)
         return
@@ -80,38 +96,33 @@ async def cb_pay_gateway(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     amount = float(coupon["discounted_price"])
 
-    # Create order — generates unique order_id + unique txn_ref per user
-    order_info = await create_purchase_order(user_id, coupon_id, amount, gateway)
+    # Create order with Paytm gateway
+    order_info = await create_purchase_order(user_id, coupon_id, amount, "paytm")
     order_id = order_info["order_id"]
     txn_ref = order_info["txn_ref"]
 
-    # Generate UNIQUE dynamic QR for the selected gateway
-    upi_url = generate_upi_intent_url(amount, txn_ref, f"Order {order_id}", gateway)
+    # Generate dynamic QR for Paytm
+    upi_url = generate_upi_intent_url(amount, txn_ref, f"Order {order_id}", "paytm")
     qr_buf = create_qr_buffer(upi_url, amount, txn_ref)
 
     timeout_min = Config.PAYMENT_TIMEOUT // 60
-
-    gateway_name = "Paytm" if gateway == "paytm" else "BharatPe"
     title = escape_md(coupon["title"])
     amt = escape_md(format_currency(amount))
     oid = escape_md(order_id)
     ref = escape_md(txn_ref)
-    gw = escape_md(gateway_name)
 
     caption = (
-        f"💳 *Payment Required*\n\n"
+        f"💳 *Payment Required — Paytm*\n\n"
         f"🏷️ {title}\n"
         f"💰 Amount: *{amt}*\n"
         f"🧾 Order: `{oid}`\n"
-        f"🔖 Ref: `{ref}`\n"
-        f"🏦 Gateway: *{gw}*\n\n"
+        f"🔖 Ref: `{ref}`\n\n"
         f"⏰ Expires in {timeout_min} minutes\n\n"
         f"Scan the QR code with any UPI app to pay\\.\n\n"
         f"_Payment will be auto\\-detected\\. "
         f"You can also click Check Payment below\\._"
     )
 
-    # Delete the gateway selection message
     try:
         await callback.message.delete()
     except Exception:
@@ -124,10 +135,239 @@ async def cb_pay_gateway(callback: types.CallbackQuery):
         reply_markup=payment_pending_kb(order_id),
     )
     await callback.answer()
-    logger.info(f"QR generated [{gateway}] for user {user_id}, order={order_id}, txn={txn_ref}, amount={amount}")
+    logger.info(f"QR generated [paytm] for user {user_id}, order={order_id}, txn={txn_ref}, amount={amount}")
 
 
-# ── Check Payment (Manual Verification) ──────────────────
+# ══════════════════════════════════════════════════════════════
+# BHARATPE GATEWAY — Static QR + Manual UTR Verification
+# Mirrors the PHP recharge.php → upi.php flow exactly
+# ══════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("pay_gateway:bharatpe:"))
+@error_handler
+async def cb_pay_bharatpe(callback: types.CallbackQuery, state: FSMContext):
+    """BharatPe selected — show static QR image, ask user to pay & enter UTR."""
+    coupon_id = int(callback.data.split(":")[2])
+    coupon = await get_coupon_detail(coupon_id)
+
+    if not coupon:
+        await callback.answer("Coupon not found.", show_alert=True)
+        return
+    if coupon["stock"] <= 0:
+        await callback.answer("Sorry, this coupon is out of stock!", show_alert=True)
+        return
+
+    user_id = callback.from_user.id
+    amount = float(coupon["discounted_price"])
+
+    # Create order with BharatPe gateway
+    order_info = await create_purchase_order(user_id, coupon_id, amount, "bharatpe")
+    order_id = order_info["order_id"]
+
+    timeout_min = Config.PAYMENT_TIMEOUT // 60
+    title = escape_md(coupon["title"])
+    amt = escape_md(format_currency(amount))
+    oid = escape_md(order_id)
+
+    caption = (
+        f"💳 *Payment Required — Bharat Pay*\n\n"
+        f"🏷️ {title}\n"
+        f"💰 Amount: *{amt}*\n"
+        f"🧾 Order: `{oid}`\n\n"
+        f"📱 *Steps:*\n"
+        f"1️⃣ Scan the QR with any UPI app\n"
+        f"2️⃣ Pay *{amt}*\n"
+        f"3️⃣ After payment, send your *UTR number* here\n\n"
+        f"⏰ Expires in {timeout_min} minutes\n\n"
+        f"_Waiting for your UTR number\\.\\.\\._"
+    )
+
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
+    # Send the STATIC BharatPe QR image
+    qr_path = Config.BHARATPE_QR_IMAGE
+    if qr_path and os.path.exists(qr_path):
+        photo = FSInputFile(qr_path)
+    else:
+        # Fallback — try from project root
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        fallback = os.path.join(project_root, "bharatpe_qr.png")
+        if os.path.exists(fallback):
+            photo = FSInputFile(fallback)
+        else:
+            await callback.message.answer(
+                "⚠️ BharatPe QR image not configured\\. Please contact admin\\.",
+                parse_mode="MarkdownV2",
+            )
+            await callback.answer("QR image missing.", show_alert=True)
+            return
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Cancel Order", callback_data=f"cancel_order:{order_id}")],
+    ])
+
+    await callback.message.answer_photo(
+        photo=photo,
+        caption=caption,
+        parse_mode="MarkdownV2",
+        reply_markup=kb,
+    )
+    await callback.answer()
+
+    # Set FSM state — waiting for UTR input
+    await state.set_state(BharatPeStates.waiting_utr)
+    await state.update_data(order_id=order_id, coupon_id=coupon_id, amount=amount)
+
+    logger.info(f"BharatPe static QR shown for user {user_id}, order={order_id}, amount={amount}")
+
+
+# ── BharatPe UTR Submission ──────────────────────────────
+@router.message(BharatPeStates.waiting_utr)
+@error_handler
+async def msg_bharatpe_utr(message: types.Message, state: FSMContext):
+    """User submitted UTR number — verify against BharatPe API."""
+    data = await state.get_data()
+    order_id = data.get("order_id")
+    coupon_id = data.get("coupon_id")
+    amount = data.get("amount")
+
+    if not order_id or not message.text:
+        await message.answer("⚠️ Please enter a valid UTR number.")
+        return
+
+    utr = message.text.strip()
+
+    # Validate UTR format (alphanumeric, max 12 chars — mirrors PHP validation)
+    import re
+    if not re.match(r'^[a-zA-Z0-9]+$', utr):
+        await message.answer("⚠️ Symbol not allowed\\. UTR must be alphanumeric\\.", parse_mode="MarkdownV2")
+        return
+
+    if len(utr) > 12:
+        await message.answer("⚠️ UTR cannot be more than 12 digits\\.", parse_mode="MarkdownV2")
+        return
+
+    if utr[0] == '0':
+        await message.answer("⚠️ Invalid UTR entered\\.", parse_mode="MarkdownV2")
+        return
+
+    # Check order still valid
+    order = await db.get_order(order_id)
+    if not order or order["status"] != "pending":
+        await state.clear()
+        await message.answer("⚠️ This order is no longer pending\\. Please create a new order\\.", parse_mode="MarkdownV2")
+        return
+
+    # Check if UTR was already used
+    pool = await db.get_pool()
+    existing = await pool.fetchrow(
+        "SELECT order_id FROM transactions WHERE utr = $1 AND status = 'success'", utr
+    )
+    if existing:
+        await message.answer("⚠️ This UTR has already been used\\.", parse_mode="MarkdownV2")
+        return
+
+    # Show "checking" message
+    checking_msg = await message.answer(
+        "🔄 *Checking your payment\\.\\.\\.*\n\nPlease wait while we verify your UTR\\.",
+        parse_mode="MarkdownV2",
+    )
+
+    # Verify UTR against BharatPe API
+    is_paid, details = await verify_bharatpe_utr(utr, amount)
+
+    if is_paid:
+        # Payment verified! Clear FSM state
+        await state.clear()
+
+        # Store UTR in the transaction record
+        txn_row = await pool.fetchrow(
+            "SELECT txn_ref FROM transactions WHERE order_id = $1 ORDER BY created_at DESC LIMIT 1",
+            order_id,
+        )
+        if txn_row:
+            txn_ref = txn_row["txn_ref"]
+            await pool.execute(
+                "UPDATE transactions SET utr = $1, raw_response = $2 WHERE txn_ref = $3",
+                utr, str(details), txn_ref,
+            )
+        else:
+            txn_ref = utr
+
+        # Complete order (reduce stock + deliver coupon)
+        from bot.services.order_service import complete_order
+        success = await complete_order(order_id, txn_ref, message.from_user.id)
+
+        if success:
+            coupon = await get_coupon_detail(coupon_id)
+            code_row = await get_delivered_code(order_id, coupon_id)
+            code_text = ""
+            if code_row:
+                code_val = escape_md(code_row["code"])
+                code_text = f"\n\n🔑 Your coupon code:\n`{code_val}`"
+
+            coupon_title = escape_md(coupon["title"]) if coupon else "Coupon"
+            amt = escape_md(format_currency(amount))
+            oid = escape_md(order_id)
+            utr_esc = escape_md(utr)
+
+            text = (
+                f"✅ *Payment Successful\\!*\n\n"
+                f"🏷️ {coupon_title}\n"
+                f"💰 Amount: {amt}\n"
+                f"📦 Order: `{oid}`\n"
+                f"🔢 UTR: `{utr_esc}`"
+                f"{code_text}\n\n"
+                f"💾 *Save this Order ID to recover your coupon later:*\n"
+                f"`{oid}`\n\n"
+                f"Thank you for your purchase\\! 🎉"
+            )
+
+            try:
+                await checking_msg.delete()
+            except Exception:
+                pass
+
+            kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("main_menu")]])
+            await message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
+
+            logger.info(f"BharatPe VERIFIED: order={order_id}, UTR={utr}, amount={amount}")
+        else:
+            try:
+                await checking_msg.delete()
+            except Exception:
+                pass
+            await message.answer(
+                "⚠️ Payment verified but order completion failed\\. Please contact support\\.",
+                parse_mode="MarkdownV2",
+            )
+    else:
+        # UTR not found or amount mismatch
+        try:
+            await checking_msg.delete()
+        except Exception:
+            pass
+
+        min_amt = escape_md(format_currency(Config.BHARATPE_MIN_RECHARGE))
+        await message.answer(
+            f"❌ *Payment Not Found*\n\n"
+            f"UTR `{escape_md(utr)}` was not found or amount doesn't match\\.\n\n"
+            f"Please make sure:\n"
+            f"• You paid the exact amount\n"
+            f"• Minimum payment is {min_amt}\n"
+            f"• You entered the correct UTR\n\n"
+            f"_Try entering your UTR again, or cancel the order\\._",
+            parse_mode="MarkdownV2",
+        )
+        # DON'T clear state — let user retry with correct UTR
+
+
+# ══════════════════════════════════════════════════════════════
+# CHECK PAYMENT (Paytm only — BharatPe uses UTR)
+# ══════════════════════════════════════════════════════════════
 
 @router.callback_query(F.data.startswith("check_pay:"))
 @error_handler
@@ -196,6 +436,14 @@ async def cb_check_payment(callback: types.CallbackQuery):
         gateway = txn_row["gateway"]
         amount = float(txn_row["amount"])
 
+        # Only Paytm supports status polling — BharatPe uses UTR
+        if gateway == "bharatpe":
+            await callback.answer(
+                "📝 Please send your UTR number in the chat to verify payment.",
+                show_alert=True,
+            )
+            return
+
         response = await check_upi_status(txn_ref, gateway)
 
         if response.get("STATUS") != "API_ERROR" and "error" not in response:
@@ -249,7 +497,7 @@ async def cb_check_payment(callback: types.CallbackQuery):
 
 @router.callback_query(F.data.startswith("cancel_order:"))
 @error_handler
-async def cb_cancel_order(callback: types.CallbackQuery):
+async def cb_cancel_order(callback: types.CallbackQuery, state: FSMContext):
     """Cancel a pending order — delete QR message and send cancellation details."""
     order_id = callback.data.split(":")[1]
     order = await db.get_order(order_id)
@@ -285,51 +533,55 @@ async def cb_cancel_order(callback: types.CallbackQuery):
         gateway = txn_row["gateway"]
         amount = float(txn_row["amount"])
 
-        try:
-            response = await check_upi_status(txn_ref, gateway)
-            if response.get("STATUS") != "API_ERROR" and "error" not in response:
-                is_paid, details = verify_payment(response, amount, txn_ref, gateway)
-                if is_paid:
-                    # Payment was received! Complete the order instead
-                    from bot.services.order_service import complete_order
-                    success = await complete_order(order_id, txn_ref, order["user_id"])
-                    if success:
-                        coupon = await get_coupon_detail(order["coupon_id"])
-                        code_row = await get_delivered_code(order_id, order["coupon_id"])
-                        code_text = ""
-                        if code_row:
-                            code_val = escape_md(code_row["code"])
-                            code_text = f"\n\n🔑 Code: `{code_val}`"
+        # Only check Paytm status before cancel (BharatPe requires UTR)
+        if gateway == "paytm":
+            try:
+                response = await check_upi_status(txn_ref, gateway)
+                if response.get("STATUS") != "API_ERROR" and "error" not in response:
+                    is_paid, details = verify_payment(response, amount, txn_ref, gateway)
+                    if is_paid:
+                        # Payment was received! Complete the order instead
+                        from bot.services.order_service import complete_order
+                        success = await complete_order(order_id, txn_ref, order["user_id"])
+                        if success:
+                            coupon = await get_coupon_detail(order["coupon_id"])
+                            code_row = await get_delivered_code(order_id, order["coupon_id"])
+                            code_text = ""
+                            if code_row:
+                                code_val = escape_md(code_row["code"])
+                                code_text = f"\n\n🔑 Code: `{code_val}`"
 
-                        coupon_title = escape_md(coupon["title"]) if coupon else "Coupon"
-                        amt = escape_md(format_currency(float(order["amount"])))
-                        oid = escape_md(order_id)
+                            coupon_title = escape_md(coupon["title"]) if coupon else "Coupon"
+                            amt = escape_md(format_currency(float(order["amount"])))
+                            oid = escape_md(order_id)
 
-                        text = (
-                            f"✅ *Payment Already Received\\!*\n\n"
-                            f"🏷️ {coupon_title}\n"
-                            f"💰 Amount: {amt}\n"
-                            f"📦 Order: `{oid}`"
-                            f"{code_text}\n\n"
-                            f"💾 *Save this Order ID to recover your coupon later:*\n"
-                            f"`{oid}`\n\n"
-                            f"Your order has been placed\\! 🎉"
-                        )
+                            text = (
+                                f"✅ *Payment Already Received\\!*\n\n"
+                                f"🏷️ {coupon_title}\n"
+                                f"💰 Amount: {amt}\n"
+                                f"📦 Order: `{oid}`"
+                                f"{code_text}\n\n"
+                                f"💾 *Save this Order ID to recover your coupon later:*\n"
+                                f"`{oid}`\n\n"
+                                f"Your order has been placed\\! 🎉"
+                            )
 
-                        # Delete QR message, send success message
-                        try:
-                            await callback.message.delete()
-                        except Exception:
-                            pass
-                        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("main_menu")]])
-                        await callback.message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
-                        await callback.answer("Payment was already received! ✅", show_alert=True)
-                        return
-        except Exception as e:
-            logger.error(f"Error checking payment before cancel: {e}")
+                            try:
+                                await callback.message.delete()
+                            except Exception:
+                                pass
+                            kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("main_menu")]])
+                            await callback.message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
+                            await callback.answer("Payment was already received! ✅", show_alert=True)
+                            return
+            except Exception as e:
+                logger.error(f"Error checking payment before cancel: {e}")
 
     # No payment received — safe to cancel
     success = await cancel_order(order_id)
+
+    # Clear BharatPe FSM state if active
+    await state.clear()
 
     if success:
         # Get coupon details for cancellation message

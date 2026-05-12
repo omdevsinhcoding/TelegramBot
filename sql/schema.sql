@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     amount          NUMERIC(10, 2) NOT NULL,
     upi_id          VARCHAR(128),
     merchant_id     VARCHAR(64),
+    utr             VARCHAR(32),                   -- BharatPe UTR submitted by user
     status          txn_status DEFAULT 'initiated',
     gateway         VARCHAR(32) DEFAULT 'paytm',   -- paytm / bharatpe
     raw_response    JSONB,

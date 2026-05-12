@@ -36,6 +36,15 @@ async def init_db() -> asyncpg.Pool:
             except Exception as e:
                 logger.warning(f"Schema note: {e}")
 
+    # Migrations — add columns that may not exist in older schemas
+    async with _pool.acquire() as conn:
+        try:
+            await conn.execute("""
+                ALTER TABLE transactions ADD COLUMN IF NOT EXISTS utr VARCHAR(32);
+            """)
+        except Exception:
+            pass  # Column already exists or other non-critical issue
+
     logger.info("Database pool ready.")
     return _pool
 
