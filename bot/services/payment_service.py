@@ -179,7 +179,7 @@ async def _process_pending_transaction(bot: Bot, txn):
                 
                 await bot.send_message(
                     user_id,
-                    f"🎉 *WOOHOO! PAYMENT SUCCESSFUL!* 🎉\n\n"
+                    f"🎉 *WOOHOO\\! PAYMENT SUCCESSFUL\\!* 🎉\n\n"
                     f"🛍️ *Item:* {coupon_title}\n"
                     f"💸 *Amount Paid:* {amt_esc}\n"
                     f"📦 *Order ID:* `{oid}`\n"
@@ -188,7 +188,7 @@ async def _process_pending_transaction(bot: Bot, txn):
                     f"{code_text}\n\n"
                     f"💾 *Please save your Order ID for future reference:*\n"
                     f"`{oid}`\n\n"
-                    f"🎊 *Thank you for your purchase! Enjoy!* 🎊",
+                    f"🎊 *Thank you for your purchase\\! Enjoy\\!* 🎊",
                     parse_mode="MarkdownV2",
                 )
             except Exception as e:

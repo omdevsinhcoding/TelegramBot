@@ -320,7 +320,7 @@ async def msg_bharatpe_utr(message: types.Message, state: FSMContext):
             utr_esc = escape_md(utr)
 
             text = (
-                f"🎉 *WOOHOO! PAYMENT SUCCESSFUL!* 🎉\n\n"
+                f"🎉 *WOOHOO\\! PAYMENT SUCCESSFUL\\!* 🎉\n\n"
                 f"🛍️ *Item:* {coupon_title}\n"
                 f"💸 *Amount Paid:* {amt}\n"
                 f"📦 *Order ID:* `{oid}`\n"
@@ -328,7 +328,7 @@ async def msg_bharatpe_utr(message: types.Message, state: FSMContext):
                 f"{code_text}\n\n"
                 f"💾 *Please save your Order ID for future reference:*\n"
                 f"`{oid}`\n\n"
-                f"🎊 *Thank you for your purchase! Enjoy!* 🎊"
+                f"🎊 *Thank you for your purchase\\! Enjoy\\!* 🎊"
             )
 
             try:
@@ -406,14 +406,14 @@ async def cb_check_payment(callback: types.CallbackQuery):
         oid = escape_md(order_id)
 
         text = (
-            f"🎉 *WOOHOO! PAYMENT SUCCESSFUL!* 🎉\n\n"
+            f"🎉 *WOOHOO\\! PAYMENT SUCCESSFUL\\!* 🎉\n\n"
             f"🛍️ *Item:* {coupon_title}\n"
             f"💸 *Amount Paid:* {amt}\n"
             f"📦 *Order ID:* `{oid}`\n"
             f"{code_text}\n\n"
             f"💾 *Please save your Order ID for future reference:*\n"
             f"`{oid}`\n\n"
-            f"🎊 *Thank you for your purchase! Enjoy!* 🎊"
+            f"🎊 *Thank you for your purchase\\! Enjoy\\!* 🎊"
         )
 
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("main_menu")]])
@@ -482,14 +482,14 @@ async def cb_check_payment(callback: types.CallbackQuery):
                     oid = escape_md(order_id)
 
                     text = (
-                        f"🎉 *WOOHOO! PAYMENT SUCCESSFUL!* 🎉\n\n"
+                        f"🎉 *WOOHOO\\! PAYMENT SUCCESSFUL\\!* 🎉\n\n"
                         f"🛍️ *Item:* {coupon_title}\n"
                         f"💸 *Amount Paid:* {amt}\n"
                         f"📦 *Order ID:* `{oid}`\n"
                         f"{code_text}\n\n"
                         f"💾 *Please save your Order ID for future reference:*\n"
                         f"`{oid}`\n\n"
-                        f"🎊 *Thank you for your purchase! Enjoy!* 🎊"
+                        f"🎊 *Thank you for your purchase\\! Enjoy\\!* 🎊"
                     )
 
                     kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("main_menu")]])
