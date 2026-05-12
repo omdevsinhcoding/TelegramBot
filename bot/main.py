@@ -26,6 +26,10 @@ from bot.handlers.admin import router as admin_router
 async def on_startup(bot: Bot):
     """Runs on bot startup."""
     await init_db()
+    
+    # Start payment polling as background task
+    asyncio.create_task(poll_payment_status(bot))
+    
     me = await bot.get_me()
     logger.info(f"Bot started: @{me.username} (ID: {me.id})")
 
@@ -64,9 +68,6 @@ async def main():
     dp.include_router(admin_router)
 
     logger.info("Starting DreamX Coupon Bot...")
-
-    # Start payment polling as background task
-    asyncio.create_task(poll_payment_status(bot))
 
     # Start polling
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
