@@ -9,6 +9,7 @@ Two payment gateways with DIFFERENT flows:
 """
 
 import os
+import json
 
 from aiogram import Router, types, F
 from aiogram.types import (
@@ -292,7 +293,7 @@ async def msg_bharatpe_utr(message: types.Message, state: FSMContext):
             txn_ref = txn_row["txn_ref"]
             await pool.execute(
                 "UPDATE transactions SET utr = $1, raw_response = $2 WHERE txn_ref = $3",
-                utr, str(details), txn_ref,
+                utr, json.dumps(details), txn_ref,
             )
         else:
             txn_ref = utr
