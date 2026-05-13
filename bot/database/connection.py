@@ -175,6 +175,16 @@ async def init_db() -> asyncpg.Pool:
         except Exception:
             pass
 
+        # Fix txn_type column if it uses an ENUM type — convert to VARCHAR
+        try:
+            await conn.execute("""
+                ALTER TABLE wallet_transactions
+                ALTER COLUMN txn_type TYPE VARCHAR(50)
+                USING txn_type::TEXT;
+            """)
+        except Exception:
+            pass
+
         # Migrate old referral codes to new ERROROO-XXXXXXXX format
         try:
             import random, string

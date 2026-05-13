@@ -22,7 +22,7 @@ from aiogram.fsm.state import StatesGroup, State
 from bot.services.coupon_service import get_coupon_detail
 from bot.services.order_service import (
     create_purchase_order, cancel_order, get_delivered_code,
-    get_all_delivered_codes,
+    get_all_delivered_codes, complete_order,
 )
 from bot.payments.upi import generate_upi_intent_url, create_qr_buffer
 from bot.payments.verifier import check_upi_status, verify_payment, verify_bharatpe_utr
@@ -255,29 +255,40 @@ async def cb_pay_wallet(callback: types.CallbackQuery):
     old_balance = wallet
     new_balance = wallet - amount
     await db.update_wallet_balance(user_id, new_balance)
-    await db.add_wallet_transaction(
-        user_id, -amount, "purchase",
-        bal_before=old_balance, bal_after=new_balance,
-        reference=f"coupon_{coupon_id}_qty{qty}",
-    )
 
-    # Create order (already paid)
+    try:
+        await db.add_wallet_transaction(
+            user_id, -amount, "purchase",
+            bal_before=old_balance, bal_after=new_balance,
+            reference=f"coupon_{coupon_id}_qty{qty}",
+        )
+    except Exception as e:
+        logger.warning(f"Wallet transaction log failed (non-critical): {e}")
+
+    # Create order
     order_info = await create_purchase_order(user_id, coupon_id, amount, "wallet")
     order_id = order_info["order_id"]
+    txn_id = order_info["txn_id"]
 
-    # Mark as paid + deliver codes
-    pool = await db.get_pool()
-    await pool.execute(
-        "UPDATE orders SET status = 'paid', paid_at = NOW() WHERE order_id = $1", order_id
-    )
-    await verify_payment(order_id, callback.bot)
+    # Complete order — delivers codes + marks paid
+    success = await complete_order(order_id, txn_id, user_id)
 
-    title = escape_md(coupon["title"])
-    amt = escape_md(format_currency(amount))
-    bal = escape_md(f"₹{new_balance:.1f}")
+    if success:
+        title = escape_md(coupon["title"])
+        amt = escape_md(format_currency(amount))
+        bal = escape_md(f"₹{new_balance:.1f}")
 
-    success_text = await _build_success_message(order_id, coupon_id, amount)
-    success_text += f"\n\n💰 *Wallet Balance:* {bal}"
+        # Use existing success message builder
+        success_text = await _build_success_message(order_id, coupon_id, amount)
+        success_text += f"\n\n💰 *Wallet Balance:* {bal}"
+    else:
+        # Refund wallet if order failed
+        await db.update_wallet_balance(user_id, old_balance)
+        success_text = (
+            f"❌ *Order Failed*\n\n"
+            f"Your wallet balance has been refunded\\.\n"
+            f"Please try again or contact support\\."
+        )
 
     try:
         await callback.message.delete()
@@ -288,7 +299,7 @@ async def cb_pay_wallet(callback: types.CallbackQuery):
     await callback.message.answer(
         success_text,
         parse_mode="MarkdownV2",
-        reply_markup=main_menu_kb(Config.is_admin(user_id)),
+        reply_markup=main_menu_kb(user_id),
     )
     await callback.answer()
     logger.info(f"Wallet payment: user={user_id}, order={order_id}, amount={amount}, balance_left={new_balance}")
