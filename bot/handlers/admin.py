@@ -202,6 +202,7 @@ async def msg_add_title(message: types.Message, state: FSMContext):
         f"✅ Title set: *{escape_md(title)}*\n\n"
         f"📝 *Step 2/6* — Enter a *short description*:",
         parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[admin_cancel_button()]]),
     )
     await state.set_state(AdminStates.add_description)
 
@@ -216,6 +217,7 @@ async def msg_add_desc(message: types.Message, state: FSMContext):
         f"✅ Description set\\.\n\n"
         f"💰 *Step 3/6* — Enter the *original price* \\(₹\\):",
         parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[admin_cancel_button()]]),
     )
     await state.set_state(AdminStates.add_original_price)
 
@@ -234,6 +236,7 @@ async def msg_add_orig_price(message: types.Message, state: FSMContext):
         f"✅ Original price: *{escape_md(format_currency(price))}*\n\n"
         f"🔥 *Step 4/6* — Enter the *discounted price* \\(₹\\):",
         parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[admin_cancel_button()]]),
     )
     await state.set_state(AdminStates.add_discounted_price)
 
@@ -253,6 +256,7 @@ async def msg_add_disc_price(message: types.Message, state: FSMContext):
         f"🔑 *Step 5/5* — Send *coupon codes* \\(one per line\\)\\.\n\n"
         f"Or type *skip* to add codes later:",
         parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[admin_cancel_button()]]),
     )
     await state.set_state(AdminStates.add_coupon_codes)
 
@@ -331,6 +335,9 @@ async def cb_edit_field(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         f"✏️ Enter the new *{escape_md(label)}*:",
         parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [back_button(f"admin_coupon_edit:{coupon_id}"), admin_cancel_button()]
+        ]),
     )
     await state.set_state(AdminStates.edit_field_value)
     await callback.answer()
@@ -442,6 +449,9 @@ async def cb_add_codes(callback: types.CallbackQuery, state: FSMContext):
         "🔑 Send coupon codes, *one per line*\\.\n\n"
         "_Or use 📄 Upload File button for bulk upload\\._",
         parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [back_button(f"admin_coupon_edit:{coupon_id}"), admin_cancel_button()]
+        ]),
     )
     await state.set_state(AdminStates.add_codes_input)
     await callback.answer()
@@ -494,6 +504,9 @@ async def cb_upload_codes(callback: types.CallbackQuery, state: FSMContext):
         "Send a *\\.txt* file with one code per line\\.\n"
         "The bot will extract all codes and add them to stock\\.",
         parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [back_button(f"admin_coupon_edit:{coupon_id}"), admin_cancel_button()]
+        ]),
     )
     await callback.answer()
 
@@ -663,6 +676,9 @@ async def cb_admin_order_search(callback: types.CallbackQuery, state: FSMContext
         "Send the *Order ID* to look up:\n"
         "\\(e\\.g\\. `DX\\-12345678\\-ABCDEF`\\)",
         parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [back_button("admin_orders"), admin_cancel_button()]
+        ]),
     )
     await callback.answer()
 
@@ -820,6 +836,7 @@ async def cb_bc_add_buttons(callback: types.CallbackQuery, state: FSMContext):
         "`Visit Website \\| https://example\\.com`\n\n"
         "_Send them now:_",
         parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[admin_cancel_button()]]),
     )
     await state.set_state(AdminStates.broadcast_buttons)
     await callback.answer()
@@ -1524,7 +1541,10 @@ async def cb_ref_toggle_active(callback: types.CallbackQuery):
 async def cb_ref_edit_commission(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         "\u270f\ufe0f *Edit Commission Percentage*\n\nEnter new commission percentage \\(e\\.g\\. 10\\.5\\):",
-        parse_mode="MarkdownV2"
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [back_button("admin_referral_settings"), admin_cancel_button()]
+        ]),
     )
     await state.set_state(AdminStates.ref_commission_input)
     await callback.answer()
@@ -1597,7 +1617,10 @@ async def cb_ref_pick_coupon(callback: types.CallbackQuery, state: FSMContext):
         f"🎁 *Setting Reward: {title_esc}*\n\n"
         f"How many referrals should a user need to claim this coupon?\n\n"
         f"Enter a number \\(e\\.g\\. 3, 5, 10\\):",
-        parse_mode="MarkdownV2"
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [back_button("admin_referral_settings"), admin_cancel_button()]
+        ]),
     )
     await state.set_state(AdminStates.ref_reward_count_input)
     await callback.answer()
@@ -1788,7 +1811,10 @@ async def cb_admin_toggle_force_join(callback: types.CallbackQuery, state: FSMCo
             "• `\\-1001234567890`\n\n"
             "💡 Use /id command in your channel to get the ID\\.\n\n"
             "⚠️ *IMPORTANT*: Bot MUST be admin in the channel\\!",
-            parse_mode="MarkdownV2"
+            parse_mode="MarkdownV2",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [back_button("admin_bot_settings"), admin_cancel_button()]
+            ]),
         )
         await state.set_state(AdminStates.force_channel_input)
         await callback.answer()
@@ -1907,7 +1933,10 @@ async def cb_admin_pay_edit(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.payment_field_input)
     await callback.message.edit_text(
         f"✏️ *Edit {escape_md(label)}*\n\nSend the new value:",
-        parse_mode="MarkdownV2"
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [back_button("admin_payments"), admin_cancel_button()]
+        ]),
     )
     await callback.answer()
 
@@ -1932,7 +1961,10 @@ async def cb_admin_pay_upload_qr(callback: types.CallbackQuery, state: FSMContex
     await state.set_state(AdminStates.payment_qr_upload)
     await callback.message.edit_text(
         "📷 *Upload BharatPe QR Image*\n\nSend the QR code image as a photo:",
-        parse_mode="MarkdownV2"
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [back_button("admin_payments"), admin_cancel_button()]
+        ]),
     )
     await callback.answer()
 
@@ -1985,7 +2017,7 @@ async def cb_admin_users(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.user_search_input)
     buttons = [
         [InlineKeyboardButton(text="📋 List Recent Users", callback_data="admin_users_recent")],
-        [back_button("admin_panel")],
+        [admin_cancel_button()],
     ]
     await callback.message.edit_text(text, parse_mode="MarkdownV2",
                                       reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
@@ -2275,7 +2307,10 @@ async def cb_admin_user_chg_ref(callback: types.CallbackQuery, state: FSMContext
     await callback.message.edit_text(
         f"🔄 *Change Referrer for user* `{user_id}`\n\n"
         f"Send the *Telegram ID* of the new referrer:",
-        parse_mode="MarkdownV2"
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [back_button(f"admin_user_inspect:{user_id}"), admin_cancel_button()]
+        ]),
     )
     await callback.answer()
 
@@ -2328,7 +2363,7 @@ async def cb_admin_user_wallet(callback: types.CallbackQuery, state: FSMContext)
     await state.set_state(AdminStates.user_wallet_edit)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [back_button(f"admin_user_inspect:{user_id}")],
+        [back_button(f"admin_user_inspect:{user_id}"), admin_cancel_button()],
     ])
     await callback.message.edit_text(
         f"💰 *Edit Wallet for user* `{user_id}`\n\n"
