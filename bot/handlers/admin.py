@@ -1678,6 +1678,42 @@ async def cb_ref_reward_del(callback: types.CallbackQuery):
     await cb_admin_referral_settings(callback)
 
 
+# ── Stop Bot (Terminate Process) ─────────────────────────
+
+@router.callback_query(F.data == "admin_stop_bot")
+@admin_only
+@error_handler
+async def cb_admin_stop_bot(callback: types.CallbackQuery):
+    """Ask for confirmation before stopping the bot."""
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⛔ Yes, Stop Bot", callback_data="admin_stop_bot_confirm")],
+        [back_button("admin_panel")],
+    ])
+    await callback.message.edit_text(
+        "⚠️ *Stop Bot?*\n\n"
+        "This will *terminate the bot process*\\.\n"
+        "The bot will go offline until manually restarted\\.\n\n"
+        "Are you sure?",
+        parse_mode="MarkdownV2",
+        reply_markup=kb,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_stop_bot_confirm")
+@admin_only
+@error_handler
+async def cb_admin_stop_bot_confirm(callback: types.CallbackQuery):
+    """Terminate the bot process."""
+    import sys
+    logger.info(f"Bot stopped by admin {callback.from_user.id}")
+    await callback.message.edit_text(
+        "⛔ *Bot is shutting down\\.\\.\\.*\n\n"
+        "Goodbye\\! 👋",
+        parse_mode="MarkdownV2",
+    )
+    await callback.answer("Stopping bot...")
+    sys.exit(0)
 
 
 # ── Bot Settings ─────────────────────────────────────────
