@@ -1416,7 +1416,6 @@ async def cb_admin_payments(callback: types.CallbackQuery):
 
     paytm_mid = escape_md(ps["paytm_mid"] or "Not Set")
     paytm_upi = escape_md(ps["paytm_upi_id"] or "Not Set")
-    paytm_qr = escape_md(ps["paytm_qr_code"] or "Not Set")
     bp_mid = escape_md(ps["bharatpe_merchant_id"] or "Not Set")
     bp_token = escape_md((ps["bharatpe_token"] or "Not Set")[:20] + "..." if ps["bharatpe_token"] and len(ps["bharatpe_token"]) > 20 else ps["bharatpe_token"] or "Not Set")
     bp_upi = escape_md(ps["bharatpe_upi_id"] or "Not Set")
@@ -1427,8 +1426,7 @@ async def cb_admin_payments(callback: types.CallbackQuery):
         f"💳 *Payment Settings*\n\n"
         f"━━━ *Paytm* ━━━\n"
         f"🏢 MID: `{paytm_mid}`\n"
-        f"📱 UPI ID: `{paytm_upi}`\n"
-        f"🔗 QR Code: `{paytm_qr}`\n\n"
+        f"📱 UPI ID: `{paytm_upi}`\n\n"
         f"━━━ *BharatPe* ━━━\n"
         f"🏢 Merchant ID: `{bp_mid}`\n"
         f"🔑 Token: `{bp_token}`\n"
@@ -1441,7 +1439,6 @@ async def cb_admin_payments(callback: types.CallbackQuery):
     buttons = [
         [InlineKeyboardButton(text="🏢 Paytm MID", callback_data="admin_pay_edit:paytm_mid"),
          InlineKeyboardButton(text="📱 Paytm UPI", callback_data="admin_pay_edit:paytm_upi_id")],
-        [InlineKeyboardButton(text="🔗 Paytm QR Code", callback_data="admin_pay_edit:paytm_qr_code")],
         [InlineKeyboardButton(text="🏢 BP Merchant", callback_data="admin_pay_edit:bharatpe_merchant_id"),
          InlineKeyboardButton(text="🔑 BP Token", callback_data="admin_pay_edit:bharatpe_token")],
         [InlineKeyboardButton(text="📱 BP UPI ID", callback_data="admin_pay_edit:bharatpe_upi_id")],
@@ -1458,7 +1455,6 @@ async def cb_admin_payments(callback: types.CallbackQuery):
 PAYMENT_FIELD_LABELS = {
     "paytm_mid": "Paytm Merchant ID",
     "paytm_upi_id": "Paytm UPI ID",
-    "paytm_qr_code": "Paytm QR Code ID",
     "bharatpe_merchant_id": "BharatPe Merchant ID",
     "bharatpe_token": "BharatPe Token",
     "bharatpe_upi_id": "BharatPe UPI ID",
@@ -1763,6 +1759,10 @@ async def cb_admin_user_referrals(callback: types.CallbackQuery):
 @error_handler
 async def cb_admin_user_ban(callback: types.CallbackQuery):
     user_id = int(callback.data.split(":")[1])
+    # Prevent banning any admin (including self)
+    if Config.is_admin(user_id):
+        await callback.answer("⚠️ Cannot ban an admin account!", show_alert=True)
+        return
     await db.ban_user(user_id, True)
     await callback.answer(f"🚫 User {user_id} has been BANNED!", show_alert=True)
     await cb_admin_user_inspect(callback)
