@@ -133,12 +133,12 @@ async def reduce_stock(coupon_id: int) -> bool:
 # ── ORDER QUERIES ─────────────────────────────────────────
 
 async def create_order(order_id: str, user_id: int, coupon_id: int,
-                        amount: float, timeout_sec: int):
+                        amount: float, timeout_sec: int, quantity: int = 1):
     pool = await get_pool()
     await pool.execute("""
-        INSERT INTO orders (order_id, user_id, coupon_id, amount, expires_at)
-        VALUES ($1, $2, $3, $4, NOW() + interval '1 second' * $5)
-    """, order_id, user_id, coupon_id, amount, timeout_sec)
+        INSERT INTO orders (order_id, user_id, coupon_id, amount, quantity, expires_at)
+        VALUES ($1, $2, $3, $4, $5, NOW() + interval '1 second' * $6)
+    """, order_id, user_id, coupon_id, amount, quantity, timeout_sec)
 
 
 async def get_order(order_id: str):

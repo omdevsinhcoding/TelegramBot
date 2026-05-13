@@ -13,7 +13,7 @@ from bot.utils.logger import logger
 
 
 async def create_purchase_order(user_id: int, coupon_id: int, amount: float,
-                                 gateway: str = "paytm") -> dict:
+                                 gateway: str = "paytm", qty: int = 1) -> dict:
     """Create a new pending order and transaction record.
 
     The txn_ref uses the user's TXN_{timestamp}_{random} format.
@@ -23,7 +23,7 @@ async def create_purchase_order(user_id: int, coupon_id: int, amount: float,
     txn_ref = generate_unique_txn_id()       # Paytm ORDERID: TXN_{timestamp}_{random}
     timeout_sec = Config.PAYMENT_TIMEOUT
 
-    await db.create_order(order_id, user_id, coupon_id, amount, timeout_sec)
+    await db.create_order(order_id, user_id, coupon_id, amount, timeout_sec, qty)
 
     # Use correct merchant ID based on selected gateway (dynamic from DB)
     ps = await db.get_payment_settings()
@@ -39,7 +39,7 @@ async def create_purchase_order(user_id: int, coupon_id: int, amount: float,
         merchant_id, gateway
     )
 
-    logger.info(f"Order created: {order_id}, txn={txn_ref}, user={user_id}, amount={amount}, gateway={gateway}")
+    logger.info(f"Order created: {order_id}, txn={txn_ref}, user={user_id}, amount={amount}, qty={qty}, gateway={gateway}")
 
     return {
         "order_id": order_id,
@@ -47,6 +47,7 @@ async def create_purchase_order(user_id: int, coupon_id: int, amount: float,
         "amount": amount,
         "coupon_id": coupon_id,
         "gateway": gateway,
+        "qty": qty,
     }
 
 

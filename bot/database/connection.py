@@ -150,6 +150,12 @@ async def init_db() -> asyncpg.Pool:
         except Exception:
             pass
 
+        # Orders quantity column
+        try:
+            await conn.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;")
+        except Exception:
+            pass
+
         # Wallet balance column on users
         try:
             await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS wallet_balance NUMERIC(12,2) DEFAULT 0.00;")

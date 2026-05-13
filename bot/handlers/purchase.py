@@ -266,7 +266,7 @@ async def cb_pay_wallet(callback: types.CallbackQuery):
         logger.warning(f"Wallet transaction log failed (non-critical): {e}")
 
     # Create order
-    order_info = await create_purchase_order(user_id, coupon_id, amount, "wallet")
+    order_info = await create_purchase_order(user_id, coupon_id, amount, "wallet", qty)
     order_id = order_info["order_id"]
     txn_ref = order_info["txn_ref"]
 
@@ -329,7 +329,7 @@ async def cb_pay_paytm(callback: types.CallbackQuery):
     amount = float(coupon["discounted_price"]) * qty
 
     # Create order with Paytm gateway
-    order_info = await create_purchase_order(user_id, coupon_id, amount, "paytm")
+    order_info = await create_purchase_order(user_id, coupon_id, amount, "paytm", qty)
     order_id = order_info["order_id"]
     txn_ref = order_info["txn_ref"]
 
@@ -396,7 +396,7 @@ async def cb_pay_bharatpe(callback: types.CallbackQuery, state: FSMContext):
     amount = float(coupon["discounted_price"]) * qty
 
     # Create order with BharatPe gateway
-    order_info = await create_purchase_order(user_id, coupon_id, amount, "bharatpe")
+    order_info = await create_purchase_order(user_id, coupon_id, amount, "bharatpe", qty)
     order_id = order_info["order_id"]
 
     timeout_min = Config.PAYMENT_TIMEOUT // 60
