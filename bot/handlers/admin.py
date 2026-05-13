@@ -18,6 +18,7 @@ from bot.keyboards.admin_kb import (
     admin_panel_kb, admin_coupons_kb,
     admin_coupon_edit_kb, confirm_delete_kb,
     admin_giveaways_kb, admin_giveaway_view_kb,
+    admin_bot_settings_kb, admin_referral_settings_kb
 )
 from bot.keyboards.common import back_button
 from bot.utils.helpers import format_currency, format_datetime, escape_md
@@ -48,6 +49,10 @@ class AdminStates(StatesGroup):
     giveaway_code = State()
     giveaway_max_claims = State()
     giveaway_add_codes = State()
+    # Bot Settings
+    force_channel_input = State()
+    # Referral
+    ref_commission_input = State()
 
 
 # ── Admin Panel Entry ─────────────────────────────────────
@@ -1065,18 +1070,9 @@ async def cb_admin_referral_settings(callback: types.CallbackQuery):
             f"🔑 Reward code: `{escape_md(reward)}`\n"
         )
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="🔄 Switch to Code Reward" if mode == "balance" else "🔄 Switch to Balance",
-            callback_data="admin_ref_toggle_mode"
-        )],
-        [InlineKeyboardButton(
-            text="🟢 Disable" if settings["is_active"] else "🔴 Enable",
-            callback_data="admin_ref_toggle_active"
-        )],
-        [back_button("admin_panel")],
-    ])
-    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    await callback.message.edit_text(
+        text, parse_mode="MarkdownV2", reply_markup=admin_referral_settings_kb(settings["is_active"])
+    )
     await callback.answer()
 
 
@@ -1101,4 +1097,90 @@ async def cb_ref_toggle_active(callback: types.CallbackQuery):
     status = "enabled" if new_val else "disabled"
     await callback.answer(f"Referral system {status}!", show_alert=True)
     await cb_admin_referral_settings(callback)
+
+
+@router.callback_query(F.data == "admin_ref_edit_commission")
+@admin_only
+@error_handler
+async def cb_ref_edit_commission(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.edit_text(
+        "✏️ *Edit Commission Percentage*\n\nEnter new commission percentage (e.g. 10.5):",
+        parse_mode="MarkdownV2"
+    )
+    await state.set_state(AdminStates.ref_commission_input)
+    await callback.answer()
+
+
+@router.message(AdminStates.ref_commission_input)
+@error_handler
+async def msg_ref_commission_input(message: types.Message, state: FSMContext):
+    try:
+        val = float(message.text.strip())
+        if val < 0 or val > 100:
+            raise ValueError
+        await db.update_referral_settings(commission_percent=val)
+        await state.clear()
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_referral_settings")]])
+        await message.answer(f"✅ Commission updated to {val}%", reply_markup=kb)
+    except ValueError:
+        await message.answer("⚠️ Please enter a valid percentage between 0 and 100.")
+
+
+# ── Bot Settings ─────────────────────────────────────────
+
+@router.callback_query(F.data == "admin_bot_settings")
+@admin_only
+@error_handler
+async def cb_admin_bot_settings(callback: types.CallbackQuery):
+    settings = await db.get_bot_settings()
+    force_channel = settings.get("force_channel") if settings else None
+    
+    status = "🟢 Active" if force_channel else "🔴 Disabled"
+    chan = escape_md(force_channel) if force_channel else "None"
+    
+    text = (
+        f"⚙️ *Bot Settings*\n\n"
+        f"📢 *Force Join Channel*\n"
+        f"Status: {status}\n"
+        f"Channel: `{chan}`\n\n"
+        f"Users must join this channel before using the bot."
+    )
+    
+    await callback.message.edit_text(
+        text, parse_mode="MarkdownV2", reply_markup=admin_bot_settings_kb(force_channel)
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_toggle_force_join")
+@admin_only
+@error_handler
+async def cb_admin_toggle_force_join(callback: types.CallbackQuery, state: FSMContext):
+    settings = await db.get_bot_settings()
+    force_channel = settings.get("force_channel") if settings else None
+    
+    if force_channel:
+        # Remove it
+        await db.update_bot_settings(force_channel=None)
+        await callback.answer("Force Join Channel removed!", show_alert=True)
+        await cb_admin_bot_settings(callback)
+    else:
+        # Ask for new one
+        await callback.message.edit_text(
+            "📢 Send the *Channel Username* (e.g. `@MyChannel`) or *ID* (e.g. `-100123...`)\n\n"
+            "⚠️ *IMPORTANT*: The bot MUST be an admin in the channel for this to work!",
+            parse_mode="MarkdownV2"
+        )
+        await state.set_state(AdminStates.force_channel_input)
+        await callback.answer()
+
+
+@router.message(AdminStates.force_channel_input)
+@error_handler
+async def msg_force_channel_input(message: types.Message, state: FSMContext):
+    val = message.text.strip()
+    await db.update_bot_settings(force_channel=val)
+    await state.clear()
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_bot_settings")]])
+    await message.answer(f"✅ Force Join Channel updated to: {escape_md(val)}", parse_mode="MarkdownV2", reply_markup=kb)
 

@@ -15,9 +15,8 @@ def main_menu_kb(user_id: int) -> ReplyKeyboardMarkup:
 
     Layout:
       [ 🛍️ Buy Vouchers ] [ 📦 My Orders  ]
-      [ 📊 View Stock                      ]
-      [       🎟️ Recover Coupon           ]
-      [ ⚠️ Disclaimer   ] [ 📢 Our Channels ]
+      [ 📊 View Stock   ] [ 🎟️ Recover Coupon ]
+      [ 🎁 Refer & Earn ] [ ⚠️ Disclaimer   ]
       [       👑 Admin Panel (admin only)  ]
     """
     buttons = [
@@ -27,16 +26,11 @@ def main_menu_kb(user_id: int) -> ReplyKeyboardMarkup:
         ],
         [
             KeyboardButton(text="📊 View Stock"),
-        ],
-        [
             KeyboardButton(text="🎟️ Recover Coupon"),
         ],
         [
             KeyboardButton(text="🎁 Refer & Earn"),
-        ],
-        [
             KeyboardButton(text="⚠️ Disclaimer"),
-            KeyboardButton(text="📢 Our Channels"),
         ],
     ]
     if Config.is_admin(user_id):

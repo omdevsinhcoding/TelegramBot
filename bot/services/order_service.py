@@ -78,6 +78,13 @@ async def complete_order(order_id: str, txn_ref: str, user_id: int) -> bool:
     if delivered > 0:
         await db.update_order_status(order_id, "delivered")
 
+    # Reward referrer if applicable
+    from bot.handlers.referral import process_referral_on_purchase
+    try:
+        await process_referral_on_purchase(user_id, order["amount"])
+    except Exception as e:
+        logger.error(f"Referral process failed for order {order_id}: {e}")
+
     logger.info(f"Order completed: {order_id}, delivered {delivered}/{qty} codes")
     return True
 

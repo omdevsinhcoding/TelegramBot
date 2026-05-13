@@ -120,6 +120,18 @@ async def init_db() -> asyncpg.Pool:
         except Exception:
             pass  # Column already exists or other non-critical issue
 
+        # Bot Settings
+        try:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS bot_settings (
+                    id SERIAL PRIMARY KEY,
+                    force_channel TEXT DEFAULT NULL,
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                );
+            """)
+        except Exception:
+            pass
+
         # Free coupons / giveaway tables (multi-code)
         try:
             await conn.execute("""

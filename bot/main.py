@@ -22,6 +22,7 @@ from bot.handlers.coupons import router as coupons_router
 from bot.handlers.purchase import router as purchase_router
 from bot.handlers.admin import router as admin_router
 from bot.handlers.referral import router as referral_router
+from bot.middlewares.force_join import ForceJoinMiddleware
 
 
 async def on_startup(bot: Bot):
@@ -59,6 +60,11 @@ async def main():
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher(storage=MemoryStorage())
+
+    # Register Middlewares
+    dp.message.outer_middleware(ForceJoinMiddleware())
+    dp.callback_query.outer_middleware(ForceJoinMiddleware())
+
 
     # Register startup/shutdown hooks
     dp.startup.register(on_startup)

@@ -8,16 +8,27 @@ from bot.keyboards.common import back_button
 
 def admin_panel_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📦 Manage Coupons", callback_data="admin_coupons")],
-        [InlineKeyboardButton(text="🎁 Manage Giveaways", callback_data="admin_giveaways")],
-        [InlineKeyboardButton(text="👥 View Users", callback_data="admin_users")],
-        [InlineKeyboardButton(text="🧾 View Orders", callback_data="admin_orders")],
-        [InlineKeyboardButton(text="💳 View Payments", callback_data="admin_payments")],
-        [InlineKeyboardButton(text="📊 Sales Analytics", callback_data="admin_analytics")],
-        [InlineKeyboardButton(text="📢 Broadcast", callback_data="admin_broadcast")],
-        [InlineKeyboardButton(text="🤝 Referral Settings", callback_data="admin_referral_settings")],
-        [InlineKeyboardButton(text="📋 Admin Logs", callback_data="admin_logs")],
-        [InlineKeyboardButton(text="🏠 Back to Home", callback_data="back_home")],
+        [
+            InlineKeyboardButton(text="📦 Coupons", callback_data="admin_coupons"),
+            InlineKeyboardButton(text="🎁 Giveaways", callback_data="admin_giveaways")
+        ],
+        [
+            InlineKeyboardButton(text="💳 Payments", callback_data="admin_payments"),
+            InlineKeyboardButton(text="🧾 Orders", callback_data="admin_orders")
+        ],
+        [
+            InlineKeyboardButton(text="📢 Broadcast", callback_data="admin_broadcast"),
+            InlineKeyboardButton(text="🤝 Referrals", callback_data="admin_referral_settings")
+        ],
+        [
+            InlineKeyboardButton(text="👥 Users", callback_data="admin_users"),
+            InlineKeyboardButton(text="📊 Analytics", callback_data="admin_analytics")
+        ],
+        [InlineKeyboardButton(text="⚙️ Bot Settings (Force Join)", callback_data="admin_bot_settings")],
+        [
+            InlineKeyboardButton(text="📋 Logs", callback_data="admin_logs"),
+            InlineKeyboardButton(text="🏠 Home", callback_data="back_home")
+        ],
     ])
 
 
@@ -97,3 +108,21 @@ def admin_giveaway_view_kb(giveaway_id: int, is_active: bool) -> InlineKeyboardM
         [InlineKeyboardButton(text="🗑️ Delete Giveaway", callback_data=f"admin_giveaway_del:{giveaway_id}")],
         [back_button("admin_giveaways")],
     ])
+
+
+def admin_bot_settings_kb(force_channel: str | None) -> InlineKeyboardMarkup:
+    toggle_text = "🔴 Remove Force Join" if force_channel else "🟢 Set Force Join Channel"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=toggle_text, callback_data="admin_toggle_force_join")],
+        [back_button("admin_panel")],
+    ])
+
+
+def admin_referral_settings_kb(is_active: bool) -> InlineKeyboardMarkup:
+    toggle_text = "🔴 Disable Referrals" if is_active else "🟢 Enable Referrals"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Edit Commission %", callback_data="admin_ref_edit_commission")],
+        [InlineKeyboardButton(text=toggle_text, callback_data="admin_ref_toggle")],
+        [back_button("admin_panel")],
+    ])
+

@@ -469,5 +469,18 @@ async def get_user_referral_earnings(user_id: int) -> float:
 
 
 
+# ── BOT SETTINGS QUERIES ─────────────────────────────────
 
+async def get_bot_settings():
+    pool = await get_pool()
+    row = await pool.fetchrow("SELECT * FROM bot_settings ORDER BY id LIMIT 1")
+    if not row:
+        await pool.execute("INSERT INTO bot_settings (force_channel) VALUES (NULL)")
+        row = await pool.fetchrow("SELECT * FROM bot_settings ORDER BY id LIMIT 1")
+    return row
+
+async def update_bot_settings(**kwargs):
+    pool = await get_pool()
+    sets = ", ".join(f"{k} = ${i+1}" for i, k in enumerate(kwargs.keys()))
+    await pool.execute(f"UPDATE bot_settings SET {sets}, updated_at = NOW()", *list(kwargs.values()))
 
