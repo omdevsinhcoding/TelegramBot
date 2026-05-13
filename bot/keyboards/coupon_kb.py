@@ -66,13 +66,6 @@ def buying_menu_kb(coupons: list, free_coupon_count: int = 0, page: int = 0) -> 
     end = start + ITEMS_PER_PAGE
     page_items = all_items[start:end]
 
-    # Header
-    buttons.append([
-        InlineKeyboardButton(
-            text="📁 Select a Category below:",
-            callback_data="noop"
-        )
-    ])
 
     for item in page_items:
         if item["type"] == "category":
