@@ -1,4 +1,4 @@
-"""
+﻿"""
 DreamX Coupon Bot — Admin Panel Handlers
 Full admin CRUD for coupons, users, orders, analytics, broadcasts.
 """
@@ -525,24 +525,159 @@ async def msg_upload_codes_file(message: types.Message, state: FSMContext):
 @admin_only
 @error_handler
 async def cb_admin_orders(callback: types.CallbackQuery):
-    orders = await db.get_all_orders(20)
+    """Show recent purchasers grouped by user."""
+    users = await db.get_recent_order_users(15)
+
+    lines = ["🧾 *Recent Purchasers*\n"]
+    if not users:
+        lines.append("_No orders yet\\._")
+    else:
+        for u in users:
+            name = escape_md(u["full_name"] or "Unknown")
+            uid = u["user_id"]
+            orders = u["order_count"]
+            paid = u["paid_count"]
+            spent = escape_md(format_currency(float(u["total_spent"])))
+            lines.append(
+                f"👤 *{name}* \\(`{uid}`\\)\n"
+                f"   📦 Orders: *{orders}* \\| ✅ Paid: *{paid}* \\| 💰 {spent}"
+            )
+
+    text = "\n".join(lines)
+
+    buttons = []
+    for u in users[:10]:
+        name = u["full_name"] or str(u["user_id"])
+        btn_text = f"👤 {name} ({u['order_count']} orders)"
+        buttons.append([InlineKeyboardButton(
+            text=btn_text,
+            callback_data=f"admin_order_user:{u['user_id']}"
+        )])
+
+    buttons.append([InlineKeyboardButton(text="🔍 Search Order ID", callback_data="admin_order_search")])
+    buttons.append([back_button("admin_panel")])
+
+    await callback.message.edit_text(
+        text, parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_order_user:"))
+@admin_only
+@error_handler
+async def cb_admin_order_user(callback: types.CallbackQuery):
+    """Show all orders for a specific user."""
+    user_id = int(callback.data.split(":")[1])
+    orders = await db.get_user_all_orders(user_id, 20)
+    user = await db.get_user(user_id)
+
+    user_name = escape_md((user["full_name"] if user else "Unknown") or "Unknown")
     status_emoji = {
         "pending": "🟡", "paid": "🟢", "delivered": "✅",
         "expired": "⏰", "cancelled": "❌", "refunded": "🔄"
     }
-    lines = [f"🧾 *Recent Orders* \\({len(orders)}\\)\n"]
-    for o in orders:
-        emoji = status_emoji.get(o["status"], "❓")
-        oid = escape_md(o["order_id"])
-        amt = escape_md(str(o["amount"]))
-        st = escape_md(o["status"])
-        lines.append(
-            f"{emoji} `{oid}` — ₹{amt} \\({st}\\)"
-        )
+
+    lines = [
+        f"📦 *Orders for* {user_name}\n"
+        f"👤 ID: `{user_id}`\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+    ]
+
+    if not orders:
+        lines.append("_No orders found\\._")
+    else:
+        for o in orders:
+            emoji = status_emoji.get(o["status"], "❓")
+            oid = escape_md(o["order_id"])
+            title = escape_md(o.get("coupon_title") or "Unknown")
+            amt = escape_md(format_currency(float(o["amount"])))
+            qty = o.get("quantity") or 1
+            st = escape_md(o["status"])
+            lines.append(
+                f"{emoji} `{oid}`\n"
+                f"   🏷️ {title} x{qty}\n"
+                f"   💰 {amt} \\| 📋 {st}"
+            )
 
     text = "\n".join(lines)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_panel")]])
-    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+
+    buttons = [
+        [InlineKeyboardButton(text="👤 View User Profile", callback_data=f"admin_user_inspect:{user_id}")],
+        [back_button("admin_orders")],
+    ]
+
+    await callback.message.edit_text(
+        text, parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_order_search")
+@admin_only
+@error_handler
+async def cb_admin_order_search(callback: types.CallbackQuery, state: FSMContext):
+    """Prompt admin to enter an order ID to search."""
+    await state.set_state(AdminStates.user_search_input)
+    await state.update_data(search_type="order_id")
+    await callback.message.edit_text(
+        "🔍 *Search Order*\n\n"
+        "Send the *Order ID* to look up:\n"
+        "\\(e\\.g\\. `DX\\-12345678\\-ABCDEF`\\)",
+        parse_mode="MarkdownV2",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_order_detail:"))
+@admin_only
+@error_handler
+async def cb_admin_order_detail(callback: types.CallbackQuery):
+    """Show full details of any order."""
+    order_id = callback.data.split(":", 1)[1]
+    order = await db.get_order_by_id_admin(order_id)
+
+    if not order:
+        await callback.answer("❌ Order not found.", show_alert=True)
+        return
+
+    status_emoji = {
+        "pending": "🟡", "paid": "🟢", "delivered": "✅",
+        "expired": "⏰", "cancelled": "❌", "refunded": "🔄"
+    }
+
+    emoji = status_emoji.get(order["status"], "❓")
+    oid = escape_md(order["order_id"])
+    title = escape_md(order.get("coupon_title") or "Unknown")
+    amt = escape_md(format_currency(float(order["amount"])))
+    qty = order.get("quantity") or 1
+    st = escape_md(order["status"])
+    uid = order["user_id"]
+    uname = escape_md(order.get("full_name") or "Unknown")
+
+    text = (
+        f"📋 *Order Details*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🆔 Order: `{oid}`\n"
+        f"{emoji} Status: *{st}*\n\n"
+        f"🏷️ Item: *{title}*\n"
+        f"📦 Qty: *{qty}*\n"
+        f"💰 Amount: *{amt}*\n\n"
+        f"👤 User: *{uname}* \\(`{uid}`\\)\n"
+    )
+
+    buttons = [
+        [InlineKeyboardButton(text="👤 View User", callback_data=f"admin_user_inspect:{uid}"),
+         InlineKeyboardButton(text="📦 User Orders", callback_data=f"admin_order_user:{uid}")],
+        [back_button("admin_orders")],
+    ]
+
+    await callback.message.edit_text(
+        text, parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
     await callback.answer()
 
 
@@ -871,7 +1006,7 @@ async def msg_giveaway_title(message: types.Message, state: FSMContext):
     await message.answer(
         f"✅ Title: *{escape_md(title)}*\n\n"
         f"🔢 *Step 2/3* — How many codes *per user*?\n"
-        f"\\(e\\.g\\. `1` = 1 code per user, `3` = 3 codes per user\\)",
+        f"\\(e\\.g\\. `1` \\= 1 code per user, `3` \\= 3 codes per user\\)",
         parse_mode="MarkdownV2",
     )
     await state.set_state(AdminStates.giveaway_code)
@@ -893,7 +1028,7 @@ async def msg_giveaway_codes_per_user(message: types.Message, state: FSMContext)
         f"📄 *Step 3/3* — Now send the coupon codes:\n\n"
         f"• *Paste codes* \\(one per line\\)\n"
         f"• OR *upload a \\.txt file* with codes\n\n"
-        f"Each line = 1 unique code",
+        f"Each line \\= 1 unique code",
         parse_mode="MarkdownV2",
     )
     await state.set_state(AdminStates.giveaway_max_claims)
@@ -1596,9 +1731,58 @@ async def cb_admin_users_recent(callback: types.CallbackQuery):
 @router.message(AdminStates.user_search_input)
 @error_handler
 async def msg_user_search(message: types.Message, state: FSMContext):
+    data = await state.get_data()
     query = message.text.strip()
-    results = await db.search_user(query)
+    search_type = data.get("search_type", "user")
     await state.clear()
+
+    # Order ID search
+    if search_type == "order_id":
+        order = await db.get_order_by_id_admin(query)
+        if not order:
+            kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_orders")]])
+            await message.answer(
+                f"❌ No order found for `{escape_md(query)}`",
+                parse_mode="MarkdownV2", reply_markup=kb
+            )
+            return
+
+        # Show order detail inline
+        status_emoji = {
+            "pending": "🟡", "paid": "🟢", "delivered": "✅",
+            "expired": "⏰", "cancelled": "❌", "refunded": "🔄"
+        }
+        emoji = status_emoji.get(order["status"], "❓")
+        oid = escape_md(order["order_id"])
+        title = escape_md(order.get("coupon_title") or "Unknown")
+        amt = escape_md(format_currency(float(order["amount"])))
+        qty = order.get("quantity") or 1
+        st = escape_md(order["status"])
+        uid = order["user_id"]
+        uname = escape_md(order.get("full_name") or "Unknown")
+
+        text = (
+            f"📋 *Order Found*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🆔 Order: `{oid}`\n"
+            f"{emoji} Status: *{st}*\n\n"
+            f"🏷️ Item: *{title}*\n"
+            f"📦 Qty: *{qty}*\n"
+            f"💰 Amount: *{amt}*\n\n"
+            f"👤 User: *{uname}* \\(`{uid}`\\)\n"
+        )
+
+        buttons = [
+            [InlineKeyboardButton(text="👤 View User", callback_data=f"admin_user_inspect:{uid}"),
+             InlineKeyboardButton(text="📦 User Orders", callback_data=f"admin_order_user:{uid}")],
+            [back_button("admin_orders")],
+        ]
+        await message.answer(text, parse_mode="MarkdownV2",
+                             reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+        return
+
+    # User search (default)
+    results = await db.search_user(query)
 
     if not results:
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_users")]])

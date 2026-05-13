@@ -199,6 +199,51 @@ async def get_all_orders(limit: int = 50):
     return await pool.fetch("SELECT * FROM orders ORDER BY created_at DESC LIMIT $1", limit)
 
 
+async def get_recent_order_users(limit: int = 15):
+    """Get recent users who placed orders, grouped by user."""
+    pool = await get_pool()
+    return await pool.fetch("""
+        SELECT o.user_id,
+               u.full_name,
+               u.username,
+               COUNT(o.order_id) as order_count,
+               COALESCE(SUM(o.amount), 0) as total_spent,
+               MAX(o.created_at) as last_order,
+               COUNT(*) FILTER (WHERE o.status IN ('paid', 'delivered')) as paid_count,
+               COUNT(*) FILTER (WHERE o.status = 'pending') as pending_count
+        FROM orders o
+        LEFT JOIN users u ON o.user_id = u.telegram_id
+        GROUP BY o.user_id, u.full_name, u.username
+        ORDER BY MAX(o.created_at) DESC
+        LIMIT $1
+    """, limit)
+
+
+async def get_user_all_orders(user_id: int, limit: int = 20):
+    """Get all orders for a specific user (admin view - all statuses)."""
+    pool = await get_pool()
+    return await pool.fetch("""
+        SELECT o.*, c.title as coupon_title
+        FROM orders o
+        LEFT JOIN coupons c ON o.coupon_id = c.id
+        WHERE o.user_id = $1
+        ORDER BY o.created_at DESC
+        LIMIT $2
+    """, user_id, limit)
+
+
+async def get_order_by_id_admin(order_id: str):
+    """Get any order by ID (admin can see all orders)."""
+    pool = await get_pool()
+    return await pool.fetchrow("""
+        SELECT o.*, c.title as coupon_title, u.full_name, u.username
+        FROM orders o
+        LEFT JOIN coupons c ON o.coupon_id = c.id
+        LEFT JOIN users u ON o.user_id = u.telegram_id
+        WHERE o.order_id = $1
+    """, order_id)
+
+
 async def expire_stale_orders():
     pool = await get_pool()
     return await pool.execute("""
