@@ -1333,15 +1333,17 @@ async def cb_admin_toggle_force_join(callback: types.CallbackQuery, state: FSMCo
     force_channel = settings.get("force_channel") if settings else None
     
     if force_channel:
-        # Remove it
         await db.update_bot_settings(force_channel=None)
         await callback.answer("Force Join Channel removed!", show_alert=True)
         await cb_admin_bot_settings(callback)
     else:
-        # Ask for new one
         await callback.message.edit_text(
-            "📢 Send the *Channel Username* \\(e\\.g\\. `@MyChannel`\\) or *ID* \\(e\\.g\\. `\\-100123\\.\\.\\.`\\)\n\n"
-            "⚠️ *IMPORTANT*: The bot MUST be an admin in the channel for this to work\\!",
+            "📢 Send the *Channel/Group ID* or *Username*\n\n"
+            "Examples:\n"
+            "• `@MyChannel`\n"
+            "• `\\-1001234567890`\n\n"
+            "💡 Use /id command in your channel to get the ID\\.\n\n"
+            "⚠️ *IMPORTANT*: Bot MUST be admin in the channel\\!",
             parse_mode="MarkdownV2"
         )
         await state.set_state(AdminStates.force_channel_input)
@@ -1352,8 +1354,42 @@ async def cb_admin_toggle_force_join(callback: types.CallbackQuery, state: FSMCo
 @error_handler
 async def msg_force_channel_input(message: types.Message, state: FSMContext):
     val = message.text.strip()
-    await db.update_bot_settings(force_channel=val)
+    
+    channels = [ch.strip() for ch in val.split(",") if ch.strip()]
+    valid = []
+    errors = []
+    
+    for ch in channels:
+        try:
+            chat_id = int(ch) if ch.lstrip("-").isdigit() else ch
+            await message.bot.get_chat(chat_id)
+            try:
+                await message.bot.export_chat_invite_link(chat_id)
+            except Exception:
+                pass
+            valid.append(ch)
+        except Exception as e:
+            errors.append(f"{ch}: {e}")
+    
+    if not valid:
+        err_msg = escape_md(str(errors[0]).split(":")[-1].strip() if errors else "Unknown")
+        await message.answer(
+            f"❌ Could not verify any channel\\.\n\n"
+            f"Make sure the bot is *admin* in the channel and the ID is correct\\.\n\n"
+            f"Error: `{err_msg}`\n\nTry again:",
+            parse_mode="MarkdownV2"
+        )
+        return
+    
+    save_val = ",".join(valid)
+    await db.update_bot_settings(force_channel=save_val)
     await state.clear()
+    
+    result = f"✅ Force Join updated\\!\n\nChannels: `{escape_md(save_val)}`"
+    if errors:
+        skipped = escape_md(", ".join(e.split(":")[0] for e in errors))
+        result += f"\n\n⚠️ Skipped invalid: {skipped}"
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_bot_settings")]])
-    await message.answer(f"✅ Force Join Channel updated to: {escape_md(val)}", parse_mode="MarkdownV2", reply_markup=kb)
+    await message.answer(result, parse_mode="MarkdownV2", reply_markup=kb)
 
