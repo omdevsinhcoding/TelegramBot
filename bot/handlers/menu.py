@@ -457,22 +457,22 @@ async def cb_claim_free_coupon(callback: types.CallbackQuery):
         return
 
     # Try to claim
-    code = await db.claim_free_coupon(fc_id, user_id)
-    if code:
+    codes = await db.claim_free_coupon(fc_id, user_id)
+    if codes:
         title = escape_md(fc["title"])
-        code_esc = escape_md(code)
+        codes_text = "\n".join(f"`{escape_md(c)}`" for c in codes)
 
+        unclaimed = fc.get("unclaimed_codes", 0) - len(codes)
         remaining = ""
-        if fc["max_claims"] > 0:
-            left = fc["max_claims"] - fc["claimed_count"] - 1
-            remaining = f"\n📊 {left} coupons remaining"
+        if unclaimed > 0:
+            remaining = f"\n📊 {unclaimed} codes remaining"
 
         text = (
             f"🎉 *Congratulations\\!*\n\n"
             f"You claimed: *{title}*\n\n"
-            f"🔑 Your coupon code:\n`{code_esc}`\n"
+            f"🔑 Your coupon code\\(s\\):\n{codes_text}\n"
             f"{remaining}\n\n"
-            f"_Save this code\\!_"
+            f"_Save these codes\\!_"
         )
 
         kb = InlineKeyboardMarkup(inline_keyboard=[

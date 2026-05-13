@@ -120,17 +120,32 @@ async def init_db() -> asyncpg.Pool:
         except Exception:
             pass  # Column already exists or other non-critical issue
 
-        # Free coupons / giveaway tables
+        # Free coupons / giveaway tables (multi-code)
         try:
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS free_coupons (
                     id              SERIAL PRIMARY KEY,
                     title           VARCHAR(128) NOT NULL,
-                    code            TEXT NOT NULL,
+                    code            TEXT DEFAULT '',
+                    codes_per_user  INTEGER NOT NULL DEFAULT 1,
                     max_claims      INTEGER NOT NULL DEFAULT 0,
                     claimed_count   INTEGER NOT NULL DEFAULT 0,
                     is_active       BOOLEAN DEFAULT TRUE,
                     created_by      BIGINT NOT NULL,
+                    created_at      TIMESTAMPTZ DEFAULT NOW()
+                );
+            """)
+            await conn.execute("""
+                ALTER TABLE free_coupons ADD COLUMN IF NOT EXISTS codes_per_user INTEGER DEFAULT 1;
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS free_coupon_codes (
+                    id              SERIAL PRIMARY KEY,
+                    free_coupon_id  INTEGER NOT NULL REFERENCES free_coupons(id) ON DELETE CASCADE,
+                    code            TEXT NOT NULL,
+                    is_claimed      BOOLEAN DEFAULT FALSE,
+                    claimed_by      BIGINT REFERENCES users(telegram_id),
+                    claimed_at      TIMESTAMPTZ,
                     created_at      TIMESTAMPTZ DEFAULT NOW()
                 );
             """)
@@ -143,6 +158,47 @@ async def init_db() -> asyncpg.Pool:
                     UNIQUE(free_coupon_id, user_id)
                 );
             """)
+        except Exception:
+            pass
+
+        # Referral system
+        try:
+            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code VARCHAR(16) UNIQUE;")
+            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT;")
+            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_earnings NUMERIC(12,2) DEFAULT 0.00;")
+            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS wallet_balance NUMERIC(12,2) DEFAULT 0.00;")
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS referral_settings (
+                    id                  SERIAL PRIMARY KEY,
+                    mode                VARCHAR(32) DEFAULT 'balance',
+                    commission_percent  NUMERIC(5,2) DEFAULT 10.0,
+                    referrals_needed    INTEGER DEFAULT 3,
+                    reward_code         TEXT DEFAULT '',
+                    is_active           BOOLEAN DEFAULT TRUE,
+                    updated_at          TIMESTAMPTZ DEFAULT NOW()
+                );
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS referrals (
+                    id          SERIAL PRIMARY KEY,
+                    referrer_id BIGINT NOT NULL REFERENCES users(telegram_id),
+                    referred_id BIGINT NOT NULL REFERENCES users(telegram_id),
+                    status      VARCHAR(16) DEFAULT 'joined',
+                    commission  NUMERIC(10,2) DEFAULT 0.00,
+                    created_at  TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE(referred_id)
+                );
+            """)
+            # Insert default referral settings if none exist
+            existing = await conn.fetchrow("SELECT id FROM referral_settings LIMIT 1")
+            if not existing:
+                await conn.execute("INSERT INTO referral_settings (mode) VALUES ('balance')")
+        except Exception:
+            pass
+
+        # Orders: add quantity column
+        try:
+            await conn.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;")
         except Exception:
             pass
 

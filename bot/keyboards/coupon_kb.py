@@ -222,17 +222,38 @@ def coupons_list_kb(coupons: list, page: int = 0) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def coupon_detail_kb(coupon_id: int, in_stock: bool) -> InlineKeyboardMarkup:
+def coupon_detail_kb(coupon_id: int, in_stock: bool, stock: int = 0, price: float = 0) -> InlineKeyboardMarkup:
+    """Show quantity selection like the reference image."""
     buttons = []
-    if in_stock:
+    if in_stock and stock > 0:
+        # Quantity options
+        qty_options = []
+        if stock >= 1:
+            qty_options.append((1, price))
+        if stock >= 5:
+            qty_options.append((5, price * 5))
+        if stock >= 10:
+            qty_options.append((10, price * 10))
+
+        for qty, total in qty_options:
+            if qty == 1:
+                label = f"🛍️ 1 Qty • ₹{total:.1f}"
+            else:
+                label = f"🛍️ {qty} Qty • ₹{total:.1f} [₹{price:.1f}/ea]"
+            buttons.append([
+                InlineKeyboardButton(text=label, callback_data=f"buy_qty:{coupon_id}:{qty}")
+            ])
+
         buttons.append([
-            InlineKeyboardButton(text="🛒 Buy Now", callback_data=f"buy_coupon:{coupon_id}")
+            InlineKeyboardButton(text="✏️ Custom Qty", callback_data=f"buy_custom_qty:{coupon_id}")
         ])
     else:
         buttons.append([
             InlineKeyboardButton(text="🔴 Out of Stock", callback_data="noop")
         ])
-    buttons.append([back_button("browse_coupons")])
+    buttons.append([
+        InlineKeyboardButton(text="◀️ Back to Shop", callback_data="browse_coupons")
+    ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -243,11 +264,11 @@ def payment_pending_kb(order_id: str) -> InlineKeyboardMarkup:
     ])
 
 
-def gateway_selection_kb(coupon_id: int) -> InlineKeyboardMarkup:
-    """Show payment gateway options when user clicks Buy Now."""
+def gateway_selection_kb(coupon_id: int, qty: int = 1) -> InlineKeyboardMarkup:
+    """Show payment gateway options after quantity is selected."""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Pay via Paytm", callback_data=f"pay_gateway:paytm:{coupon_id}")],
-        [InlineKeyboardButton(text="🏦 Pay via BharatPe", callback_data=f"pay_gateway:bharatpe:{coupon_id}")],
+        [InlineKeyboardButton(text="💳 Pay via Paytm", callback_data=f"pay_gateway:paytm:{coupon_id}:{qty}")],
+        [InlineKeyboardButton(text="🏦 Pay via BharatPe", callback_data=f"pay_gateway:bharatpe:{coupon_id}:{qty}")],
         [back_button("browse_coupons")],
     ])
 
@@ -261,3 +282,6 @@ def stock_status_kb() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🏠 Back to Home", callback_data="back_home"),
         ],
     ])
+
+
+

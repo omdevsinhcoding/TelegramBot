@@ -319,90 +319,155 @@ async def get_sales_stats():
     """)
 
 
-# ── FREE COUPON / GIVEAWAY QUERIES ───────────────────────
+# ── FREE COUPON / GIVEAWAY QUERIES (MULTI-CODE) ──────────
 
-async def create_free_coupon(title: str, code: str, max_claims: int, created_by: int) -> int:
+async def create_free_coupon(title: str, codes_per_user: int, created_by: int) -> int:
     pool = await get_pool()
-    row = await pool.fetchrow("""
-        INSERT INTO free_coupons (title, code, max_claims, created_by)
-        VALUES ($1, $2, $3, $4) RETURNING id
-    """, title, code, max_claims, created_by)
+    row = await pool.fetchrow(
+        "INSERT INTO free_coupons (title, codes_per_user, created_by) VALUES ($1, $2, $3) RETURNING id",
+        title, codes_per_user, created_by)
     return row["id"]
 
+async def add_giveaway_codes(fc_id: int, codes: list):
+    pool = await get_pool()
+    for code in codes:
+        c = code.strip()
+        if c:
+            await pool.execute("INSERT INTO free_coupon_codes (free_coupon_id, code) VALUES ($1, $2)", fc_id, c)
+    fc = await pool.fetchrow("SELECT codes_per_user FROM free_coupons WHERE id = $1", fc_id)
+    total = await pool.fetchval("SELECT COUNT(*) FROM free_coupon_codes WHERE free_coupon_id = $1", fc_id)
+    cpu = fc["codes_per_user"] if fc else 1
+    await pool.execute("UPDATE free_coupons SET max_claims = $2 WHERE id = $1", fc_id, total // max(cpu, 1))
 
 async def get_active_free_coupons() -> list:
     pool = await get_pool()
-    return await pool.fetch(
-        "SELECT * FROM free_coupons WHERE is_active = TRUE ORDER BY created_at DESC"
-    )
-
+    rows = await pool.fetch("SELECT * FROM free_coupons WHERE is_active = TRUE ORDER BY created_at DESC")
+    result = []
+    for r in rows:
+        unclaimed = await pool.fetchval("SELECT COUNT(*) FROM free_coupon_codes WHERE free_coupon_id = $1 AND is_claimed = FALSE", r["id"])
+        result.append({**dict(r), "unclaimed_codes": unclaimed})
+    return result
 
 async def get_all_free_coupons() -> list:
     pool = await get_pool()
-    return await pool.fetch("SELECT * FROM free_coupons ORDER BY created_at DESC")
-
+    rows = await pool.fetch("SELECT * FROM free_coupons ORDER BY created_at DESC")
+    result = []
+    for r in rows:
+        total = await pool.fetchval("SELECT COUNT(*) FROM free_coupon_codes WHERE free_coupon_id = $1", r["id"])
+        unclaimed = await pool.fetchval("SELECT COUNT(*) FROM free_coupon_codes WHERE free_coupon_id = $1 AND is_claimed = FALSE", r["id"])
+        result.append({**dict(r), "total_codes": total, "unclaimed_codes": unclaimed})
+    return result
 
 async def get_free_coupon(fc_id: int):
     pool = await get_pool()
-    return await pool.fetchrow("SELECT * FROM free_coupons WHERE id = $1", fc_id)
+    r = await pool.fetchrow("SELECT * FROM free_coupons WHERE id = $1", fc_id)
+    if not r: return None
+    total = await pool.fetchval("SELECT COUNT(*) FROM free_coupon_codes WHERE free_coupon_id = $1", fc_id)
+    unclaimed = await pool.fetchval("SELECT COUNT(*) FROM free_coupon_codes WHERE free_coupon_id = $1 AND is_claimed = FALSE", fc_id)
+    return {**dict(r), "total_codes": total, "unclaimed_codes": unclaimed}
 
-
-async def claim_free_coupon(fc_id: int, user_id: int) -> str | None:
-    """Try to claim a free coupon. Returns code on success, None on failure."""
+async def claim_free_coupon(fc_id: int, user_id: int) -> list | None:
     pool = await get_pool()
-
-    # Check if user already claimed
-    existing = await pool.fetchrow(
-        "SELECT id FROM free_coupon_claims WHERE free_coupon_id = $1 AND user_id = $2",
-        fc_id, user_id
-    )
-    if existing:
-        return None  # Already claimed
-
-    # Get the coupon and check limits
+    existing = await pool.fetchrow("SELECT id FROM free_coupon_claims WHERE free_coupon_id = $1 AND user_id = $2", fc_id, user_id)
+    if existing: return None
     fc = await pool.fetchrow("SELECT * FROM free_coupons WHERE id = $1 AND is_active = TRUE", fc_id)
-    if not fc:
-        return None
-
-    # Check max_claims limit (0 = unlimited)
-    if fc["max_claims"] > 0 and fc["claimed_count"] >= fc["max_claims"]:
-        return None  # Limit reached
-
-    # Claim it atomically
+    if not fc: return None
+    cpu = fc["codes_per_user"] or 1
+    available = await pool.fetch(
+        "SELECT id, code FROM free_coupon_codes WHERE free_coupon_id = $1 AND is_claimed = FALSE ORDER BY id LIMIT $2", fc_id, cpu)
+    if len(available) < cpu: return None
+    codes = []
+    for row in available:
+        await pool.execute("UPDATE free_coupon_codes SET is_claimed = TRUE, claimed_by = $2, claimed_at = NOW() WHERE id = $1", row["id"], user_id)
+        codes.append(row["code"])
     try:
-        await pool.execute(
-            "INSERT INTO free_coupon_claims (free_coupon_id, user_id) VALUES ($1, $2)",
-            fc_id, user_id
-        )
-        await pool.execute(
-            "UPDATE free_coupons SET claimed_count = claimed_count + 1 WHERE id = $1",
-            fc_id
-        )
-        return fc["code"]
-    except Exception:
-        return None  # Unique constraint violation = already claimed
-
+        await pool.execute("INSERT INTO free_coupon_claims (free_coupon_id, user_id) VALUES ($1, $2)", fc_id, user_id)
+    except Exception: pass
+    await pool.execute("UPDATE free_coupons SET claimed_count = claimed_count + 1 WHERE id = $1", fc_id)
+    return codes
 
 async def has_user_claimed(fc_id: int, user_id: int) -> bool:
     pool = await get_pool()
-    row = await pool.fetchrow(
-        "SELECT id FROM free_coupon_claims WHERE free_coupon_id = $1 AND user_id = $2",
-        fc_id, user_id
-    )
-    return row is not None
+    return bool(await pool.fetchrow("SELECT id FROM free_coupon_claims WHERE free_coupon_id = $1 AND user_id = $2", fc_id, user_id))
 
+async def reclaim_unclaimed_codes(fc_id: int) -> list:
+    pool = await get_pool()
+    rows = await pool.fetch("SELECT code FROM free_coupon_codes WHERE free_coupon_id = $1 AND is_claimed = FALSE", fc_id)
+    codes = [r["code"] for r in rows]
+    await pool.execute("DELETE FROM free_coupon_codes WHERE free_coupon_id = $1 AND is_claimed = FALSE", fc_id)
+    return codes
 
 async def delete_free_coupon(fc_id: int):
     pool = await get_pool()
     await pool.execute("DELETE FROM free_coupons WHERE id = $1", fc_id)
 
-
 async def toggle_free_coupon(fc_id: int) -> bool:
     pool = await get_pool()
     fc = await pool.fetchrow("SELECT is_active FROM free_coupons WHERE id = $1", fc_id)
-    if not fc:
-        return False
+    if not fc: return False
     new_status = not fc["is_active"]
     await pool.execute("UPDATE free_coupons SET is_active = $2 WHERE id = $1", fc_id, new_status)
     return new_status
+
+# ── REFERRAL QUERIES ─────────────────────────────────────
+
+async def get_referral_settings():
+    pool = await get_pool()
+    return await pool.fetchrow("SELECT * FROM referral_settings ORDER BY id LIMIT 1")
+
+async def update_referral_settings(**kwargs):
+    pool = await get_pool()
+    sets = ", ".join(f"{k} = ${i+1}" for i, k in enumerate(kwargs.keys()))
+    await pool.execute(f"UPDATE referral_settings SET {sets}, updated_at = NOW()", *list(kwargs.values()))
+
+async def get_or_create_referral_code(user_id: int) -> str:
+    pool = await get_pool()
+    row = await pool.fetchrow("SELECT referral_code FROM users WHERE telegram_id = $1", user_id)
+    if row and row["referral_code"]: return row["referral_code"]
+    import random, string
+    code = "REF" + "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    await pool.execute("UPDATE users SET referral_code = $2 WHERE telegram_id = $1", user_id, code)
+    return code
+
+async def get_user_by_referral_code(code: str):
+    pool = await get_pool()
+    return await pool.fetchrow("SELECT * FROM users WHERE referral_code = $1", code)
+
+async def record_referral(referrer_id: int, referred_id: int) -> bool:
+    pool = await get_pool()
+    try:
+        await pool.execute("INSERT INTO referrals (referrer_id, referred_id) VALUES ($1, $2)", referrer_id, referred_id)
+        await pool.execute("UPDATE users SET referred_by = $1 WHERE telegram_id = $2", referrer_id, referred_id)
+        return True
+    except Exception: return False
+
+async def get_referral_count(user_id: int) -> int:
+    pool = await get_pool()
+    return await pool.fetchval("SELECT COUNT(*) FROM referrals WHERE referrer_id = $1", user_id) or 0
+
+async def get_referral_history(user_id: int, limit: int = 20) -> list:
+    pool = await get_pool()
+    return await pool.fetch(
+        "SELECT r.*, u.username, u.full_name FROM referrals r JOIN users u ON r.referred_id = u.telegram_id "
+        "WHERE r.referrer_id = $1 ORDER BY r.created_at DESC LIMIT $2", user_id, limit)
+
+async def add_referral_earnings(user_id: int, amount: float):
+    pool = await get_pool()
+    await pool.execute(
+        "UPDATE users SET referral_earnings = referral_earnings + $2, wallet_balance = wallet_balance + $2 WHERE telegram_id = $1",
+        user_id, amount)
+
+async def get_user_wallet(user_id: int) -> float:
+    pool = await get_pool()
+    row = await pool.fetchrow("SELECT wallet_balance FROM users WHERE telegram_id = $1", user_id)
+    return float(row["wallet_balance"]) if row else 0.0
+
+async def get_user_referral_earnings(user_id: int) -> float:
+    pool = await get_pool()
+    row = await pool.fetchrow("SELECT referral_earnings FROM users WHERE telegram_id = $1", user_id)
+    return float(row["referral_earnings"]) if row else 0.0
+
+
+
+
 

@@ -21,6 +21,7 @@ from bot.handlers.menu import router as menu_router
 from bot.handlers.coupons import router as coupons_router
 from bot.handlers.purchase import router as purchase_router
 from bot.handlers.admin import router as admin_router
+from bot.handlers.referral import router as referral_router
 
 
 async def on_startup(bot: Bot):
@@ -69,6 +70,7 @@ async def main():
     dp.include_router(coupons_router)
     dp.include_router(purchase_router)
     dp.include_router(admin_router)
+    dp.include_router(referral_router)
 
     logger.info("Starting DreamX Coupon Bot...")
 

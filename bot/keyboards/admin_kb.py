@@ -15,6 +15,7 @@ def admin_panel_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="💳 View Payments", callback_data="admin_payments")],
         [InlineKeyboardButton(text="📊 Sales Analytics", callback_data="admin_analytics")],
         [InlineKeyboardButton(text="📢 Broadcast", callback_data="admin_broadcast")],
+        [InlineKeyboardButton(text="🤝 Referral Settings", callback_data="admin_referral_settings")],
         [InlineKeyboardButton(text="📋 Admin Logs", callback_data="admin_logs")],
         [InlineKeyboardButton(text="🏠 Back to Home", callback_data="back_home")],
     ])

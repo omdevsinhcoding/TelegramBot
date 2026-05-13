@@ -67,19 +67,22 @@ async def cb_coupon_detail(callback: types.CallbackQuery):
     cat = escape_md(coupon.get("category") or "General")
 
     text = (
-        f"🏷️ *{title}*\n\n"
-        f"{desc}\n\n"
-        f"📂 Category: *{cat}*\n"
-        f"💰 Original Price: ~{orig_price}~\n"
-        f"🔥 Sale Price: *{sale_price}*\n"
-        f"💎 Discount: *{discount_pct}% OFF*\n"
-        f"{stock_text}\n"
+        f"🏷️ *{title}*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"💰 Price: {sale_price} / unit\n"
+        f"📦 Stock: {coupon['stock']} available\n\n"
+        f"🛍️ *Select Quantity:*"
     )
 
     in_stock = coupon["stock"] > 0
     await callback.message.edit_text(
         text,
         parse_mode="MarkdownV2",
-        reply_markup=coupon_detail_kb(coupon_id, in_stock),
+        reply_markup=coupon_detail_kb(
+            coupon_id, in_stock,
+            stock=coupon["stock"],
+            price=float(coupon["discounted_price"])
+        ),
     )
     await callback.answer()
+

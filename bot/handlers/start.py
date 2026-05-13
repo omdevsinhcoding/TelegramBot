@@ -1,6 +1,6 @@
 """
 DreamX Coupon Bot — /start Command Handler
-Registers user and shows welcome screen with persistent reply keyboard.
+Registers user, tracks referrals, and shows welcome screen.
 """
 
 from aiogram import Router, types
@@ -22,6 +22,29 @@ async def cmd_start(message: types.Message):
     await register_user(user.id, user.username, user.full_name)
     logger.info(f"/start from {user.id} (@{user.username})")
 
+    # Handle referral: /start REF_CODE
+    args = message.text.split(maxsplit=1)
+    if len(args) > 1:
+        ref_code = args[1].strip()
+        if ref_code.startswith("REF"):
+            from bot.database import queries as db
+            referrer = await db.get_user_by_referral_code(ref_code)
+            if referrer and referrer["telegram_id"] != user.id:
+                success = await db.record_referral(referrer["telegram_id"], user.id)
+                if success:
+                    logger.info(f"Referral recorded: {referrer['telegram_id']} -> {user.id}")
+                    try:
+                        ref_name = escape_md(user.first_name or "Someone")
+                        await message.bot.send_message(
+                            referrer["telegram_id"],
+                            f"🎉 *New Referral\\!*\n\n"
+                            f"👤 {ref_name} joined using your link\\!\n"
+                            f"Keep sharing to earn more rewards 💰",
+                            parse_mode="MarkdownV2",
+                        )
+                    except Exception:
+                        pass
+
     first = escape_md(user.first_name or "there")
 
     welcome = (
@@ -34,14 +57,13 @@ async def cmd_start(message: types.Message):
         f"Use the buttons below to get started 👇"
     )
 
-    # Send welcome with persistent reply keyboard
     await message.answer(
         welcome,
         parse_mode="MarkdownV2",
         reply_markup=main_menu_kb(user.id),
     )
 
-    # Immediately show the buying menu after welcome
+    # Show buying menu after welcome
     from bot.services.coupon_service import list_active_coupons
     from bot.keyboards.coupon_kb import buying_menu_kb
     from bot.database import queries as db

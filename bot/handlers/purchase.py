@@ -40,29 +40,130 @@ router = Router()
 class BharatPeStates(StatesGroup):
     waiting_utr = State()
 
+class CustomQtyStates(StatesGroup):
+    waiting_qty = State()
 
-# ── Buy Coupon → Show Gateway Selection ──────────────────
 
-@router.callback_query(F.data.startswith("buy_coupon:"))
+# ── Quantity Selection → Gateway ─────────────────────────
+
+@router.callback_query(F.data.startswith("buy_qty:"))
 @error_handler
-async def cb_buy_coupon(callback: types.CallbackQuery):
-    """User clicked Buy Now — show payment gateway options."""
-    coupon_id = int(callback.data.split(":")[1])
+async def cb_buy_qty(callback: types.CallbackQuery):
+    """User selected a preset quantity — show gateway selection."""
+    parts = callback.data.split(":")
+    coupon_id = int(parts[1])
+    qty = int(parts[2])
     coupon = await get_coupon_detail(coupon_id)
 
     if not coupon:
         await callback.answer("Coupon not found.", show_alert=True)
         return
+    if coupon["stock"] < qty:
+        await callback.answer(f"Not enough stock! Only {coupon['stock']} left.", show_alert=True)
+        return
 
+    total = float(coupon["discounted_price"]) * qty
+    title = escape_md(coupon["title"])
+    amt = escape_md(format_currency(total))
+
+    from bot.keyboards.coupon_kb import gateway_selection_kb
+    text = (
+        f"💳 *Select Payment Gateway*\n\n"
+        f"🏷️ {title}\n"
+        f"📦 Quantity: *{qty}*\n"
+        f"💰 Total: *{amt}*\n\n"
+        f"Choose your preferred payment method:"
+    )
+    await callback.message.edit_text(
+        text, parse_mode="MarkdownV2",
+        reply_markup=gateway_selection_kb(coupon_id, qty),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("buy_custom_qty:"))
+@error_handler
+async def cb_buy_custom_qty(callback: types.CallbackQuery, state: FSMContext):
+    """User wants custom quantity — ask for number."""
+    coupon_id = int(callback.data.split(":")[1])
+    coupon = await get_coupon_detail(coupon_id)
+    if not coupon:
+        await callback.answer("Coupon not found.", show_alert=True)
+        return
+
+    await state.update_data(custom_qty_coupon_id=coupon_id)
+    title = escape_md(coupon["title"])
+    await callback.message.edit_text(
+        f"✏️ *Custom Quantity*\n\n"
+        f"🏷️ {title}\n"
+        f"📦 Available: {coupon['stock']}\n"
+        f"💰 Price: ₹{coupon['discounted_price']}/unit\n\n"
+        f"Enter the quantity you want to buy:",
+        parse_mode="MarkdownV2",
+    )
+    await state.set_state(CustomQtyStates.waiting_qty)
+    await callback.answer()
+
+
+@router.message(CustomQtyStates.waiting_qty)
+@error_handler
+async def msg_custom_qty(message: types.Message, state: FSMContext):
+    """Receive custom quantity number."""
+    try:
+        qty = int(message.text.strip())
+        if qty < 1:
+            await message.answer("⚠️ Quantity must be at least 1.")
+            return
+    except ValueError:
+        await message.answer("⚠️ Enter a valid number.")
+        return
+
+    data = await state.get_data()
+    coupon_id = data["custom_qty_coupon_id"]
+    await state.clear()
+
+    coupon = await get_coupon_detail(coupon_id)
+    if not coupon:
+        await message.answer("Coupon not found.")
+        return
+    if coupon["stock"] < qty:
+        await message.answer(f"⚠️ Not enough stock! Only {coupon['stock']} available.")
+        return
+
+    total = float(coupon["discounted_price"]) * qty
+    title = escape_md(coupon["title"])
+    amt = escape_md(format_currency(total))
+
+    from bot.keyboards.coupon_kb import gateway_selection_kb
+    text = (
+        f"💳 *Select Payment Gateway*\n\n"
+        f"🏷️ {title}\n"
+        f"📦 Quantity: *{qty}*\n"
+        f"💰 Total: *{amt}*\n\n"
+        f"Choose your preferred payment method:"
+    )
+    await message.answer(
+        text, parse_mode="MarkdownV2",
+        reply_markup=gateway_selection_kb(coupon_id, qty),
+    )
+
+
+# Legacy handler for old buy_coupon callback (backward compat)
+@router.callback_query(F.data.startswith("buy_coupon:"))
+@error_handler
+async def cb_buy_coupon(callback: types.CallbackQuery):
+    coupon_id = int(callback.data.split(":")[1])
+    coupon = await get_coupon_detail(coupon_id)
+    if not coupon:
+        await callback.answer("Coupon not found.", show_alert=True)
+        return
     if coupon["stock"] <= 0:
         await callback.answer("Sorry, this coupon is out of stock!", show_alert=True)
         return
 
+    from bot.keyboards.coupon_kb import gateway_selection_kb
     title = escape_md(coupon["title"])
     amt = escape_md(format_currency(float(coupon["discounted_price"])))
-
-    from bot.keyboards.coupon_kb import gateway_selection_kb
-
     text = (
         f"💳 *Select Payment Gateway*\n\n"
         f"🏷️ {title}\n"
@@ -76,6 +177,7 @@ async def cb_buy_coupon(callback: types.CallbackQuery):
     await callback.answer()
 
 
+
 # ══════════════════════════════════════════════════════════════
 # PAYTM GATEWAY — Dynamic QR + Auto-Poll
 # ══════════════════════════════════════════════════════════════
@@ -84,18 +186,20 @@ async def cb_buy_coupon(callback: types.CallbackQuery):
 @error_handler
 async def cb_pay_paytm(callback: types.CallbackQuery):
     """Paytm selected — create order, generate dynamic QR, auto-poll detects payment."""
-    coupon_id = int(callback.data.split(":")[2])
+    parts = callback.data.split(":")
+    coupon_id = int(parts[2])
+    qty = int(parts[3]) if len(parts) > 3 else 1
     coupon = await get_coupon_detail(coupon_id)
 
     if not coupon:
         await callback.answer("Coupon not found.", show_alert=True)
         return
-    if coupon["stock"] <= 0:
-        await callback.answer("Sorry, this coupon is out of stock!", show_alert=True)
+    if coupon["stock"] < qty:
+        await callback.answer(f"Not enough stock! Only {coupon['stock']} left.", show_alert=True)
         return
 
     user_id = callback.from_user.id
-    amount = float(coupon["discounted_price"])
+    amount = float(coupon["discounted_price"]) * qty
 
     # Create order with Paytm gateway
     order_info = await create_purchase_order(user_id, coupon_id, amount, "paytm")
@@ -149,18 +253,20 @@ async def cb_pay_paytm(callback: types.CallbackQuery):
 @error_handler
 async def cb_pay_bharatpe(callback: types.CallbackQuery, state: FSMContext):
     """BharatPe selected — show static QR image, ask user to pay & enter UTR."""
-    coupon_id = int(callback.data.split(":")[2])
+    parts = callback.data.split(":")
+    coupon_id = int(parts[2])
+    qty = int(parts[3]) if len(parts) > 3 else 1
     coupon = await get_coupon_detail(coupon_id)
 
     if not coupon:
         await callback.answer("Coupon not found.", show_alert=True)
         return
-    if coupon["stock"] <= 0:
-        await callback.answer("Sorry, this coupon is out of stock!", show_alert=True)
+    if coupon["stock"] < qty:
+        await callback.answer(f"Not enough stock! Only {coupon['stock']} left.", show_alert=True)
         return
 
     user_id = callback.from_user.id
-    amount = float(coupon["discounted_price"])
+    amount = float(coupon["discounted_price"]) * qty
 
     # Create order with BharatPe gateway
     order_info = await create_purchase_order(user_id, coupon_id, amount, "bharatpe")

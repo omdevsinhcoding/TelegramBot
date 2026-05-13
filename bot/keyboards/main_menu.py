@@ -32,6 +32,9 @@ def main_menu_kb(user_id: int) -> ReplyKeyboardMarkup:
             KeyboardButton(text="🎟️ Recover Coupon"),
         ],
         [
+            KeyboardButton(text="🎁 Refer & Earn"),
+        ],
+        [
             KeyboardButton(text="⚠️ Disclaimer"),
             KeyboardButton(text="📢 Our Channels"),
         ],

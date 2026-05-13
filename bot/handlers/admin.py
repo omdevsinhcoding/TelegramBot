@@ -46,6 +46,7 @@ class AdminStates(StatesGroup):
     giveaway_title = State()
     giveaway_code = State()
     giveaway_max_claims = State()
+    giveaway_add_codes = State()
 
 
 # ── Admin Panel Entry ─────────────────────────────────────
@@ -625,7 +626,7 @@ async def msg_broadcast(message: types.Message, state: FSMContext):
     )
 
 
-# ── Giveaway Management ──────────────────────────────────
+# ── Giveaway Management (Multi-Code) ─────────────────────
 
 @router.callback_query(F.data == "admin_giveaways")
 @admin_only
@@ -650,20 +651,41 @@ async def cb_admin_giveaway_view(callback: types.CallbackQuery):
         return
 
     status = "🟢 Active" if g["is_active"] else "🔴 Disabled"
-    max_c = g["max_claims"] if g["max_claims"] > 0 else "Unlimited"
     title = escape_md(g["title"])
-    code = escape_md(g["code"])
+    total = g.get("total_codes", 0)
+    unclaimed = g.get("unclaimed_codes", 0)
+    claimed = total - unclaimed
+    cpu = g.get("codes_per_user", 1)
+
     text = (
         f"🎁 *Giveaway \\#{gid}*\n\n"
         f"📝 Title: {title}\n"
-        f"🔑 Code: `{code}`\n"
-        f"📊 Claims: {g['claimed_count']}/{max_c}\n"
+        f"📦 Total Codes: {total}\n"
+        f"✅ Claimed: {claimed}\n"
+        f"📭 Unclaimed: {unclaimed}\n"
+        f"👤 Codes/User: {cpu}\n"
+        f"👥 Users Claimed: {g['claimed_count']}\n"
         f"Status: {status}"
     )
-    await callback.message.edit_text(
-        text, parse_mode="MarkdownV2",
-        reply_markup=admin_giveaway_view_kb(gid, g["is_active"])
-    )
+
+    kb = admin_giveaway_view_kb(gid, g["is_active"])
+    # Add reclaim button if there are unclaimed codes
+    if unclaimed > 0:
+        from aiogram.types import InlineKeyboardButton
+        kb.inline_keyboard.insert(-1, [
+            InlineKeyboardButton(
+                text=f"📥 Reclaim {unclaimed} Codes",
+                callback_data=f"admin_giveaway_reclaim:{gid}"
+            )
+        ])
+        kb.inline_keyboard.insert(-1, [
+            InlineKeyboardButton(
+                text="📄 Add More Codes",
+                callback_data=f"admin_giveaway_addcodes:{gid}"
+            )
+        ])
+
+    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
     await callback.answer()
 
 
@@ -686,7 +708,8 @@ async def msg_giveaway_title(message: types.Message, state: FSMContext):
     await state.update_data(giveaway_title=title)
     await message.answer(
         f"✅ Title: *{escape_md(title)}*\n\n"
-        f"🔑 *Step 2/3* — Enter the *coupon code* to give away:",
+        f"🔢 *Step 2/3* — How many codes *per user*?\n"
+        f"\\(e\\.g\\. `1` = 1 code per user, `3` = 3 codes per user\\)",
         parse_mode="MarkdownV2",
     )
     await state.set_state(AdminStates.giveaway_code)
@@ -694,13 +717,21 @@ async def msg_giveaway_title(message: types.Message, state: FSMContext):
 
 @router.message(AdminStates.giveaway_code)
 @error_handler
-async def msg_giveaway_code(message: types.Message, state: FSMContext):
-    code = message.text.strip()
-    await state.update_data(giveaway_code=code)
+async def msg_giveaway_codes_per_user(message: types.Message, state: FSMContext):
+    try:
+        cpu = int(message.text.strip())
+        if cpu < 1:
+            cpu = 1
+    except ValueError:
+        await message.answer("⚠️ Enter a valid number (minimum 1).")
+        return
+    await state.update_data(codes_per_user=cpu)
     await message.answer(
-        f"✅ Code set\\.\n\n"
-        f"🎯 *Step 3/3* — Enter *max users* who can claim\n"
-        f"\\(e\\.g\\. `50` for first 50 users, or `0` for unlimited\\):",
+        f"✅ Codes per user: *{cpu}*\n\n"
+        f"📄 *Step 3/3* — Now send the coupon codes:\n\n"
+        f"• *Paste codes* \\(one per line\\)\n"
+        f"• OR *upload a \\.txt file* with codes\n\n"
+        f"Each line = 1 unique code",
         parse_mode="MarkdownV2",
     )
     await state.set_state(AdminStates.giveaway_max_claims)
@@ -708,36 +739,89 @@ async def msg_giveaway_code(message: types.Message, state: FSMContext):
 
 @router.message(AdminStates.giveaway_max_claims)
 @error_handler
-async def msg_giveaway_max_claims(message: types.Message, state: FSMContext):
-    try:
-        max_claims = int(message.text.strip())
-        if max_claims < 0:
-            max_claims = 0
-    except ValueError:
-        await message.answer("⚠️ Enter a valid number (0 for unlimited).")
+async def msg_giveaway_codes_input(message: types.Message, state: FSMContext):
+    """Receive codes either as text (one per line) or as a .txt file upload."""
+    codes = []
+
+    if message.document:
+        # File upload
+        file = await message.bot.get_file(message.document.file_id)
+        import io
+        buf = io.BytesIO()
+        await message.bot.download_file(file.file_path, buf)
+        buf.seek(0)
+        content = buf.read().decode("utf-8", errors="ignore")
+        codes = [line.strip() for line in content.splitlines() if line.strip()]
+    elif message.text:
+        codes = [line.strip() for line in message.text.strip().splitlines() if line.strip()]
+
+    if not codes:
+        await message.answer("⚠️ No codes found. Send codes one per line or upload a .txt file.")
         return
 
     data = await state.get_data()
     await state.clear()
 
     title = data["giveaway_title"]
-    code = data["giveaway_code"]
+    cpu = data.get("codes_per_user", 1)
 
-    gid = await db.create_free_coupon(title, code, max_claims, message.from_user.id)
+    gid = await db.create_free_coupon(title, cpu, message.from_user.id)
+    await db.add_giveaway_codes(gid, codes)
+
     await db.add_admin_log(
         message.from_user.id, "add_giveaway", "giveaway", str(gid),
-        f"Title: {title}, Max: {max_claims}"
+        f"Title: {title}, Codes: {len(codes)}, Per User: {cpu}"
     )
 
-    limit_text = f"First {max_claims} users" if max_claims > 0 else "Unlimited"
+    max_users = len(codes) // max(cpu, 1)
     kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_giveaways")]])
     await message.answer(
         f"✅ *Giveaway \\#{gid} created\\!*\n\n"
         f"📝 Title: *{escape_md(title)}*\n"
-        f"🔑 Code: `{escape_md(code)}`\n"
-        f"🎯 Limit: *{escape_md(limit_text)}*",
+        f"📦 Codes loaded: *{len(codes)}*\n"
+        f"👤 Codes per user: *{cpu}*\n"
+        f"👥 Max users: *{max_users}*",
         parse_mode="MarkdownV2", reply_markup=kb,
     )
+
+
+@router.callback_query(F.data.startswith("admin_giveaway_addcodes:"))
+@admin_only
+@error_handler
+async def cb_giveaway_add_more_codes(callback: types.CallbackQuery, state: FSMContext):
+    gid = int(callback.data.split(":")[1])
+    await state.update_data(add_codes_giveaway_id=gid)
+    await callback.message.edit_text(
+        "📄 Send more codes \\(one per line\\) or upload a \\.txt file:",
+        parse_mode="MarkdownV2",
+    )
+    await state.set_state(AdminStates.add_codes_input)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_giveaway_reclaim:"))
+@admin_only
+@error_handler
+async def cb_giveaway_reclaim(callback: types.CallbackQuery):
+    gid = int(callback.data.split(":")[1])
+    codes = await db.reclaim_unclaimed_codes(gid)
+    if not codes:
+        await callback.answer("No unclaimed codes to reclaim.", show_alert=True)
+        return
+
+    # Send codes as a text file
+    import io
+    content = "\n".join(codes)
+    buf = io.BytesIO(content.encode("utf-8"))
+    buf.name = f"reclaimed_codes_giveaway_{gid}.txt"
+
+    from aiogram.types import BufferedInputFile
+    file = BufferedInputFile(buf.getvalue(), filename=buf.name)
+    await callback.message.answer_document(
+        file,
+        caption=f"📥 Reclaimed {len(codes)} unclaimed codes from Giveaway #{gid}"
+    )
+    await callback.answer(f"Reclaimed {len(codes)} codes!", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("admin_giveaway_toggle:"))
@@ -762,3 +846,119 @@ async def cb_giveaway_delete(callback: types.CallbackQuery):
     )
     await callback.answer("Giveaway deleted.", show_alert=True)
     await cb_admin_giveaways(callback)
+
+
+@router.callback_query(F.data.startswith("admin_giveaway_addcodes:"))
+@admin_only
+@error_handler
+async def cb_giveaway_add_more_codes(callback: types.CallbackQuery, state: FSMContext):
+    gid = int(callback.data.split(":")[1])
+    await state.update_data(add_codes_giveaway_id=gid)
+    await callback.message.edit_text(
+        "📄 Send more codes \\(one per line\\) or upload a \\.txt file:",
+        parse_mode="MarkdownV2",
+    )
+    await state.set_state(AdminStates.giveaway_add_codes)
+    await callback.answer()
+
+
+@router.message(AdminStates.giveaway_add_codes)
+@error_handler
+async def msg_giveaway_add_more_codes(message: types.Message, state: FSMContext):
+    """Receive additional codes for existing giveaway."""
+    codes = []
+    if message.document:
+        file = await message.bot.get_file(message.document.file_id)
+        import io
+        buf = io.BytesIO()
+        await message.bot.download_file(file.file_path, buf)
+        buf.seek(0)
+        content = buf.read().decode("utf-8", errors="ignore")
+        codes = [line.strip() for line in content.splitlines() if line.strip()]
+    elif message.text:
+        codes = [line.strip() for line in message.text.strip().splitlines() if line.strip()]
+
+    if not codes:
+        await message.answer("⚠️ No codes found.")
+        return
+
+    data = await state.get_data()
+    gid = data["add_codes_giveaway_id"]
+    await state.clear()
+
+    await db.add_giveaway_codes(gid, codes)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_giveaways")]])
+    await message.answer(
+        f"✅ Added *{len(codes)}* codes to Giveaway \\#{gid}\\!",
+        parse_mode="MarkdownV2", reply_markup=kb
+    )
+
+
+# ── Referral Settings ────────────────────────────────────
+
+@router.callback_query(F.data == "admin_referral_settings")
+@admin_only
+@error_handler
+async def cb_admin_referral_settings(callback: types.CallbackQuery):
+    settings = await db.get_referral_settings()
+    if not settings:
+        await callback.answer("No referral settings found.", show_alert=True)
+        return
+
+    mode = settings["mode"]
+    pct = settings["commission_percent"]
+    needed = settings["referrals_needed"]
+    active = "🟢 Active" if settings["is_active"] else "🔴 Disabled"
+    reward = settings.get("reward_code") or "Not set"
+
+    mode_label = "💰 Balance Commission" if mode == "balance" else "🎁 Code Reward"
+    text = (
+        f"🤝 *Referral Settings*\n\n"
+        f"Status: {active}\n"
+        f"Mode: {mode_label}\n\n"
+    )
+    if mode == "balance":
+        text += f"💰 Commission: {pct}% per purchase\n"
+    else:
+        text += (
+            f"🎁 Referrals needed: {needed}\n"
+            f"🔑 Reward code: `{escape_md(reward)}`\n"
+        )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="🔄 Switch to Code Reward" if mode == "balance" else "🔄 Switch to Balance",
+            callback_data="admin_ref_toggle_mode"
+        )],
+        [InlineKeyboardButton(
+            text="🟢 Disable" if settings["is_active"] else "🔴 Enable",
+            callback_data="admin_ref_toggle_active"
+        )],
+        [back_button("admin_panel")],
+    ])
+    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_ref_toggle_mode")
+@admin_only
+@error_handler
+async def cb_ref_toggle_mode(callback: types.CallbackQuery):
+    settings = await db.get_referral_settings()
+    new_mode = "code_reward" if settings["mode"] == "balance" else "balance"
+    await db.update_referral_settings(mode=new_mode)
+    await callback.answer(f"Mode switched to {new_mode}!", show_alert=True)
+    await cb_admin_referral_settings(callback)
+
+
+@router.callback_query(F.data == "admin_ref_toggle_active")
+@admin_only
+@error_handler
+async def cb_ref_toggle_active(callback: types.CallbackQuery):
+    settings = await db.get_referral_settings()
+    new_val = not settings["is_active"]
+    await db.update_referral_settings(is_active=new_val)
+    status = "enabled" if new_val else "disabled"
+    await callback.answer(f"Referral system {status}!", show_alert=True)
+    await cb_admin_referral_settings(callback)
+
