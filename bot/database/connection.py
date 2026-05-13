@@ -150,6 +150,31 @@ async def init_db() -> asyncpg.Pool:
         except Exception:
             pass
 
+        # Wallet balance column on users
+        try:
+            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS wallet_balance NUMERIC(12,2) DEFAULT 0.00;")
+            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_earnings NUMERIC(12,2) DEFAULT 0.00;")
+        except Exception:
+            pass
+
+        # Wallet transactions table
+        try:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS wallet_transactions (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    amount NUMERIC(12,2) NOT NULL,
+                    txn_type VARCHAR(50) NOT NULL,
+                    balance_before NUMERIC(12,2) DEFAULT 0,
+                    balance_after NUMERIC(12,2) DEFAULT 0,
+                    reference TEXT,
+                    description TEXT,
+                    created_at TIMESTAMP DEFAULT NOW()
+                );
+            """)
+        except Exception:
+            pass
+
         # Migrate old referral codes to new ERROROO-XXXXXXXX format
         try:
             import random, string
