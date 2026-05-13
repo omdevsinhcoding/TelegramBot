@@ -8,3 +8,9 @@
 2026-05-12 15:39:11 | INFO     | dreamx_bot           | Connecting to PostgreSQL...
 2026-05-12 15:39:13 | WARNING  | dreamx_bot           | Schema note: relation "idx_users_telegram_id" already exists
 2026-05-12 15:39:14 | INFO     | dreamx_bot           | Database pool ready.
+2026-05-13 17:58:17 | INFO     | dreamx_bot           | Starting DreamX Coupon Bot...
+2026-05-13 17:58:18 | INFO     | dreamx_bot           | Connecting to PostgreSQL...
+2026-05-13 17:58:20 | INFO     | dreamx_bot           | Database schema applied.
+2026-05-13 17:58:23 | INFO     | dreamx_bot           | Database pool ready.
+2026-05-13 17:58:23 | INFO     | dreamx_bot           | Order expiry service started (lightweight, no payment polling).
+2026-05-13 17:58:23 | INFO     | dreamx_bot           | Bot started: @Driveupop2bot (ID: 5831000088)

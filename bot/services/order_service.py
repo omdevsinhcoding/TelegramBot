@@ -104,9 +104,12 @@ async def expire_orders():
     logger.info(f"Expired stale orders: {result}")
 
 
-async def get_user_order_history(user_id: int, limit: int = 10) -> list:
-    rows = await db.get_user_orders(user_id, limit)
+async def get_user_order_history(user_id: int, limit: int = 5, offset: int = 0) -> list:
+    rows = await db.get_user_orders(user_id, limit, offset)
     return [dict(r) for r in rows]
+
+async def get_user_order_history_count(user_id: int) -> int:
+    return await db.get_user_orders_count(user_id)
 
 
 async def get_delivered_code(order_id: str, coupon_id: int):

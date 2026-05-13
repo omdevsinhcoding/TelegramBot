@@ -748,14 +748,20 @@ async def cb_cancel_order(callback: types.CallbackQuery, state: FSMContext):
 
 # ── My Orders ─────────────────────────────────────────────
 
-@router.callback_query(F.data == "my_orders")
+@router.callback_query(F.data.startswith("my_orders"))
 @error_handler
 async def cb_my_orders(callback: types.CallbackQuery):
-    from bot.services.order_service import get_user_order_history
+    from bot.services.order_service import get_user_order_history, get_user_order_history_count
+    
+    parts = callback.data.split(":")
+    page = int(parts[2]) if len(parts) > 2 else 1
+    limit = 5
+    offset = (page - 1) * limit
 
-    orders = await get_user_order_history(callback.from_user.id, 10)
+    total_orders = await get_user_order_history_count(callback.fromuser.id if hasattr(callback, 'fromuser') else callback.from_user.id)
+    orders = await get_user_order_history(callback.from_user.id, limit, offset)
 
-    if not orders:
+    if not orders and page == 1:
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
         try:
             await callback.message.edit_text(
@@ -770,19 +776,22 @@ async def cb_my_orders(callback: types.CallbackQuery):
         await callback.answer()
         return
 
-    # Build attractive order history
+    # Build attractive order history exactly as requested
+    total_esc = str(total_orders)
     lines = [
-        "━━━━━━━━━━━━━━━━━━━━",
-        "📦 *ORDER HISTORY*",
+        "📖 *ORDER HISTORY*",
+        "═════════════════════════",
         "",
-        f"📊 Total: {len(orders)} orders",
+        f"📊 Total: {total_esc} orders",
+        ""
     ]
 
     buttons = []
     pool = await db.get_pool()
 
     for i, o in enumerate(orders):
-        num = len(orders) - i
+        # Order number calculation (overall #)
+        num = total_orders - offset - i
         oid = o["order_id"]
 
         # Get coupon title
@@ -793,10 +802,6 @@ async def cb_my_orders(callback: types.CallbackQuery):
         code_count = await pool.fetchval(
             "SELECT COUNT(*) FROM coupon_codes WHERE order_id = $1 AND is_sold = TRUE", oid
         ) or 0
-
-        # Status emoji
-        status_map = {"delivered": "✅", "paid": "🟢", "pending": "🟡", "expired": "❌", "cancelled": "❌"}
-        s_emoji = status_map.get(o["status"], "❓")
 
         amt = f"₹{float(o['amount']):.1f}"
         qty = o.get("quantity", 1) or 1
@@ -810,14 +815,17 @@ async def cb_my_orders(callback: types.CallbackQuery):
         amt_esc = escape_md(amt)
         date_esc = escape_md(date_str)
 
-        lines.append(f"\n━━━━ \\#*{num}* ━━━━")
-        lines.append(f"🏷️ {title_esc}")
-        lines.append(f"🕐 {date_esc}")
-        lines.append(f"🛍️ Qty: {qty} • 💰 {amt_esc}")
-        lines.append(f"🆔 `{oid_esc}`")
+        lines.append(f"┌──────── \\#{num} ────────┐")
+        lines.append(f"│ 📦 {title_esc}")
+        lines.append(f"│ 🕒 {date_esc}")
+        lines.append(f"│ 🔢 Qty: {qty} • 💰 {amt_esc}")
+        lines.append(f"│ 🆔 `{oid_esc}`")
         if code_count > 0:
-            lines.append(f"📦 {code_count} coupon\\(s\\)")
-        lines.append(f"Status: {s_emoji} {escape_md(o['status'])}")
+            lines.append(f"│ 🎫 {code_count} coupon\\(s\\) \\- tap to view")
+        else:
+            lines.append(f"│ 🎫 Status: {escape_md(o['status'])}")
+        lines.append("└────────────────────┘")
+        lines.append("")
 
         # Add View Codes button for delivered/paid orders
         if o["status"] in ("delivered", "paid") and code_count > 0:
@@ -829,17 +837,29 @@ async def cb_my_orders(callback: types.CallbackQuery):
             ])
 
     text = "\n".join(lines)
+    
+    # Pagination
+    nav_buttons = []
+    if page > 1:
+        nav_buttons.append(InlineKeyboardButton(text="⬅️ Previous", callback_data=f"my_orders:page:{page-1}"))
+    if offset + limit < total_orders:
+        nav_buttons.append(InlineKeyboardButton(text="Next ➡️", callback_data=f"my_orders:page:{page+1}"))
+        
+    if nav_buttons:
+        buttons.append(nav_buttons)
+
     buttons.append([back_button("back_home")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
 
     try:
         await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
-    except Exception:
-        try:
-            await callback.message.delete()
-        except Exception:
-            pass
-        await callback.message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
+    except Exception as e:
+        if "message is not modified" not in str(e).lower():
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+            await callback.message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
     await callback.answer()
 
 

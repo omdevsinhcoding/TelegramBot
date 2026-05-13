@@ -174,12 +174,16 @@ async def get_pending_orders():
     )
 
 
-async def get_user_orders(telegram_id: int, limit: int = 10):
+async def get_user_orders(telegram_id: int, limit: int = 10, offset: int = 0):
     pool = await get_pool()
     return await pool.fetch(
-        "SELECT * FROM orders WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2",
-        telegram_id, limit
+        "SELECT * FROM orders WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+        telegram_id, limit, offset
     )
+
+async def get_user_orders_count(telegram_id: int) -> int:
+    pool = await get_pool()
+    return await pool.fetchval("SELECT COUNT(*) FROM orders WHERE user_id = $1", telegram_id) or 0
 
 
 async def get_all_orders(limit: int = 50):
