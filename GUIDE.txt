@@ -277,7 +277,10 @@
 # STEP 10: MAKE BOT RUN 24/7 FOREVER (2 minutes)
 # ============================================================
 #
-# Without this step, the bot STOPS when you close SSH!
+# ⚠️ IMPORTANT: If you run the bot via SSH (python3 run.py),
+# it STOPS when you close the terminal/browser tab!
+#
+# You MUST use AlwaysData's Processes feature to keep it running.
 #
 # 1. Go to admin.alwaysdata.com
 # 2. Left sidebar → Advanced → Processes
@@ -297,6 +300,20 @@
 #   ✓ Run forever (even after you close browser/SSH)
 #   ✓ Auto-restart if it crashes
 #   ✓ Survive server reboots
+#
+# ⚠️ COMMON MISTAKE: Running via SSH directly with:
+#     python3 run.py       ← STOPS when SSH closes!
+#     nohup python3 run.py ← May work but Processes is BETTER
+#
+# The "Processes" feature is AlwaysData's process manager.
+# It keeps your bot alive 24/7 and auto-restarts on crashes.
+#
+# To RESTART the bot after code updates:
+#   Go to Processes → click the ↻ restart icon next to your process
+#
+# To check if the bot is running:
+#   Go to Processes → status shows "Running" in green
+
 
 
 # ============================================================

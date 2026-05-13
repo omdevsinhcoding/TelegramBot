@@ -17,6 +17,7 @@ from bot.services.coupon_service import (
 from bot.keyboards.admin_kb import (
     admin_panel_kb, admin_coupons_kb,
     admin_coupon_edit_kb, confirm_delete_kb,
+    admin_giveaways_kb, admin_giveaway_view_kb,
 )
 from bot.keyboards.common import back_button
 from bot.utils.helpers import format_currency, format_datetime, escape_md
@@ -41,6 +42,10 @@ class AdminStates(StatesGroup):
     add_codes_input = State()
     # Broadcast
     broadcast_message = State()
+    # Giveaway flow
+    giveaway_title = State()
+    giveaway_code = State()
+    giveaway_max_claims = State()
 
 
 # ── Admin Panel Entry ─────────────────────────────────────
@@ -261,7 +266,7 @@ async def cb_edit_field(callback: types.CallbackQuery, state: FSMContext):
     coupon_id = int(parts[1])
     field = parts[2]
 
-    field_labels = {"title": "title", "price": "discounted price", "desc": "description"}
+    field_labels = {"title": "title", "price": "discounted price", "desc": "description", "category": "category"}
     label = field_labels.get(field, field)
 
     await state.update_data(edit_coupon_id=coupon_id, edit_field=field)
@@ -293,6 +298,8 @@ async def msg_edit_field_value(message: types.Message, state: FSMContext):
         except ValueError:
             await message.answer("⚠️ Enter a valid number.")
             return
+    elif field == "category":
+        update["category"] = value
 
     await edit_coupon(coupon_id, **update)
     await db.add_admin_log(
@@ -616,3 +623,142 @@ async def msg_broadcast(message: types.Message, state: FSMContext):
         f"✅ Sent: {sent}\n❌ Failed: {failed}\n📊 Total: {total}",
         parse_mode="MarkdownV2", reply_markup=kb,
     )
+
+
+# ── Giveaway Management ──────────────────────────────────
+
+@router.callback_query(F.data == "admin_giveaways")
+@admin_only
+@error_handler
+async def cb_admin_giveaways(callback: types.CallbackQuery):
+    giveaways = await db.get_all_free_coupons()
+    text = "🎁 *Manage Giveaways*\n\nSelect a giveaway or add new:"
+    await callback.message.edit_text(
+        text, parse_mode="MarkdownV2", reply_markup=admin_giveaways_kb(giveaways)
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_giveaway_view:"))
+@admin_only
+@error_handler
+async def cb_admin_giveaway_view(callback: types.CallbackQuery):
+    gid = int(callback.data.split(":")[1])
+    g = await db.get_free_coupon(gid)
+    if not g:
+        await callback.answer("Giveaway not found.", show_alert=True)
+        return
+
+    status = "🟢 Active" if g["is_active"] else "🔴 Disabled"
+    max_c = g["max_claims"] if g["max_claims"] > 0 else "Unlimited"
+    title = escape_md(g["title"])
+    code = escape_md(g["code"])
+    text = (
+        f"🎁 *Giveaway \\#{gid}*\n\n"
+        f"📝 Title: {title}\n"
+        f"🔑 Code: `{code}`\n"
+        f"📊 Claims: {g['claimed_count']}/{max_c}\n"
+        f"Status: {status}"
+    )
+    await callback.message.edit_text(
+        text, parse_mode="MarkdownV2",
+        reply_markup=admin_giveaway_view_kb(gid, g["is_active"])
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_giveaway_add")
+@admin_only
+@error_handler
+async def cb_giveaway_add_start(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.edit_text(
+        "🎁 *Step 1/3* — Enter the *giveaway title*:",
+        parse_mode="MarkdownV2",
+    )
+    await state.set_state(AdminStates.giveaway_title)
+    await callback.answer()
+
+
+@router.message(AdminStates.giveaway_title)
+@error_handler
+async def msg_giveaway_title(message: types.Message, state: FSMContext):
+    title = message.text.strip()
+    await state.update_data(giveaway_title=title)
+    await message.answer(
+        f"✅ Title: *{escape_md(title)}*\n\n"
+        f"🔑 *Step 2/3* — Enter the *coupon code* to give away:",
+        parse_mode="MarkdownV2",
+    )
+    await state.set_state(AdminStates.giveaway_code)
+
+
+@router.message(AdminStates.giveaway_code)
+@error_handler
+async def msg_giveaway_code(message: types.Message, state: FSMContext):
+    code = message.text.strip()
+    await state.update_data(giveaway_code=code)
+    await message.answer(
+        f"✅ Code set\\.\n\n"
+        f"🎯 *Step 3/3* — Enter *max users* who can claim\n"
+        f"\\(e\\.g\\. `50` for first 50 users, or `0` for unlimited\\):",
+        parse_mode="MarkdownV2",
+    )
+    await state.set_state(AdminStates.giveaway_max_claims)
+
+
+@router.message(AdminStates.giveaway_max_claims)
+@error_handler
+async def msg_giveaway_max_claims(message: types.Message, state: FSMContext):
+    try:
+        max_claims = int(message.text.strip())
+        if max_claims < 0:
+            max_claims = 0
+    except ValueError:
+        await message.answer("⚠️ Enter a valid number (0 for unlimited).")
+        return
+
+    data = await state.get_data()
+    await state.clear()
+
+    title = data["giveaway_title"]
+    code = data["giveaway_code"]
+
+    gid = await db.create_free_coupon(title, code, max_claims, message.from_user.id)
+    await db.add_admin_log(
+        message.from_user.id, "add_giveaway", "giveaway", str(gid),
+        f"Title: {title}, Max: {max_claims}"
+    )
+
+    limit_text = f"First {max_claims} users" if max_claims > 0 else "Unlimited"
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_giveaways")]])
+    await message.answer(
+        f"✅ *Giveaway \\#{gid} created\\!*\n\n"
+        f"📝 Title: *{escape_md(title)}*\n"
+        f"🔑 Code: `{escape_md(code)}`\n"
+        f"🎯 Limit: *{escape_md(limit_text)}*",
+        parse_mode="MarkdownV2", reply_markup=kb,
+    )
+
+
+@router.callback_query(F.data.startswith("admin_giveaway_toggle:"))
+@admin_only
+@error_handler
+async def cb_giveaway_toggle(callback: types.CallbackQuery):
+    gid = int(callback.data.split(":")[1])
+    new_status = await db.toggle_free_coupon(gid)
+    status_text = "enabled 🟢" if new_status else "disabled 🔴"
+    await callback.answer(f"Giveaway {status_text}", show_alert=True)
+    await cb_admin_giveaway_view(callback)
+
+
+@router.callback_query(F.data.startswith("admin_giveaway_del:"))
+@admin_only
+@error_handler
+async def cb_giveaway_delete(callback: types.CallbackQuery):
+    gid = int(callback.data.split(":")[1])
+    await db.delete_free_coupon(gid)
+    await db.add_admin_log(
+        callback.from_user.id, "delete_giveaway", "giveaway", str(gid)
+    )
+    await callback.answer("Giveaway deleted.", show_alert=True)
+    await cb_admin_giveaways(callback)

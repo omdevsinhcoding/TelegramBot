@@ -343,7 +343,7 @@ async def msg_bharatpe_utr(message: types.Message, state: FSMContext):
             except Exception as e:
                 logger.error(f"Could not delete QR message: {e}")
 
-            kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("main_menu")]])
+            kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
             await message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
 
             logger.info(f"BharatPe VERIFIED: order={order_id}, UTR={utr}, amount={amount}")
@@ -416,7 +416,7 @@ async def cb_check_payment(callback: types.CallbackQuery):
             f"🎊 *Thank you for your purchase\\! Enjoy\\!* 🎊"
         )
 
-        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("main_menu")]])
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
         
         # Delete QR message if stored
         try:
@@ -492,7 +492,7 @@ async def cb_check_payment(callback: types.CallbackQuery):
                         f"🎊 *Thank you for your purchase\\! Enjoy\\!* 🎊"
                     )
 
-                    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("main_menu")]])
+                    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
                     
                     # Delete QR message if stored
                     try:
@@ -590,7 +590,7 @@ async def cb_cancel_order(callback: types.CallbackQuery, state: FSMContext):
                                 await callback.message.delete()
                             except Exception:
                                 pass
-                            kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("main_menu")]])
+                            kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
                             await callback.message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
                             await callback.answer("Payment was already received! ✅", show_alert=True)
                             return
@@ -628,7 +628,7 @@ async def cb_cancel_order(callback: types.CallbackQuery, state: FSMContext):
         # Send a NEW clean cancellation message
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🛍️ Browse Coupons", callback_data="browse_coupons")],
-            [back_button("main_menu")],
+            [back_button("back_home")],
         ])
         await callback.message.answer(
             cancellation_text, parse_mode="MarkdownV2", reply_markup=kb
@@ -648,7 +648,7 @@ async def cb_my_orders(callback: types.CallbackQuery):
     orders = await get_user_order_history(callback.from_user.id, 10)
 
     if not orders:
-        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("main_menu")]])
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
         await callback.message.edit_text(
             "📦 *My Orders*\n\nNo orders yet\\.",
             parse_mode="MarkdownV2", reply_markup=kb,
@@ -672,6 +672,6 @@ async def cb_my_orders(callback: types.CallbackQuery):
         )
 
     text = "\n".join(lines)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("main_menu")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
     await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
     await callback.answer()

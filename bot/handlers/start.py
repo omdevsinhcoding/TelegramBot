@@ -34,8 +34,26 @@ async def cmd_start(message: types.Message):
         f"Use the buttons below to get started 👇"
     )
 
+    # Send welcome with persistent reply keyboard
     await message.answer(
         welcome,
         parse_mode="MarkdownV2",
         reply_markup=main_menu_kb(user.id),
     )
+
+    # Immediately show the buying menu after welcome
+    from bot.services.coupon_service import list_active_coupons
+    from bot.keyboards.coupon_kb import buying_menu_kb
+    from bot.database import queries as db
+
+    coupons = await list_active_coupons()
+    free_coupons = await db.get_active_free_coupons()
+    free_count = len(free_coupons)
+
+    if coupons or free_count > 0:
+        text = "📁 *Select a Category below:*"
+        await message.answer(
+            text,
+            parse_mode="MarkdownV2",
+            reply_markup=buying_menu_kb(coupons, free_count),
+        )

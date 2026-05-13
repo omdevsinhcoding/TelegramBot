@@ -5,7 +5,7 @@ DreamX Coupon Bot — Coupon Browsing & Detail Handlers
 from aiogram import Router, types, F
 
 from bot.services.coupon_service import list_active_coupons, get_coupon_detail
-from bot.keyboards.coupon_kb import coupons_list_kb, coupon_detail_kb
+from bot.keyboards.coupon_kb import buying_menu_kb, coupon_detail_kb
 from bot.keyboards.common import back_button
 from bot.utils.helpers import format_currency, escape_md
 from bot.utils.decorators import error_handler
@@ -16,11 +16,16 @@ router = Router()
 @router.callback_query(F.data == "browse_coupons")
 @error_handler
 async def cb_browse(callback: types.CallbackQuery):
-    coupons = await list_active_coupons()
+    """Show the main buying menu with categories, products, and free coupons."""
+    from bot.database import queries as db
 
-    if not coupons:
+    coupons = await list_active_coupons()
+    free_coupons = await db.get_active_free_coupons()
+    free_count = len(free_coupons)
+
+    if not coupons and free_count == 0:
         from aiogram.types import InlineKeyboardMarkup
-        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("main_menu")]])
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
         await callback.message.edit_text(
             "📭 *No coupons available right now\\.*\n\nCheck back later\\!",
             parse_mode="MarkdownV2",
@@ -29,11 +34,11 @@ async def cb_browse(callback: types.CallbackQuery):
         await callback.answer()
         return
 
-    text = "🛒 *Available Coupons*\n\nSelect a coupon to view details:"
+    text = "📁 *Select a Category below:*"
     await callback.message.edit_text(
         text,
         parse_mode="MarkdownV2",
-        reply_markup=coupons_list_kb(coupons),
+        reply_markup=buying_menu_kb(coupons, free_count),
     )
     await callback.answer()
 
@@ -59,10 +64,12 @@ async def cb_coupon_detail(callback: types.CallbackQuery):
     desc = escape_md(coupon["description"] or "No description")
     orig_price = escape_md(f"₹{coupon['original_price']:.2f}")
     sale_price = escape_md(f"₹{coupon['discounted_price']:.2f}")
+    cat = escape_md(coupon.get("category") or "General")
 
     text = (
         f"🏷️ *{title}*\n\n"
         f"{desc}\n\n"
+        f"📂 Category: *{cat}*\n"
         f"💰 Original Price: ~{orig_price}~\n"
         f"🔥 Sale Price: *{sale_price}*\n"
         f"💎 Discount: *{discount_pct}% OFF*\n"

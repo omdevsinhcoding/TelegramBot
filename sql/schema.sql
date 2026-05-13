@@ -1,6 +1,6 @@
 -- ============================================================
 -- DreamX Coupon Bot — PostgreSQL Schema
--- Version: 1.0.0
+-- Version: 2.0.0
 -- ============================================================
 
 -- Enable UUID extension
@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_users_telegram_id ON users (telegram_id);
+CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users (telegram_id);
 
 -- ────────────────────────────────────────────────────────────
 -- 2. COUPONS (Products)
@@ -40,12 +40,16 @@ CREATE TABLE IF NOT EXISTS coupons (
     updated_at          TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_coupons_active ON coupons (is_active);
+CREATE INDEX IF NOT EXISTS idx_coupons_active ON coupons (is_active);
 
 -- ────────────────────────────────────────────────────────────
 -- 3. ORDERS
 -- ────────────────────────────────────────────────────────────
-CREATE TYPE order_status AS ENUM ('pending', 'paid', 'delivered', 'expired', 'cancelled', 'refunded');
+DO $$ BEGIN
+    CREATE TYPE order_status AS ENUM ('pending', 'paid', 'delivered', 'expired', 'cancelled', 'refunded');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
 CREATE TABLE IF NOT EXISTS orders (
     id              SERIAL PRIMARY KEY,
@@ -64,15 +68,19 @@ CREATE TABLE IF NOT EXISTS orders (
     updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_orders_user ON orders (user_id);
-CREATE INDEX idx_orders_status ON orders (status);
-CREATE INDEX idx_orders_order_id ON orders (order_id);
-CREATE INDEX idx_orders_txn_id ON orders (txn_id);
+CREATE INDEX IF NOT EXISTS idx_orders_user ON orders (user_id);
+CREATE INDEX IF NOT EXISTS idx_orders_status ON orders (status);
+CREATE INDEX IF NOT EXISTS idx_orders_order_id ON orders (order_id);
+CREATE INDEX IF NOT EXISTS idx_orders_txn_id ON orders (txn_id);
 
 -- ────────────────────────────────────────────────────────────
 -- 4. TRANSACTIONS (Payment Verification Log)
 -- ────────────────────────────────────────────────────────────
-CREATE TYPE txn_status AS ENUM ('initiated', 'pending', 'success', 'failed', 'expired');
+DO $$ BEGIN
+    CREATE TYPE txn_status AS ENUM ('initiated', 'pending', 'success', 'failed', 'expired');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
 CREATE TABLE IF NOT EXISTS transactions (
     id              SERIAL PRIMARY KEY,
@@ -91,14 +99,18 @@ CREATE TABLE IF NOT EXISTS transactions (
     updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_txn_ref ON transactions (txn_ref);
-CREATE INDEX idx_txn_order ON transactions (order_id);
-CREATE INDEX idx_txn_status ON transactions (status);
+CREATE INDEX IF NOT EXISTS idx_txn_ref ON transactions (txn_ref);
+CREATE INDEX IF NOT EXISTS idx_txn_order ON transactions (order_id);
+CREATE INDEX IF NOT EXISTS idx_txn_status ON transactions (status);
 
 -- ────────────────────────────────────────────────────────────
 -- 5. WALLET TRANSACTIONS
 -- ────────────────────────────────────────────────────────────
-CREATE TYPE wallet_txn_type AS ENUM ('topup', 'purchase', 'refund', 'admin_credit', 'admin_debit');
+DO $$ BEGIN
+    CREATE TYPE wallet_txn_type AS ENUM ('topup', 'purchase', 'refund', 'admin_credit', 'admin_debit');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
 CREATE TABLE IF NOT EXISTS wallet_transactions (
     id              SERIAL PRIMARY KEY,
@@ -112,7 +124,7 @@ CREATE TABLE IF NOT EXISTS wallet_transactions (
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_wallet_txn_user ON wallet_transactions (user_id);
+CREATE INDEX IF NOT EXISTS idx_wallet_txn_user ON wallet_transactions (user_id);
 
 -- ────────────────────────────────────────────────────────────
 -- 6. ADMIN LOGS
@@ -127,7 +139,7 @@ CREATE TABLE IF NOT EXISTS admin_logs (
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_admin_logs_admin ON admin_logs (admin_id);
+CREATE INDEX IF NOT EXISTS idx_admin_logs_admin ON admin_logs (admin_id);
 
 -- ────────────────────────────────────────────────────────────
 -- 7. BROADCAST MESSAGES
@@ -158,4 +170,29 @@ CREATE TABLE IF NOT EXISTS coupon_codes (
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_coupon_codes_coupon ON coupon_codes (coupon_id, is_sold);
+CREATE INDEX IF NOT EXISTS idx_coupon_codes_coupon ON coupon_codes (coupon_id, is_sold);
+
+-- ────────────────────────────────────────────────────────────
+-- 9. FREE COUPONS / GIVEAWAY SYSTEM
+-- ────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS free_coupons (
+    id              SERIAL PRIMARY KEY,
+    title           VARCHAR(128) NOT NULL,
+    code            TEXT NOT NULL,
+    max_claims      INTEGER NOT NULL DEFAULT 0,    -- 0 = unlimited
+    claimed_count   INTEGER NOT NULL DEFAULT 0,
+    is_active       BOOLEAN DEFAULT TRUE,
+    created_by      BIGINT NOT NULL,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS free_coupon_claims (
+    id              SERIAL PRIMARY KEY,
+    free_coupon_id  INTEGER NOT NULL REFERENCES free_coupons(id) ON DELETE CASCADE,
+    user_id         BIGINT NOT NULL REFERENCES users(telegram_id),
+    claimed_at      TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(free_coupon_id, user_id)               -- one claim per user per coupon
+);
+
+CREATE INDEX IF NOT EXISTS idx_free_coupon_claims_user ON free_coupon_claims (user_id);
+CREATE INDEX IF NOT EXISTS idx_free_coupon_claims_coupon ON free_coupon_claims (free_coupon_id);

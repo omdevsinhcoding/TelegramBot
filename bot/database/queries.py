@@ -317,3 +317,92 @@ async def get_sales_stats():
             COUNT(*) as total_orders
         FROM orders
     """)
+
+
+# ── FREE COUPON / GIVEAWAY QUERIES ───────────────────────
+
+async def create_free_coupon(title: str, code: str, max_claims: int, created_by: int) -> int:
+    pool = await get_pool()
+    row = await pool.fetchrow("""
+        INSERT INTO free_coupons (title, code, max_claims, created_by)
+        VALUES ($1, $2, $3, $4) RETURNING id
+    """, title, code, max_claims, created_by)
+    return row["id"]
+
+
+async def get_active_free_coupons() -> list:
+    pool = await get_pool()
+    return await pool.fetch(
+        "SELECT * FROM free_coupons WHERE is_active = TRUE ORDER BY created_at DESC"
+    )
+
+
+async def get_all_free_coupons() -> list:
+    pool = await get_pool()
+    return await pool.fetch("SELECT * FROM free_coupons ORDER BY created_at DESC")
+
+
+async def get_free_coupon(fc_id: int):
+    pool = await get_pool()
+    return await pool.fetchrow("SELECT * FROM free_coupons WHERE id = $1", fc_id)
+
+
+async def claim_free_coupon(fc_id: int, user_id: int) -> str | None:
+    """Try to claim a free coupon. Returns code on success, None on failure."""
+    pool = await get_pool()
+
+    # Check if user already claimed
+    existing = await pool.fetchrow(
+        "SELECT id FROM free_coupon_claims WHERE free_coupon_id = $1 AND user_id = $2",
+        fc_id, user_id
+    )
+    if existing:
+        return None  # Already claimed
+
+    # Get the coupon and check limits
+    fc = await pool.fetchrow("SELECT * FROM free_coupons WHERE id = $1 AND is_active = TRUE", fc_id)
+    if not fc:
+        return None
+
+    # Check max_claims limit (0 = unlimited)
+    if fc["max_claims"] > 0 and fc["claimed_count"] >= fc["max_claims"]:
+        return None  # Limit reached
+
+    # Claim it atomically
+    try:
+        await pool.execute(
+            "INSERT INTO free_coupon_claims (free_coupon_id, user_id) VALUES ($1, $2)",
+            fc_id, user_id
+        )
+        await pool.execute(
+            "UPDATE free_coupons SET claimed_count = claimed_count + 1 WHERE id = $1",
+            fc_id
+        )
+        return fc["code"]
+    except Exception:
+        return None  # Unique constraint violation = already claimed
+
+
+async def has_user_claimed(fc_id: int, user_id: int) -> bool:
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "SELECT id FROM free_coupon_claims WHERE free_coupon_id = $1 AND user_id = $2",
+        fc_id, user_id
+    )
+    return row is not None
+
+
+async def delete_free_coupon(fc_id: int):
+    pool = await get_pool()
+    await pool.execute("DELETE FROM free_coupons WHERE id = $1", fc_id)
+
+
+async def toggle_free_coupon(fc_id: int) -> bool:
+    pool = await get_pool()
+    fc = await pool.fetchrow("SELECT is_active FROM free_coupons WHERE id = $1", fc_id)
+    if not fc:
+        return False
+    new_status = not fc["is_active"]
+    await pool.execute("UPDATE free_coupons SET is_active = $2 WHERE id = $1", fc_id, new_status)
+    return new_status
+

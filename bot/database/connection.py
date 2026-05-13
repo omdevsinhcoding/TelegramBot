@@ -108,7 +108,7 @@ async def init_db() -> asyncpg.Pool:
             except Exception as e:
                 logger.warning(f"Schema note: {e}")
 
-    # Migrations — add columns that may not exist in older schemas
+    # Migrations — add columns/tables that may not exist in older schemas
     async with _pool.acquire() as conn:
         try:
             await conn.execute("""
@@ -119,6 +119,32 @@ async def init_db() -> asyncpg.Pool:
             """)
         except Exception:
             pass  # Column already exists or other non-critical issue
+
+        # Free coupons / giveaway tables
+        try:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS free_coupons (
+                    id              SERIAL PRIMARY KEY,
+                    title           VARCHAR(128) NOT NULL,
+                    code            TEXT NOT NULL,
+                    max_claims      INTEGER NOT NULL DEFAULT 0,
+                    claimed_count   INTEGER NOT NULL DEFAULT 0,
+                    is_active       BOOLEAN DEFAULT TRUE,
+                    created_by      BIGINT NOT NULL,
+                    created_at      TIMESTAMPTZ DEFAULT NOW()
+                );
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS free_coupon_claims (
+                    id              SERIAL PRIMARY KEY,
+                    free_coupon_id  INTEGER NOT NULL REFERENCES free_coupons(id) ON DELETE CASCADE,
+                    user_id         BIGINT NOT NULL REFERENCES users(telegram_id),
+                    claimed_at      TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE(free_coupon_id, user_id)
+                );
+            """)
+        except Exception:
+            pass
 
     logger.info("Database pool ready.")
     _last_health_check = time.monotonic()

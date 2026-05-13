@@ -10,7 +10,7 @@ def wallet_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Top-Up Wallet", callback_data="wallet_topup")],
         [InlineKeyboardButton(text="📜 Transaction History", callback_data="wallet_history")],
-        [refresh_button("wallet_menu"), back_button("main_menu")],
+        [refresh_button("wallet_menu"), back_button("back_home")],
     ])
 
 

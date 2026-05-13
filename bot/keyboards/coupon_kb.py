@@ -1,23 +1,231 @@
 """
 DreamX Coupon Bot — Coupon Keyboards
+Supports categorized view, pagination, free coupons, and stock status.
 """
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from bot.keyboards.common import back_button, refresh_button
 
+ITEMS_PER_PAGE = 8  # Max items before showing pagination
 
-def coupons_list_kb(coupons: list) -> InlineKeyboardMarkup:
+
+def buying_menu_kb(coupons: list, free_coupon_count: int = 0, page: int = 0) -> InlineKeyboardMarkup:
+    """Build the buying menu shown on /start or Buy Vouchers.
+
+    Groups coupons by category, shows individual products with prices/stock,
+    adds Free Coupons button at bottom, and paginates if needed.
+    """
     buttons = []
+
+    # Group by category
+    categories = {}
+    uncategorized = []
     for c in coupons:
-        stock_label = f"({c['stock']} left)" if c["stock"] > 0 else "(Out of Stock)"
-        emoji = "🟢" if c["stock"] > 0 else "🔴"
+        cat = c.get("category") or ""
+        if cat.strip():
+            categories.setdefault(cat, []).append(c)
+        else:
+            uncategorized.append(c)
+
+    # Build flat item list: categories first, then uncategorized products
+    all_items = []
+
+    # Add category headers
+    for cat_name, cat_coupons in sorted(categories.items()):
+        stock_total = sum(c["stock"] for c in cat_coupons)
+        all_items.append({
+            "type": "category",
+            "name": cat_name,
+            "count": len(cat_coupons),
+            "stock": stock_total,
+        })
+
+    # Add individual products (numbered)
+    idx = 1
+    for c in uncategorized:
+        all_items.append({
+            "type": "product",
+            "idx": idx,
+            "coupon": c,
+        })
+        idx += 1
+
+    # Also add categorized products individually
+    for cat_name, cat_coupons in sorted(categories.items()):
+        for c in cat_coupons:
+            all_items.append({
+                "type": "product",
+                "idx": idx,
+                "coupon": c,
+            })
+            idx += 1
+
+    # Pagination
+    total_items = len(all_items)
+    start = page * ITEMS_PER_PAGE
+    end = start + ITEMS_PER_PAGE
+    page_items = all_items[start:end]
+
+    # Header
+    buttons.append([
+        InlineKeyboardButton(
+            text="📁 Select a Category below:",
+            callback_data="noop"
+        )
+    ])
+
+    for item in page_items:
+        if item["type"] == "category":
+            buttons.append([
+                InlineKeyboardButton(
+                    text=f"📂 {item['name']} ({item['count']}) | 📦 {item['stock']}",
+                    callback_data=f"cat_view:{item['name']}:0"
+                )
+            ])
+        elif item["type"] == "product":
+            c = item["coupon"]
+            idx_num = item["idx"]
+            stock = c["stock"]
+
+            # Build label matching the reference image style
+            orig = c.get("original_price", 0)
+            disc = c.get("discounted_price", 0)
+
+            if stock <= 0:
+                stock_label = "❌ Out"
+                label = f"{idx_num}. {c['title']} | ₹{disc} | {stock_label}"
+            else:
+                if orig > disc and orig > 0:
+                    label = f"{idx_num}. {c['title']} | ₹{disc} | 📦 {stock}"
+                else:
+                    label = f"{idx_num}. {c['title']} | ₹{disc} | 📦 {stock}"
+
+            buttons.append([
+                InlineKeyboardButton(
+                    text=label,
+                    callback_data=f"coupon_detail:{c['id']}" if stock > 0 else "noop"
+                )
+            ])
+
+    # Pagination buttons
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton(text="◀️ Previous", callback_data=f"buy_page:{page - 1}"))
+    if end < total_items:
+        nav_row.append(InlineKeyboardButton(text="Next ▶️", callback_data=f"buy_page:{page + 1}"))
+    if nav_row:
+        buttons.append(nav_row)
+
+    # Free Coupons button
+    if free_coupon_count > 0:
         buttons.append([
             InlineKeyboardButton(
-                text=f"{emoji} {c['title']} — ₹{c['discounted_price']} {stock_label}",
-                callback_data=f"coupon_detail:{c['id']}"
+                text=f"🎁 Free Coupons ({free_coupon_count})",
+                callback_data="free_coupons_list"
             )
         ])
-    buttons.append([refresh_button("browse_coupons"), back_button("main_menu")])
+
+    # Back to Home
+    buttons.append([
+        InlineKeyboardButton(text="🏠 Back to Home", callback_data="back_home")
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def category_view_kb(cat_name: str, coupons: list, page: int = 0) -> InlineKeyboardMarkup:
+    """Show coupons within a specific category."""
+    buttons = []
+
+    start = page * ITEMS_PER_PAGE
+    end = start + ITEMS_PER_PAGE
+    page_items = coupons[start:end]
+
+    for idx, c in enumerate(page_items, start=start + 1):
+        stock = c["stock"]
+        disc = c.get("discounted_price", 0)
+
+        if stock <= 0:
+            label = f"{idx}. {c['title']} | ₹{disc} | ❌ Out"
+            cb = "noop"
+        else:
+            label = f"{idx}. {c['title']} | ₹{disc} | 📦 {stock}"
+            cb = f"coupon_detail:{c['id']}"
+
+        buttons.append([InlineKeyboardButton(text=label, callback_data=cb)])
+
+    # Pagination
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton(text="◀️ Previous", callback_data=f"cat_view:{cat_name}:{page - 1}"))
+    if end < len(coupons):
+        nav_row.append(InlineKeyboardButton(text="Next ▶️", callback_data=f"cat_view:{cat_name}:{page + 1}"))
+    if nav_row:
+        buttons.append(nav_row)
+
+    buttons.append([
+        InlineKeyboardButton(text="◀️ Back to Menu", callback_data="browse_coupons")
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def free_coupons_list_kb(free_coupons: list) -> InlineKeyboardMarkup:
+    """Show available free coupons / giveaways."""
+    buttons = []
+
+    for fc in free_coupons:
+        remaining = fc["max_claims"] - fc["claimed_count"] if fc["max_claims"] > 0 else "∞"
+
+        if fc["max_claims"] > 0:
+            label = f"🎁 {fc['title']} | 🎯 {remaining} left"
+            # If it's a limited giveaway
+            if fc["claimed_count"] >= fc["max_claims"]:
+                label = f"❌ {fc['title']} | Ended"
+        else:
+            label = f"🎁 {fc['title']} | Free"
+
+        buttons.append([
+            InlineKeyboardButton(
+                text=label,
+                callback_data=f"claim_free:{fc['id']}"
+            )
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(text="◀️ Back to Menu", callback_data="browse_coupons")
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def coupons_list_kb(coupons: list, page: int = 0) -> InlineKeyboardMarkup:
+    """Simple coupon list (used from callback browse_coupons)."""
+    buttons = []
+
+    start = page * ITEMS_PER_PAGE
+    end = start + ITEMS_PER_PAGE
+    page_items = coupons[start:end]
+
+    for c in page_items:
+        stock_label = f"📦 {c['stock']}" if c["stock"] > 0 else "❌ Out"
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"{c['title']} | ₹{c['discounted_price']} | {stock_label}",
+                callback_data=f"coupon_detail:{c['id']}" if c["stock"] > 0 else "noop"
+            )
+        ])
+
+    # Pagination
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton(text="◀️ Previous", callback_data=f"coupon_page:{page - 1}"))
+    if end < len(coupons):
+        nav_row.append(InlineKeyboardButton(text="Next ▶️", callback_data=f"coupon_page:{page + 1}"))
+    if nav_row:
+        buttons.append(nav_row)
+
+    buttons.append([refresh_button("browse_coupons"), back_button("back_home")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -48,4 +256,15 @@ def gateway_selection_kb(coupon_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="💳 Pay via Paytm", callback_data=f"pay_gateway:paytm:{coupon_id}")],
         [InlineKeyboardButton(text="🏦 Pay via BharatPe", callback_data=f"pay_gateway:bharatpe:{coupon_id}")],
         [back_button("browse_coupons")],
+    ])
+
+
+def stock_status_kb() -> InlineKeyboardMarkup:
+    """Keyboard for stock status view."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Refresh", callback_data="refresh_stock")],
+        [
+            InlineKeyboardButton(text="🛒 Buy Menu", callback_data="browse_coupons"),
+            InlineKeyboardButton(text="🏠 Back to Home", callback_data="back_home"),
+        ],
     ])

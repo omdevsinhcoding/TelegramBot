@@ -19,18 +19,20 @@ from bot.utils.logger import logger
 from bot.handlers.start import router as start_router
 from bot.handlers.menu import router as menu_router
 from bot.handlers.coupons import router as coupons_router
-# wallet removed — direct payment only
 from bot.handlers.purchase import router as purchase_router
 from bot.handlers.admin import router as admin_router
 
 
 async def on_startup(bot: Bot):
     """Runs on bot startup."""
+    # Drop any existing webhook to ensure polling works
+    await bot.delete_webhook(drop_pending_updates=True)
+
     await init_db()
-    
+
     # Start payment polling as background task
     asyncio.create_task(poll_payment_status(bot))
-    
+
     me = await bot.get_me()
     logger.info(f"Bot started: @{me.username} (ID: {me.id})")
 
@@ -65,14 +67,18 @@ async def main():
     dp.include_router(start_router)
     dp.include_router(menu_router)
     dp.include_router(coupons_router)
-    # wallet removed — direct payment only
     dp.include_router(purchase_router)
     dp.include_router(admin_router)
 
     logger.info("Starting DreamX Coupon Bot...")
 
-    # Start polling
-    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    # Start polling — handle_signals=False is critical for AlwaysData hosting
+    # where the process manager sends SIGTERM to stop the bot
+    await dp.start_polling(
+        bot,
+        allowed_updates=dp.resolve_used_update_types(),
+        handle_signals=False,
+    )
 
 
 if __name__ == "__main__":

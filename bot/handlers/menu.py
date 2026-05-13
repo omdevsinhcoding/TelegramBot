@@ -27,23 +27,27 @@ class RecoverStates(StatesGroup):
 @router.message(F.text == "🛍️ Buy Vouchers")
 @error_handler
 async def text_buy_vouchers(message: types.Message):
-    """Route 'Buy Vouchers' button press to coupon browsing."""
+    """Route 'Buy Vouchers' button press — show categorized buying menu."""
     from bot.services.coupon_service import list_active_coupons
-    from bot.keyboards.coupon_kb import coupons_list_kb
+    from bot.keyboards.coupon_kb import buying_menu_kb
+    from bot.database import queries as db
 
     coupons = await list_active_coupons()
-    if not coupons:
+    free_coupons = await db.get_active_free_coupons()
+    free_count = len(free_coupons)
+
+    if not coupons and free_count == 0:
         await message.answer(
             "📭 *No coupons available right now\\.*\n\nCheck back later\\!",
             parse_mode="MarkdownV2",
         )
         return
 
-    text = "🛒 *Available Coupons*\n\nSelect a coupon to view details:"
+    text = "📁 *Select a Category below:*"
     await message.answer(
         text,
         parse_mode="MarkdownV2",
-        reply_markup=coupons_list_kb(coupons),
+        reply_markup=buying_menu_kb(coupons, free_count),
     )
 
 
@@ -83,26 +87,56 @@ async def text_my_orders(message: types.Message):
 @router.message(F.text == "📊 View Stock")
 @error_handler
 async def text_view_stock(message: types.Message):
-    """Route 'View Stock' button press — show stock summary."""
+    """Route 'View Stock' button press — show attractive stock status (Image 2 style)."""
     from bot.services.coupon_service import list_active_coupons
+    from bot.keyboards.coupon_kb import stock_status_kb
 
     coupons = await list_active_coupons()
     if not coupons:
         await message.answer(
-            "📊 *Stock Summary*\n\nNo products available\\.",
+            "📊 *STOCK STATUS*\n\n━━━━━━━━━━━━━━━━━━━━\n\nNo products available\\.",
             parse_mode="MarkdownV2",
         )
         return
 
-    lines = ["📊 *Stock Summary*\n"]
-    for c in coupons:
+    text = _build_stock_status_text(coupons)
+    await message.answer(text, parse_mode="MarkdownV2", reply_markup=stock_status_kb())
+
+
+def _build_stock_status_text(coupons: list) -> str:
+    """Build attractive stock status text matching Image 2 reference."""
+    lines = ["📊 *STOCK STATUS*\n", "━━━━━━━━━━━━━━━━━━━━\n"]
+
+    total_available = 0
+    for idx, c in enumerate(coupons, 1):
         title = escape_md(c["title"])
         stock = c["stock"]
-        emoji = "🟢" if stock > 0 else "🔴"
-        price = escape_md(f"₹{c['discounted_price']}")
-        lines.append(f"{emoji} *{title}* — {price} \\({stock} left\\)")
+        orig = c.get("original_price", 0)
+        disc = c.get("discounted_price", 0)
 
-    await message.answer("\n".join(lines), parse_mode="MarkdownV2")
+        total_available += stock
+
+        if stock > 0:
+            status_icon = "✅"
+        else:
+            status_icon = "❌"
+
+        # Price display
+        price_line = f"💰 {escape_md(f'₹{disc}')}"
+        if orig > disc and orig > 0:
+            price_line = f"💰 ~{escape_md(f'₹{orig}')}~ {escape_md(f'₹{disc}')}"
+
+        stock_text = escape_md(f"{stock} available")
+
+        lines.append(
+            f"{idx}\\. {status_icon} *{title}*\n"
+            f"   {price_line} \\| 📦 {stock_text}\n"
+        )
+
+    lines.append("━━━━━━━━━━━━━━━━━━━━\n")
+    lines.append(f"📦 *Total Available: {total_available} coupons*")
+
+    return "\n".join(lines)
 
 
 @router.message(F.text == "🎟️ Recover Coupon")
@@ -254,27 +288,203 @@ async def text_admin_panel(message: types.Message):
 
 # ── Callback-based Navigation ────────────────────────────
 
-@router.callback_query(F.data == "main_menu")
+@router.callback_query(F.data == "back_home")
 @error_handler
-async def cb_main_menu(callback: types.CallbackQuery):
-    user = callback.from_user
-    first = escape_md(user.first_name or "User")
-    text = (
-        f"🌟 *DreamX Store*\n\n"
-        f"Welcome back, *{first}*\\! 👋\n\n"
-        f"Use the menu buttons below 👇"
-    )
-    # Delete old inline message and send a fresh text with reply keyboard
+async def cb_back_home(callback: types.CallbackQuery):
+    """Back to home — just delete the inline message, DON'T resend welcome.
+    The persistent reply keyboard is already there at the bottom."""
     try:
         await callback.message.delete()
     except Exception:
         pass
-    await callback.message.answer(
+    await callback.answer()
+
+
+@router.callback_query(F.data == "main_menu")
+@error_handler
+async def cb_main_menu(callback: types.CallbackQuery):
+    """Legacy main_menu callback — redirect to back_home behavior."""
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("buy_page:"))
+@error_handler
+async def cb_buy_page(callback: types.CallbackQuery):
+    """Handle pagination in buying menu."""
+    page = int(callback.data.split(":")[1])
+    from bot.services.coupon_service import list_active_coupons
+    from bot.keyboards.coupon_kb import buying_menu_kb
+    from bot.database import queries as db
+
+    coupons = await list_active_coupons()
+    free_coupons = await db.get_active_free_coupons()
+    free_count = len(free_coupons)
+
+    text = "📁 *Select a Category below:*"
+    await callback.message.edit_text(
         text,
         parse_mode="MarkdownV2",
-        reply_markup=main_menu_kb(user.id),
+        reply_markup=buying_menu_kb(coupons, free_count, page),
     )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("cat_view:"))
+@error_handler
+async def cb_category_view(callback: types.CallbackQuery):
+    """Show coupons within a specific category."""
+    parts = callback.data.split(":")
+    cat_name = parts[1]
+    page = int(parts[2]) if len(parts) > 2 else 0
+
+    from bot.services.coupon_service import list_active_coupons
+    from bot.keyboards.coupon_kb import category_view_kb
+
+    all_coupons = await list_active_coupons()
+    cat_coupons = [c for c in all_coupons if (c.get("category") or "") == cat_name]
+
+    if not cat_coupons:
+        await callback.answer("No coupons in this category.", show_alert=True)
+        return
+
+    text = f"📂 *{escape_md(cat_name)}* — {len(cat_coupons)} items"
+    await callback.message.edit_text(
+        text,
+        parse_mode="MarkdownV2",
+        reply_markup=category_view_kb(cat_name, cat_coupons, page),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("coupon_page:"))
+@error_handler
+async def cb_coupon_page(callback: types.CallbackQuery):
+    """Handle pagination in simple coupon list."""
+    page = int(callback.data.split(":")[1])
+    from bot.services.coupon_service import list_active_coupons
+    from bot.keyboards.coupon_kb import coupons_list_kb
+
+    coupons = await list_active_coupons()
+    text = "🛒 *Available Coupons*\n\nSelect a coupon to view details:"
+    await callback.message.edit_text(
+        text,
+        parse_mode="MarkdownV2",
+        reply_markup=coupons_list_kb(coupons, page),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "refresh_stock")
+@error_handler
+async def cb_refresh_stock(callback: types.CallbackQuery):
+    """Refresh stock status view."""
+    from bot.services.coupon_service import list_active_coupons
+    from bot.keyboards.coupon_kb import stock_status_kb
+
+    coupons = await list_active_coupons()
+    if not coupons:
+        text = "📊 *STOCK STATUS*\n\n━━━━━━━━━━━━━━━━━━━━\n\nNo products available\\."
+    else:
+        text = _build_stock_status_text(coupons)
+
+    try:
+        await callback.message.edit_text(
+            text, parse_mode="MarkdownV2", reply_markup=stock_status_kb()
+        )
+    except Exception:
+        pass  # Message not modified (same content)
+    await callback.answer("Stock refreshed ✅")
+
+
+# ── Free Coupon / Giveaway Handlers ──────────────────────
+
+@router.callback_query(F.data == "free_coupons_list")
+@error_handler
+async def cb_free_coupons_list(callback: types.CallbackQuery):
+    """Show list of available free coupons / giveaways."""
+    from bot.database import queries as db
+    from bot.keyboards.coupon_kb import free_coupons_list_kb
+
+    free_coupons = await db.get_active_free_coupons()
+    if not free_coupons:
+        await callback.answer("No free coupons available right now.", show_alert=True)
+        return
+
+    text = "🎁 *Free Coupons \\& Giveaways*\n\nClaim your free coupons below:"
+    await callback.message.edit_text(
+        text,
+        parse_mode="MarkdownV2",
+        reply_markup=free_coupons_list_kb(free_coupons),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("claim_free:"))
+@error_handler
+async def cb_claim_free_coupon(callback: types.CallbackQuery):
+    """User tries to claim a free coupon."""
+    from bot.database import queries as db
+
+    fc_id = int(callback.data.split(":")[1])
+    user_id = callback.from_user.id
+
+    # Get giveaway info
+    fc = await db.get_free_coupon(fc_id)
+    if not fc:
+        await callback.answer("This giveaway no longer exists.", show_alert=True)
+        return
+
+    if not fc["is_active"]:
+        await callback.answer("This giveaway has been disabled.", show_alert=True)
+        return
+
+    # Check if already claimed
+    already_claimed = await db.has_user_claimed(fc_id, user_id)
+    if already_claimed:
+        await callback.answer("You've already claimed this coupon! 🎟️", show_alert=True)
+        return
+
+    # Check if limit reached
+    if fc["max_claims"] > 0 and fc["claimed_count"] >= fc["max_claims"]:
+        await callback.answer(
+            "🚫 Giveaway ended! All coupons have been claimed.",
+            show_alert=True
+        )
+        return
+
+    # Try to claim
+    code = await db.claim_free_coupon(fc_id, user_id)
+    if code:
+        title = escape_md(fc["title"])
+        code_esc = escape_md(code)
+
+        remaining = ""
+        if fc["max_claims"] > 0:
+            left = fc["max_claims"] - fc["claimed_count"] - 1
+            remaining = f"\n📊 {left} coupons remaining"
+
+        text = (
+            f"🎉 *Congratulations\\!*\n\n"
+            f"You claimed: *{title}*\n\n"
+            f"🔑 Your coupon code:\n`{code_esc}`\n"
+            f"{remaining}\n\n"
+            f"_Save this code\\!_"
+        )
+
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [back_button("free_coupons_list")],
+        ])
+        await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+        await callback.answer("Coupon claimed! 🎉")
+    else:
+        await callback.answer(
+            "Could not claim coupon. It may have ended or you already claimed it.",
+            show_alert=True
+        )
 
 
 @router.callback_query(F.data == "help_menu")
@@ -289,7 +499,7 @@ async def cb_help(callback: types.CallbackQuery):
         "💬 Need help\\? Contact support\\.\n"
         "🔒 All payments are verified & secure\\."
     )
-    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("main_menu")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
     await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
     await callback.answer()
 
