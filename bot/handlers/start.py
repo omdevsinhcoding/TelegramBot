@@ -26,7 +26,7 @@ async def cmd_start(message: types.Message):
     args = message.text.split(maxsplit=1)
     if len(args) > 1:
         ref_code = args[1].strip()
-        if ref_code.startswith("ERRORO"):
+        if ref_code.startswith("ERROROO"):
             from bot.database import queries as db
             referrer = await db.get_user_by_referral_code(ref_code)
             if referrer and referrer["telegram_id"] != user.id:

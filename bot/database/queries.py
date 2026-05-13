@@ -438,12 +438,12 @@ async def get_or_create_referral_code(user_id: int) -> str:
     import random, string
     if row and row["referral_code"]:
         code = row["referral_code"]
-        # Auto-migrate old format codes to new ERRORO- format
-        if not code.startswith("ERRORO-"):
-            code = "ERRORO-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
+        # Auto-migrate old format codes to new ERROROO- format
+        if not code.startswith("ERROROO-"):
+            code = "ERROROO-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
             await pool.execute("UPDATE users SET referral_code = $2 WHERE telegram_id = $1", user_id, code)
         return code
-    code = "ERRORO-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
+    code = "ERROROO-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
     await pool.execute("UPDATE users SET referral_code = $2 WHERE telegram_id = $1", user_id, code)
     return code
 
