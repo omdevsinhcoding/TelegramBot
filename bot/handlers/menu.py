@@ -24,10 +24,12 @@ class RecoverStates(StatesGroup):
 
 # ── /id Command — works in private, group, and channel ────
 
-@router.message(F.text == "/id")
+from aiogram.filters import Command
+
+@router.message(Command("id"))
 @error_handler
 async def cmd_id(message: types.Message):
-    """Show the chat/channel/group ID. Works everywhere."""
+    """Show the chat/channel/group ID. Works in private, group, supergroup."""
     chat = message.chat
 
     if chat.type in ("group", "supergroup"):
@@ -36,13 +38,6 @@ async def cmd_id(message: types.Message):
             f"👥 *Group Info*\n\n"
             f"📝 Name: *{title}*\n"
             f"🆔 Group ID: `{chat.id}`"
-        )
-    elif chat.type == "channel":
-        title = escape_md(chat.title or "Unknown Channel")
-        text = (
-            f"📢 *Channel Info*\n\n"
-            f"📝 Name: *{title}*\n"
-            f"🆔 Channel ID: `{chat.id}`"
         )
     else:
         # Private chat
@@ -56,6 +51,20 @@ async def cmd_id(message: types.Message):
             f"🆔 User ID: `{user.id}`"
         )
 
+    await message.answer(text, parse_mode="MarkdownV2")
+
+
+@router.channel_post(Command("id"))
+@error_handler
+async def cmd_id_channel(message: types.Message):
+    """Show channel ID when /id is posted in a channel."""
+    chat = message.chat
+    title = escape_md(chat.title or "Unknown Channel")
+    text = (
+        f"📢 *Channel Info*\n\n"
+        f"📝 Name: *{title}*\n"
+        f"🆔 Channel ID: `{chat.id}`"
+    )
     await message.answer(text, parse_mode="MarkdownV2")
 
 
