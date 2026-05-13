@@ -53,6 +53,8 @@ class AdminStates(StatesGroup):
     force_channel_input = State()
     # Referral
     ref_commission_input = State()
+    ref_needed_input = State()
+    ref_code_input = State()
 
 
 # ── Admin Panel Entry ─────────────────────────────────────
@@ -1071,7 +1073,7 @@ async def cb_admin_referral_settings(callback: types.CallbackQuery):
         )
 
     await callback.message.edit_text(
-        text, parse_mode="MarkdownV2", reply_markup=admin_referral_settings_kb(settings["is_active"])
+        text, parse_mode="MarkdownV2", reply_markup=admin_referral_settings_kb(settings)
     )
     await callback.answer()
 
@@ -1124,6 +1126,53 @@ async def msg_ref_commission_input(message: types.Message, state: FSMContext):
         await message.answer(f"✅ Commission updated to {val}%", reply_markup=kb)
     except ValueError:
         await message.answer("⚠️ Please enter a valid percentage between 0 and 100.")
+
+
+@router.callback_query(F.data == "admin_ref_edit_needed")
+@admin_only
+@error_handler
+async def cb_ref_edit_needed(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.edit_text(
+        "✏️ *Edit Referrals Needed*\n\nEnter the number of referrals needed to earn the reward (e.g. 5):",
+        parse_mode="MarkdownV2"
+    )
+    await state.set_state(AdminStates.ref_needed_input)
+    await callback.answer()
+
+@router.message(AdminStates.ref_needed_input)
+@error_handler
+async def msg_ref_needed_input(message: types.Message, state: FSMContext):
+    try:
+        val = int(message.text.strip())
+        if val < 1:
+            raise ValueError
+        await db.update_referral_settings(referrals_needed=val)
+        await state.clear()
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_referral_settings")]])
+        await message.answer(f"✅ Referrals needed updated to {val}", reply_markup=kb)
+    except ValueError:
+        await message.answer("⚠️ Please enter a valid positive integer.")
+
+
+@router.callback_query(F.data == "admin_ref_edit_code")
+@admin_only
+@error_handler
+async def cb_ref_edit_code(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.edit_text(
+        "✏️ *Edit Reward Code*\n\nEnter the coupon code to give as a reward (e.g. FREE100):",
+        parse_mode="MarkdownV2"
+    )
+    await state.set_state(AdminStates.ref_code_input)
+    await callback.answer()
+
+@router.message(AdminStates.ref_code_input)
+@error_handler
+async def msg_ref_code_input(message: types.Message, state: FSMContext):
+    val = message.text.strip()
+    await db.update_referral_settings(reward_code=val)
+    await state.clear()
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_referral_settings")]])
+    await message.answer(f"✅ Reward code updated to: {escape_md(val)}", parse_mode="MarkdownV2", reply_markup=kb)
 
 
 # ── Bot Settings ─────────────────────────────────────────

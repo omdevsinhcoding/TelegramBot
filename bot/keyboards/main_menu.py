@@ -41,7 +41,6 @@ def main_menu_kb(user_id: int) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=buttons,
         resize_keyboard=True,
-        is_persistent=True,
         input_field_placeholder="Choose an option...",
     )
 

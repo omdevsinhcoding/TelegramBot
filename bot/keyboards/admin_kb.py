@@ -118,11 +118,24 @@ def admin_bot_settings_kb(force_channel: str | None) -> InlineKeyboardMarkup:
     ])
 
 
-def admin_referral_settings_kb(is_active: bool) -> InlineKeyboardMarkup:
+def admin_referral_settings_kb(settings: dict) -> InlineKeyboardMarkup:
+    is_active = settings["is_active"]
+    mode = settings["mode"]
     toggle_text = "🔴 Disable Referrals" if is_active else "🟢 Enable Referrals"
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Edit Commission %", callback_data="admin_ref_edit_commission")],
-        [InlineKeyboardButton(text=toggle_text, callback_data="admin_ref_toggle")],
-        [back_button("admin_panel")],
-    ])
+    
+    buttons = []
+    if mode == "balance":
+        buttons.append([InlineKeyboardButton(text="✏️ Edit Commission %", callback_data="admin_ref_edit_commission")])
+    else:
+        buttons.append([
+            InlineKeyboardButton(text="✏️ Edit Needed Count", callback_data="admin_ref_edit_needed"),
+            InlineKeyboardButton(text="✏️ Edit Reward Code", callback_data="admin_ref_edit_code")
+        ])
+        
+    buttons.append([InlineKeyboardButton(text="🔄 Switch Mode", callback_data="admin_ref_toggle_mode")])
+    buttons.append([InlineKeyboardButton(text=toggle_text, callback_data="admin_ref_toggle_active")])
+    buttons.append([back_button("admin_panel")])
+    
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 
