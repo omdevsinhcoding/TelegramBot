@@ -1,4 +1,4 @@
-﻿"""
+"""
 DreamX Coupon Bot — Admin Panel Handlers
 Full admin CRUD for coupons, users, orders, analytics, broadcasts.
 """
@@ -49,7 +49,8 @@ class AdminStates(StatesGroup):
     # Giveaway flow
     giveaway_title = State()
     giveaway_code = State()
-    giveaway_max_claims = State()
+    giveaway_max_claims = State()       # file upload state
+    giveaway_manual_codes = State()     # manual text input
     giveaway_add_codes = State()
     # Bot Settings
     force_channel_input = State()
@@ -1014,10 +1015,13 @@ async def cb_admin_giveaway_view(callback: types.CallbackQuery):
 @admin_only
 @error_handler
 async def cb_giveaway_add_start(callback: types.CallbackQuery, state: FSMContext):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [back_button("admin_giveaways")],
+    ])
     await callback.message.edit_text(
-        "🎁 *Step 1/3* — Enter the *giveaway title*:\n\n"
-        "_Send /cancel to abort\\._",
+        "🎁 *Step 1/3* — Enter the *giveaway title*:",
         parse_mode="MarkdownV2",
+        reply_markup=kb,
     )
     await state.set_state(AdminStates.giveaway_title)
     await callback.answer()
@@ -1026,12 +1030,22 @@ async def cb_giveaway_add_start(callback: types.CallbackQuery, state: FSMContext
 @router.message(AdminStates.giveaway_title)
 @error_handler
 async def msg_giveaway_title(message: types.Message, state: FSMContext):
-    title = message.text.strip()
+    if message.text and message.text.strip() == "/cancel":
+        await state.clear()
+        await message.answer("❌ Cancelled.")
+        return
+
+    title = message.text.strip() if message.text else ""
+    if not title:
+        await message.answer("⚠️ Please enter a valid title.")
+        return
+
     await state.update_data(giveaway_title=title)
     await message.answer(
         f"✅ Title: *{escape_md(title)}*\n\n"
         f"🔢 *Step 2/3* — How many codes *per user*?\n"
-        f"\\(e\\.g\\. `1` \\= 1 code per user, `3` \\= 3 codes per user\\)",
+        f"\\(e\\.g\\. `1` \\= 1 code per user, `3` \\= 3 codes per user\\)\n\n"
+        f"_Send /cancel to abort\\._",
         parse_mode="MarkdownV2",
     )
     await state.set_state(AdminStates.giveaway_code)
@@ -1040,73 +1054,248 @@ async def msg_giveaway_title(message: types.Message, state: FSMContext):
 @router.message(AdminStates.giveaway_code)
 @error_handler
 async def msg_giveaway_codes_per_user(message: types.Message, state: FSMContext):
+    if message.text and message.text.strip() == "/cancel":
+        await state.clear()
+        await message.answer("❌ Cancelled.")
+        return
+
     try:
         cpu = int(message.text.strip())
         if cpu < 1:
             cpu = 1
-    except ValueError:
+    except (ValueError, AttributeError):
         await message.answer("⚠️ Enter a valid number (minimum 1).")
         return
+
     await state.update_data(codes_per_user=cpu)
+
+    # Step 3 — Choose code source method
+    buttons = [
+        [InlineKeyboardButton(text="📦 Select from Existing Coupons", callback_data="giveaway_src_existing")],
+        [InlineKeyboardButton(text="📝 Paste Codes Manually", callback_data="giveaway_src_manual")],
+        [InlineKeyboardButton(text="📄 Upload .txt File", callback_data="giveaway_src_file")],
+        [back_button("admin_giveaways")],
+    ]
     await message.answer(
         f"✅ Codes per user: *{cpu}*\n\n"
-        f"📄 *Step 3/3* — Now send the coupon codes:\n\n"
-        f"• *Paste codes* \\(one per line\\)\n"
-        f"• OR *upload a \\.txt file* with codes\n\n"
-        f"Each line \\= 1 unique code",
+        f"📄 *Step 3/3* — How to add codes?\n"
+        f"Choose a method below:",
         parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
     )
-    await state.set_state(AdminStates.giveaway_max_claims)
 
 
-@router.message(AdminStates.giveaway_max_claims)
+# ── Step 3A: Select from existing coupons ────────────────
+
+@router.callback_query(F.data == "giveaway_src_existing")
+@admin_only
 @error_handler
-async def msg_giveaway_codes_input(message: types.Message, state: FSMContext):
-    """Receive codes either as text (one per line) or as a .txt file upload."""
-    codes = []
+async def cb_giveaway_src_existing(callback: types.CallbackQuery, state: FSMContext):
+    """Show coupons with available codes to select from."""
+    coupons = await db.get_coupons_with_codes()
 
-    if message.document:
-        # File upload — handle both BytesIO and raw bytes
-        import io
-        file = await message.bot.get_file(message.document.file_id)
-        file_bytes = await message.bot.download_file(file.file_path)
-        if isinstance(file_bytes, io.BytesIO):
-            content = file_bytes.read().decode("utf-8", errors="ignore")
-        else:
-            content = file_bytes.decode("utf-8", errors="ignore")
-        codes = [line.strip() for line in content.splitlines() if line.strip()]
-    elif message.text:
-        codes = [line.strip() for line in message.text.strip().splitlines() if line.strip()]
+    if not coupons:
+        await callback.answer("❌ No coupons with available codes found.", show_alert=True)
+        return
+
+    buttons = []
+    for c in coupons:
+        btn_text = f"📦 {c['title']} ({c['available_codes']} codes)"
+        buttons.append([InlineKeyboardButton(
+            text=btn_text,
+            callback_data=f"giveaway_pick_coupon:{c['id']}"
+        )])
+    buttons.append([back_button("admin_giveaways")])
+
+    await callback.message.edit_text(
+        "📦 *Select a Coupon*\n\n"
+        "Choose a coupon to use its codes for the giveaway:",
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("giveaway_pick_coupon:"))
+@admin_only
+@error_handler
+async def cb_giveaway_pick_coupon(callback: types.CallbackQuery, state: FSMContext):
+    """Use codes from an existing coupon for the giveaway."""
+    coupon_id = int(callback.data.split(":")[1])
+    code_rows = await db.get_coupon_unsold_codes(coupon_id, 500)
+    codes = [r["code"] for r in code_rows if r["code"]]
 
     if not codes:
-        await message.answer("⚠️ No codes found. Send codes one per line or upload a .txt file.")
+        await callback.answer("❌ No unsold codes found in this coupon.", show_alert=True)
         return
 
     data = await state.get_data()
     await state.clear()
 
-    title = data["giveaway_title"]
+    title = data.get("giveaway_title", "Giveaway")
     cpu = data.get("codes_per_user", 1)
 
-    gid = await db.create_free_coupon(title, cpu, message.from_user.id)
-    await db.add_giveaway_codes(gid, codes)
+    try:
+        gid = await db.create_free_coupon(title, cpu, callback.from_user.id)
+        await db.add_giveaway_codes(gid, codes)
 
-    await db.add_admin_log(
-        message.from_user.id, "add_giveaway", "giveaway", str(gid),
-        f"Title: {title}, Codes: {len(codes)}, Per User: {cpu}"
-    )
+        await db.add_admin_log(
+            callback.from_user.id, "add_giveaway", "giveaway", str(gid),
+            f"Title: {title}, Codes: {len(codes)}, Per User: {cpu}, Source: coupon #{coupon_id}"
+        )
 
-    max_users = len(codes) // max(cpu, 1)
+        max_users = len(codes) // max(cpu, 1)
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_giveaways")]])
+        await callback.message.edit_text(
+            f"✅ *Giveaway \\#{escape_md(str(gid))} created\\!*\n\n"
+            f"📝 Title: *{escape_md(title)}*\n"
+            f"📦 Codes loaded: *{len(codes)}*\n"
+            f"👤 Codes per user: *{cpu}*\n"
+            f"👥 Max users: *~{max_users}*",
+            parse_mode="MarkdownV2", reply_markup=kb,
+        )
+    except Exception as e:
+        logger.error(f"Giveaway creation error: {e}")
+        await callback.message.edit_text(
+            f"❌ Error creating giveaway: {escape_md(str(e))}",
+            parse_mode="MarkdownV2",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_giveaways")]]),
+        )
+    await callback.answer()
+
+
+# ── Step 3B: Manual paste ─────────────────────────────────
+
+@router.callback_query(F.data == "giveaway_src_manual")
+@admin_only
+@error_handler
+async def cb_giveaway_src_manual(callback: types.CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_giveaways")]])
-    await message.answer(
-        f"✅ *Giveaway \\#{gid} created\\!*\n\n"
-        f"📝 Title: *{escape_md(title)}*\n"
-        f"📦 Codes loaded: *{len(codes)}*\n"
-        f"👤 Codes per user: *{cpu}*\n"
-        f"👥 Max users: *{max_users}*",
-        parse_mode="MarkdownV2", reply_markup=kb,
+    await callback.message.edit_text(
+        "📝 *Paste Codes*\n\n"
+        "Send coupon codes, *one per line*:\n\n"
+        "Example:\n"
+        "`CODE123`\n"
+        "`CODE456`\n"
+        "`CODE789`\n\n"
+        "_Send /cancel to abort\\._",
+        parse_mode="MarkdownV2",
+        reply_markup=kb,
     )
+    await state.set_state(AdminStates.giveaway_manual_codes)
+    await callback.answer()
 
+
+@router.message(AdminStates.giveaway_manual_codes)
+@error_handler
+async def msg_giveaway_manual_codes(message: types.Message, state: FSMContext):
+    """Receive manually pasted codes."""
+    if message.text and message.text.strip() == "/cancel":
+        await state.clear()
+        await message.answer("❌ Cancelled.")
+        return
+
+    if not message.text:
+        await message.answer("⚠️ Please send codes as text, one per line.")
+        return
+
+    codes = [line.strip() for line in message.text.strip().splitlines() if line.strip()]
+    if not codes:
+        await message.answer("⚠️ No valid codes found. Send one code per line.")
+        return
+
+    await _finalize_giveaway(message, state, codes)
+
+
+# ── Step 3C: File upload ──────────────────────────────────
+
+@router.callback_query(F.data == "giveaway_src_file")
+@admin_only
+@error_handler
+async def cb_giveaway_src_file(callback: types.CallbackQuery, state: FSMContext):
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_giveaways")]])
+    await callback.message.edit_text(
+        "📄 *Upload File*\n\n"
+        "Send a *\\.txt file* with codes \\(one per line\\)\\.\n\n"
+        "_Send /cancel to abort\\._",
+        parse_mode="MarkdownV2",
+        reply_markup=kb,
+    )
+    await state.set_state(AdminStates.giveaway_max_claims)
+    await callback.answer()
+
+
+@router.message(AdminStates.giveaway_max_claims)
+@error_handler
+async def msg_giveaway_codes_input(message: types.Message, state: FSMContext):
+    """Receive codes from file upload."""
+    if message.text and message.text.strip() == "/cancel":
+        await state.clear()
+        await message.answer("❌ Cancelled.")
+        return
+
+    codes = []
+
+    if message.document:
+        # File upload — handle both BytesIO and raw bytes
+        import io
+        try:
+            file = await message.bot.get_file(message.document.file_id)
+            file_bytes = await message.bot.download_file(file.file_path)
+            if isinstance(file_bytes, io.BytesIO):
+                content = file_bytes.read().decode("utf-8", errors="ignore")
+            else:
+                content = file_bytes.decode("utf-8", errors="ignore")
+            codes = [line.strip() for line in content.splitlines() if line.strip()]
+        except Exception as e:
+            logger.error(f"File download error: {e}")
+            await message.answer(f"❌ Error reading file: {escape_md(str(e))}", parse_mode="MarkdownV2")
+            return
+    elif message.text:
+        # Also accept text in this state as fallback
+        codes = [line.strip() for line in message.text.strip().splitlines() if line.strip()]
+
+    if not codes:
+        await message.answer("⚠️ No codes found. Send a .txt file with codes (one per line).")
+        return
+
+    await _finalize_giveaway(message, state, codes)
+
+
+async def _finalize_giveaway(message: types.Message, state: FSMContext, codes: list):
+    """Common finalization for all giveaway code input methods."""
+    data = await state.get_data()
+    await state.clear()
+
+    title = data.get("giveaway_title", "Giveaway")
+    cpu = data.get("codes_per_user", 1)
+
+    try:
+        gid = await db.create_free_coupon(title, cpu, message.from_user.id)
+        await db.add_giveaway_codes(gid, codes)
+
+        await db.add_admin_log(
+            message.from_user.id, "add_giveaway", "giveaway", str(gid),
+            f"Title: {title}, Codes: {len(codes)}, Per User: {cpu}"
+        )
+
+        max_users = len(codes) // max(cpu, 1)
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_giveaways")]])
+        await message.answer(
+            f"✅ *Giveaway \\#{escape_md(str(gid))} created\\!*\n\n"
+            f"📝 Title: *{escape_md(title)}*\n"
+            f"📦 Codes loaded: *{len(codes)}*\n"
+            f"👤 Codes per user: *{cpu}*\n"
+            f"👥 Max users: *~{max_users}*",
+            parse_mode="MarkdownV2", reply_markup=kb,
+        )
+    except Exception as e:
+        logger.error(f"Giveaway creation error: {e}")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_giveaways")]])
+        await message.answer(
+            f"❌ Error creating giveaway: {escape_md(str(e))}",
+            parse_mode="MarkdownV2", reply_markup=kb,
+        )
 
 
 
@@ -1165,9 +1354,12 @@ async def cb_giveaway_delete(callback: types.CallbackQuery):
 async def cb_giveaway_add_more_codes(callback: types.CallbackQuery, state: FSMContext):
     gid = int(callback.data.split(":")[1])
     await state.update_data(add_codes_giveaway_id=gid)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_giveaways")]])
     await callback.message.edit_text(
-        "📄 Send more codes \\(one per line\\) or upload a \\.txt file:",
+        "📄 Send more codes \\(one per line\\) or upload a \\.txt file:\n\n"
+        "_Send /cancel to abort\\._",
         parse_mode="MarkdownV2",
+        reply_markup=kb,
     )
     await state.set_state(AdminStates.giveaway_add_codes)
     await callback.answer()
@@ -1177,33 +1369,51 @@ async def cb_giveaway_add_more_codes(callback: types.CallbackQuery, state: FSMCo
 @error_handler
 async def msg_giveaway_add_more_codes(message: types.Message, state: FSMContext):
     """Receive additional codes for existing giveaway."""
+    if message.text and message.text.strip() == "/cancel":
+        await state.clear()
+        await message.answer("❌ Cancelled.")
+        return
+
     codes = []
     if message.document:
         import io
-        file = await message.bot.get_file(message.document.file_id)
-        file_bytes = await message.bot.download_file(file.file_path)
-        if isinstance(file_bytes, io.BytesIO):
-            content = file_bytes.read().decode("utf-8", errors="ignore")
-        else:
-            content = file_bytes.decode("utf-8", errors="ignore")
-        codes = [line.strip() for line in content.splitlines() if line.strip()]
+        try:
+            file = await message.bot.get_file(message.document.file_id)
+            file_bytes = await message.bot.download_file(file.file_path)
+            if isinstance(file_bytes, io.BytesIO):
+                content = file_bytes.read().decode("utf-8", errors="ignore")
+            else:
+                content = file_bytes.decode("utf-8", errors="ignore")
+            codes = [line.strip() for line in content.splitlines() if line.strip()]
+        except Exception as e:
+            logger.error(f"File download error: {e}")
+            await message.answer(f"❌ Error reading file: {escape_md(str(e))}", parse_mode="MarkdownV2")
+            return
     elif message.text:
         codes = [line.strip() for line in message.text.strip().splitlines() if line.strip()]
 
     if not codes:
-        await message.answer("⚠️ No codes found.")
+        await message.answer("⚠️ No codes found. Send codes one per line or upload a .txt file.")
         return
 
     data = await state.get_data()
     gid = data["add_codes_giveaway_id"]
     await state.clear()
 
-    await db.add_giveaway_codes(gid, codes)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_giveaways")]])
-    await message.answer(
-        f"✅ Added *{len(codes)}* codes to Giveaway \\#{gid}\\!",
-        parse_mode="MarkdownV2", reply_markup=kb
-    )
+    try:
+        await db.add_giveaway_codes(gid, codes)
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_giveaways")]])
+        await message.answer(
+            f"✅ Added *{len(codes)}* codes to Giveaway \\#{escape_md(str(gid))}\\!",
+            parse_mode="MarkdownV2", reply_markup=kb
+        )
+    except Exception as e:
+        logger.error(f"Add codes error: {e}")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_giveaways")]])
+        await message.answer(
+            f"❌ Error adding codes: {escape_md(str(e))}",
+            parse_mode="MarkdownV2", reply_markup=kb
+        )
 
 
 # ── Referral Settings ────────────────────────────────────

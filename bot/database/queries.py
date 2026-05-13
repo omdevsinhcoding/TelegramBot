@@ -381,8 +381,8 @@ async def get_sales_stats():
 async def create_free_coupon(title: str, codes_per_user: int, created_by: int) -> int:
     pool = await get_pool()
     row = await pool.fetchrow(
-        "INSERT INTO free_coupons (title, codes_per_user, created_by) VALUES ($1, $2, $3) RETURNING id",
-        title, codes_per_user, created_by)
+        "INSERT INTO free_coupons (title, code, codes_per_user, created_by) VALUES ($1, $2, $3, $4) RETURNING id",
+        title, '', codes_per_user, created_by)
     return row["id"]
 
 async def add_giveaway_codes(fc_id: int, codes: list):
@@ -395,6 +395,30 @@ async def add_giveaway_codes(fc_id: int, codes: list):
     total = await pool.fetchval("SELECT COUNT(*) FROM free_coupon_codes WHERE free_coupon_id = $1", fc_id)
     cpu = fc["codes_per_user"] if fc else 1
     await pool.execute("UPDATE free_coupons SET max_claims = $2 WHERE id = $1", fc_id, total // max(cpu, 1))
+
+
+async def get_coupons_with_codes():
+    """Get coupons that have unsold codes available (for giveaway selection)."""
+    pool = await get_pool()
+    return await pool.fetch("""
+        SELECT c.id, c.title, c.stock,
+               COUNT(cc.id) FILTER (WHERE cc.is_sold = FALSE) as available_codes
+        FROM coupons c
+        JOIN coupon_codes cc ON cc.coupon_id = c.id
+        WHERE c.is_active = TRUE
+        GROUP BY c.id, c.title, c.stock
+        HAVING COUNT(cc.id) FILTER (WHERE cc.is_sold = FALSE) > 0
+        ORDER BY c.title
+    """)
+
+
+async def get_coupon_unsold_codes(coupon_id: int, limit: int = 100):
+    """Get unsold codes from a coupon."""
+    pool = await get_pool()
+    return await pool.fetch(
+        "SELECT code FROM coupon_codes WHERE coupon_id = $1 AND is_sold = FALSE LIMIT $2",
+        coupon_id, limit
+    )
 
 async def get_active_free_coupons() -> list:
     pool = await get_pool()
