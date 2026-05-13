@@ -1,6 +1,7 @@
 """
 DreamX Coupon Bot — Configuration Module
-Loads all settings from environment variables.
+Loads core settings from environment variables.
+Payment credentials are managed via Admin Panel (stored in DB).
 """
 
 import os
@@ -13,7 +14,12 @@ load_dotenv(dotenv_path=env_path)
 
 
 class Config:
-    """Central configuration loaded from environment variables."""
+    """Central configuration loaded from environment variables.
+    
+    NOTE: Payment gateway credentials (Paytm, BharatPe) are NOT stored here.
+    They are managed dynamically from the Admin Panel and stored in the database.
+    See: bot.database.queries.get_payment_settings()
+    """
 
     # ── Telegram ──────────────────────────────────────────
     BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
@@ -24,25 +30,11 @@ class Config:
     # ── Database ──────────────────────────────────────────
     DATABASE_URL: str = os.getenv("DATABASE_URL", "")
 
-    # ── Paytm (simple GET status check — no key needed) ──
-    PAYTM_MID: str = os.getenv("PAYTM_MERCHANT_ID", "")
-    PAYTM_UPI_ID: str = os.getenv("PAYTM_UPI_ID", "")
-    PAYTM_QR_CODE: str = os.getenv("PAYTM_QR_CODE", "")
-
-    # ── BharatPe (GET transactions with token header) ─────
-    BHARATPE_MERCHANT_ID: str = os.getenv("BHARATPE_MERCHANT_ID", "")
-    BHARATPE_TOKEN: str = os.getenv("BHARATPE_TOKEN", "")
-    BHARATPE_UPI_ID: str = os.getenv("BHARATPE_UPI_ID", "")
-    BHARATPE_QR_IMAGE: str = os.getenv("BHARATPE_QR_IMAGE", "")  # path to static QR image
+    # ── Payment (non-credential config) ───────────────────
+    PAYMENT_TIMEOUT: int = int(os.getenv("PAYMENT_TIMEOUT_SECONDS", "600"))
     BHARATPE_MIN_RECHARGE: float = float(os.getenv("BHARATPE_MIN_RECHARGE", "10"))
 
-    # ── Payment ───────────────────────────────────────────
-    PAYMENT_TIMEOUT: int = int(os.getenv("PAYMENT_TIMEOUT_SECONDS", "600"))
-    POLL_INTERVAL: int = int(os.getenv("PAYMENT_POLL_INTERVAL", "2"))
-    UPI_PAYEE_NAME: str = os.getenv("UPI_PAYEE_NAME", "Paytm Merchant")
-
     # ── Bot Meta ──────────────────────────────────────────
-    BOT_USERNAME: str = os.getenv("BOT_USERNAME", "CouponBot")
     SUPPORT_USERNAME: str = os.getenv("SUPPORT_USERNAME", "")
 
     # ── Logging ───────────────────────────────────────────
@@ -63,8 +55,4 @@ class Config:
             errors.append("ADMIN_IDS is required (comma-separated Telegram IDs)")
         if not cls.DATABASE_URL:
             errors.append("DATABASE_URL is required")
-        if not cls.PAYTM_MID:
-            errors.append("PAYTM_MERCHANT_ID is required")
-        if not cls.PAYTM_UPI_ID:
-            errors.append("PAYTM_UPI_ID is required")
         return errors
