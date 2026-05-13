@@ -141,6 +141,9 @@ async def init_db() -> asyncpg.Pool:
             # Disclaimer columns
             await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS disclaimer_text TEXT DEFAULT '';")
             await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS disclaimer_buttons TEXT DEFAULT '';")
+            # Ban message columns
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS ban_message TEXT DEFAULT '';")
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS ban_buttons TEXT DEFAULT '[]';")
         except Exception:
             pass
 

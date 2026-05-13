@@ -43,12 +43,41 @@ class ForceJoinMiddleware(BaseMiddleware):
         try:
             is_banned = await db.is_user_banned(user.id)
             if is_banned:
-                ban_text = "⛔ *You are banned from using this bot\\.*\n\nContact support if you think this is a mistake\\."
+                import json
+                from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+                # Fetch custom ban message from settings
+                try:
+                    settings = await db.get_bot_settings()
+                    custom_msg = settings.get("ban_message") or "" if settings else ""
+                    ban_btns_json = settings.get("ban_buttons") or "[]" if settings else "[]"
+                except Exception:
+                    custom_msg = ""
+                    ban_btns_json = "[]"
+
+                if custom_msg:
+                    from bot.utils.helpers import escape_md
+                    ban_text = escape_md(custom_msg)
+                else:
+                    ban_text = "⛔ *You are banned from using this bot\\.*\n\nContact support if you think this is a mistake\\."
+
+                # Parse inline buttons
+                kb_buttons = []
+                try:
+                    btns = json.loads(ban_btns_json)
+                    for b in btns:
+                        if b.get("text") and b.get("url"):
+                            kb_buttons.append([InlineKeyboardButton(text=b["text"], url=b["url"])])
+                except Exception:
+                    pass
+
+                kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons) if kb_buttons else None
+
                 if isinstance(event, CallbackQuery):
                     await event.answer("⛔ You are banned from this bot.", show_alert=True)
                     return
                 elif isinstance(event, Message):
-                    await event.answer(ban_text, parse_mode="MarkdownV2")
+                    await event.answer(ban_text, parse_mode="MarkdownV2", reply_markup=kb)
                     return
         except Exception as e:
             logger.warning(f"Ban check error: {e}")

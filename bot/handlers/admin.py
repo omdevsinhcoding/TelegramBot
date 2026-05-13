@@ -65,6 +65,9 @@ class AdminStates(StatesGroup):
     # Disclaimer
     disclaimer_text_input = State()
     disclaimer_buttons_input = State()
+    # Ban message
+    ban_message_text_input = State()
+    ban_message_buttons_input = State()
 
 
 # ── Admin Panel Entry ─────────────────────────────────────
@@ -2130,3 +2133,202 @@ async def cb_admin_discl_reset(callback: types.CallbackQuery):
     await db.update_bot_settings(disclaimer_text="", disclaimer_buttons="[]")
     await callback.answer("✅ Disclaimer reset to default!", show_alert=True)
     await cb_admin_disclaimer(callback)
+
+
+# ── Ban Message Management ───────────────────────────────
+
+@router.callback_query(F.data == "admin_ban_message")
+@admin_only
+@error_handler
+async def cb_admin_ban_message(callback: types.CallbackQuery):
+    """Show current ban message and management options."""
+    import json
+    settings = await db.get_bot_settings()
+    current_text = settings.get("ban_message") or ""
+    buttons_json = settings.get("ban_buttons") or "[]"
+
+    try:
+        buttons_list = json.loads(buttons_json)
+    except Exception:
+        buttons_list = []
+
+    # Preview
+    if current_text:
+        preview = escape_md(current_text[:300])
+        if len(current_text) > 300:
+            preview += "\\.\\.\\."
+    else:
+        preview = "_No custom ban message \\— using default_"
+
+    btn_preview = ""
+    if buttons_list:
+        btn_lines = [f"  • {escape_md(b.get('text',''))} → {escape_md(b.get('url',''))}" for b in buttons_list]
+        btn_preview = "\n📎 *Inline Buttons:*\n" + "\n".join(btn_lines)
+    else:
+        btn_preview = "\n📎 _No inline buttons_"
+
+    text = (
+        f"🚫 *Ban Message Settings*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"This message is shown to banned users\n"
+        f"when they try to use the bot\\.\n\n"
+        f"📝 *Current Message:*\n{preview}\n"
+        f"{btn_preview}\n"
+    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Edit Message", callback_data="admin_ban_msg_edit_text")],
+        [InlineKeyboardButton(text="📎 Edit Buttons", callback_data="admin_ban_msg_edit_btns")],
+        [InlineKeyboardButton(text="🗑️ Reset to Default", callback_data="admin_ban_msg_reset")],
+        [InlineKeyboardButton(text="👁️ Preview", callback_data="admin_ban_msg_preview")],
+        [back_button("admin_panel")],
+    ])
+    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_ban_msg_edit_text")
+@admin_only
+@error_handler
+async def cb_admin_ban_msg_edit_text(callback: types.CallbackQuery, state: FSMContext):
+    await state.set_state(AdminStates.ban_message_text_input)
+    await callback.message.edit_text(
+        "✏️ *Edit Ban Message*\n\n"
+        "Send the message that banned users will see\\.\n"
+        "Use plain text \\— formatting will be applied automatically\\.\n\n"
+        "💡 *Tip:* Include contact info or appeal instructions\\.\n\n"
+        "_Send /cancel to abort\\._",
+        parse_mode="MarkdownV2",
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.ban_message_text_input)
+@error_handler
+async def msg_ban_message_text(message: types.Message, state: FSMContext):
+    if message.text and message.text.strip() == "/cancel":
+        await state.clear()
+        await message.answer("❌ Cancelled.")
+        return
+
+    text = message.text.strip() if message.text else ""
+    await state.clear()
+
+    if not text:
+        await message.answer("⚠️ Text cannot be empty.")
+        return
+
+    await db.update_bot_settings(ban_message=text)
+    await message.answer(
+        "✅ Ban message updated\\!",
+        parse_mode="MarkdownV2",
+    )
+    logger.info(f"Admin {message.from_user.id} updated ban message")
+
+
+@router.callback_query(F.data == "admin_ban_msg_edit_btns")
+@admin_only
+@error_handler
+async def cb_admin_ban_msg_edit_btns(callback: types.CallbackQuery, state: FSMContext):
+    await state.set_state(AdminStates.ban_message_buttons_input)
+    await callback.message.edit_text(
+        "📎 *Edit Ban Message Buttons*\n\n"
+        "Send inline buttons, *one per line* in this format:\n\n"
+        "`Button Text \\| https://example\\.com`\n\n"
+        "Example:\n"
+        "`📩 Appeal Ban \\| https://t\\.me/supportbot`\n"
+        "`📜 Rules \\| https://t\\.me/rules`\n\n"
+        "Send *clear* to remove all buttons\\.\n"
+        "Send /cancel to abort\\.",
+        parse_mode="MarkdownV2",
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.ban_message_buttons_input)
+@error_handler
+async def msg_ban_message_buttons(message: types.Message, state: FSMContext):
+    import json
+
+    if message.text and message.text.strip() == "/cancel":
+        await state.clear()
+        await message.answer("❌ Cancelled.")
+        return
+
+    text = message.text.strip() if message.text else ""
+    await state.clear()
+
+    if text.lower() == "clear":
+        await db.update_bot_settings(ban_buttons="[]")
+        await message.answer("✅ All ban buttons removed\\!", parse_mode="MarkdownV2")
+        return
+
+    # Parse buttons
+    buttons = []
+    for line in text.split("\n"):
+        line = line.strip()
+        if "|" not in line:
+            continue
+        parts = line.split("|", 1)
+        label = parts[0].strip()
+        url = parts[1].strip()
+        if label and url:
+            buttons.append({"text": label, "url": url})
+
+    if not buttons:
+        await message.answer("⚠️ No valid buttons found. Use format: `Label | URL`", parse_mode="MarkdownV2")
+        return
+
+    await db.update_bot_settings(ban_buttons=json.dumps(buttons))
+    await message.answer(
+        f"✅ Saved *{len(buttons)}* inline button\\(s\\)\\!",
+        parse_mode="MarkdownV2",
+    )
+    logger.info(f"Admin {message.from_user.id} updated ban buttons: {len(buttons)}")
+
+
+@router.callback_query(F.data == "admin_ban_msg_reset")
+@admin_only
+@error_handler
+async def cb_admin_ban_msg_reset(callback: types.CallbackQuery):
+    await db.update_bot_settings(ban_message="", ban_buttons="[]")
+    await callback.answer("✅ Ban message reset to default!", show_alert=True)
+    await cb_admin_ban_message(callback)
+
+
+@router.callback_query(F.data == "admin_ban_msg_preview")
+@admin_only
+@error_handler
+async def cb_admin_ban_msg_preview(callback: types.CallbackQuery):
+    """Preview the ban message as banned users would see it."""
+    import json
+    settings = await db.get_bot_settings()
+    ban_text = settings.get("ban_message") or ""
+    ban_btns_json = settings.get("ban_buttons") or "[]"
+
+    if ban_text:
+        display = escape_md(ban_text)
+    else:
+        display = "⛔ *You are banned from using this bot\\.*\n\nContact support if you think this is a mistake\\."
+
+    try:
+        btns = json.loads(ban_btns_json)
+    except Exception:
+        btns = []
+
+    kb_buttons = []
+    for b in btns:
+        try:
+            kb_buttons.append([InlineKeyboardButton(text=b["text"], url=b["url"])])
+        except Exception:
+            pass
+    kb_buttons.append([back_button("admin_ban_message")])
+
+    await callback.message.edit_text(
+        f"👁️ *Ban Message Preview:*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"{display}",
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_buttons),
+    )
+    await callback.answer()
