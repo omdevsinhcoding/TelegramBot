@@ -173,16 +173,24 @@ async def get_pending_orders():
         "SELECT * FROM orders WHERE status = 'pending' ORDER BY created_at ASC"
     )
 
-
-async def get_user_orders(telegram_id: int, limit: int = 10, offset: int = 0):
+async def get_user_orders(telegram_id: int, limit: int = 10, offset: int = 0, exclude_cancelled: bool = False):
     pool = await get_pool()
+    if exclude_cancelled:
+        return await pool.fetch(
+            "SELECT * FROM orders WHERE user_id = $1 AND status NOT IN ('cancelled', 'expired') ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+            telegram_id, limit, offset
+        )
     return await pool.fetch(
         "SELECT * FROM orders WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
         telegram_id, limit, offset
     )
 
-async def get_user_orders_count(telegram_id: int) -> int:
+async def get_user_orders_count(telegram_id: int, exclude_cancelled: bool = False) -> int:
     pool = await get_pool()
+    if exclude_cancelled:
+        return await pool.fetchval(
+            "SELECT COUNT(*) FROM orders WHERE user_id = $1 AND status NOT IN ('cancelled', 'expired')", telegram_id
+        ) or 0
     return await pool.fetchval("SELECT COUNT(*) FROM orders WHERE user_id = $1", telegram_id) or 0
 
 
@@ -429,7 +437,7 @@ async def get_or_create_referral_code(user_id: int) -> str:
     row = await pool.fetchrow("SELECT referral_code FROM users WHERE telegram_id = $1", user_id)
     if row and row["referral_code"]: return row["referral_code"]
     import random, string
-    code = "REF" + "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    code = "ERRORO-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
     await pool.execute("UPDATE users SET referral_code = $2 WHERE telegram_id = $1", user_id, code)
     return code
 
@@ -599,19 +607,18 @@ async def update_bot_settings(**kwargs):
 
 
 async def get_payment_settings():
-    """Get payment settings from DB, falling back to .env values."""
-    from bot.config import Config
+    """Get payment settings from DB (admin-managed)."""
     settings = await get_bot_settings()
 
     return {
-        "paytm_mid": settings.get("paytm_mid") or Config.PAYTM_MID,
-        "paytm_upi_id": settings.get("paytm_upi_id") or Config.PAYTM_UPI_ID,
-        "paytm_qr_code": settings.get("paytm_qr_code") or Config.PAYTM_QR_CODE,
-        "bharatpe_merchant_id": settings.get("bharatpe_merchant_id") or Config.BHARATPE_MERCHANT_ID,
-        "bharatpe_token": settings.get("bharatpe_token") or Config.BHARATPE_TOKEN,
-        "bharatpe_upi_id": settings.get("bharatpe_upi_id") or Config.BHARATPE_UPI_ID,
-        "bharatpe_qr_path": settings.get("bharatpe_qr_path") or Config.BHARATPE_QR_IMAGE,
-        "upi_payee_name": settings.get("upi_payee_name") or Config.UPI_PAYEE_NAME,
+        "paytm_mid": settings.get("paytm_mid") or "",
+        "paytm_upi_id": settings.get("paytm_upi_id") or "",
+        "paytm_qr_code": settings.get("paytm_qr_code") or "",
+        "bharatpe_merchant_id": settings.get("bharatpe_merchant_id") or "",
+        "bharatpe_token": settings.get("bharatpe_token") or "",
+        "bharatpe_upi_id": settings.get("bharatpe_upi_id") or "",
+        "bharatpe_qr_path": settings.get("bharatpe_qr_path") or "",
+        "upi_payee_name": settings.get("upi_payee_name") or "",
     }
 
 
@@ -633,6 +640,26 @@ async def search_user(query: str):
         f"%{clean}%"
     )
     return rows
+
+
+async def get_user_order_stats(telegram_id: int) -> dict:
+    """Get comprehensive order statistics for a user."""
+    pool = await get_pool()
+    row = await pool.fetchrow("""
+        SELECT 
+            COUNT(*) as total_orders,
+            COUNT(*) FILTER (WHERE status IN ('paid', 'delivered')) as total_paid,
+            COUNT(*) FILTER (WHERE status = 'pending') as total_pending,
+            COUNT(*) FILTER (WHERE status = 'cancelled') as total_cancelled,
+            COUNT(*) FILTER (WHERE status = 'expired') as total_expired,
+            COUNT(*) FILTER (WHERE status = 'delivered') as total_delivered,
+            COALESCE(SUM(amount) FILTER (WHERE status IN ('paid', 'delivered')), 0) as total_spent
+        FROM orders WHERE user_id = $1
+    """, telegram_id)
+    return dict(row) if row else {
+        "total_orders": 0, "total_paid": 0, "total_pending": 0,
+        "total_cancelled": 0, "total_expired": 0, "total_delivered": 0, "total_spent": 0
+    }
 
 
 async def get_user_referrals(telegram_id: int, limit: int = 20):

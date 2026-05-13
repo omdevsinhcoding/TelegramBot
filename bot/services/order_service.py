@@ -106,11 +106,11 @@ async def expire_orders():
 
 
 async def get_user_order_history(user_id: int, limit: int = 5, offset: int = 0) -> list:
-    rows = await db.get_user_orders(user_id, limit, offset)
+    rows = await db.get_user_orders(user_id, limit, offset, exclude_cancelled=True)
     return [dict(r) for r in rows]
 
 async def get_user_order_history_count(user_id: int) -> int:
-    return await db.get_user_orders_count(user_id)
+    return await db.get_user_orders_count(user_id, exclude_cancelled=True)
 
 
 async def get_delivered_code(order_id: str, coupon_id: int):

@@ -1428,7 +1428,7 @@ async def cb_admin_payments(callback: types.CallbackQuery):
         f"━━━ *Paytm* ━━━\n"
         f"🏢 MID: `{paytm_mid}`\n"
         f"📱 UPI ID: `{paytm_upi}`\n"
-        f"📷 QR Code: `{paytm_qr}`\n\n"
+        f"🔗 QR Code: `{paytm_qr}`\n\n"
         f"━━━ *BharatPe* ━━━\n"
         f"🏢 Merchant ID: `{bp_mid}`\n"
         f"🔑 Token: `{bp_token}`\n"
@@ -1441,7 +1441,7 @@ async def cb_admin_payments(callback: types.CallbackQuery):
     buttons = [
         [InlineKeyboardButton(text="🏢 Paytm MID", callback_data="admin_pay_edit:paytm_mid"),
          InlineKeyboardButton(text="📱 Paytm UPI", callback_data="admin_pay_edit:paytm_upi_id")],
-        [InlineKeyboardButton(text="📷 Paytm QR Code", callback_data="admin_pay_edit:paytm_qr_code")],
+        [InlineKeyboardButton(text="🔗 Paytm QR Code", callback_data="admin_pay_edit:paytm_qr_code")],
         [InlineKeyboardButton(text="🏢 BP Merchant", callback_data="admin_pay_edit:bharatpe_merchant_id"),
          InlineKeyboardButton(text="🔑 BP Token", callback_data="admin_pay_edit:bharatpe_token")],
         [InlineKeyboardButton(text="📱 BP UPI ID", callback_data="admin_pay_edit:bharatpe_upi_id")],
@@ -1626,7 +1626,7 @@ async def msg_user_search(message: types.Message, state: FSMContext):
 @admin_only
 @error_handler
 async def cb_admin_user_inspect(callback: types.CallbackQuery):
-    """Full user profile card."""
+    """Full user profile card with order statistics."""
     user_id = int(callback.data.split(":")[1])
     user = await db.get_user(user_id)
     if not user:
@@ -1650,6 +1650,10 @@ async def cb_admin_user_inspect(callback: types.CallbackQuery):
 
     ref_count = await db.get_referral_count(user_id)
 
+    # Get order statistics
+    stats = await db.get_user_order_stats(user_id)
+    total_spent = escape_md(format_currency(float(stats["total_spent"])))
+
     text = (
         f"👤 *User Profile*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -1660,7 +1664,15 @@ async def cb_admin_user_inspect(callback: types.CallbackQuery):
         f"🔰 Status: {banned}\n\n"
         f"━━━ *Financial* ━━━\n"
         f"💰 Wallet: *{wallet}*\n"
-        f"💸 Referral Earnings: *{earnings}*\n\n"
+        f"💸 Referral Earnings: *{earnings}*\n"
+        f"🏦 Total Spent: *{total_spent}*\n\n"
+        f"━━━ *Order Stats* ━━━\n"
+        f"📦 Total: *{stats['total_orders']}* | "
+        f"✅ Paid: *{stats['total_paid']}*\n"
+        f"🟡 Pending: *{stats['total_pending']}* | "
+        f"❌ Cancelled: *{stats['total_cancelled']}*\n"
+        f"⏰ Expired: *{stats['total_expired']}* | "
+        f"📬 Delivered: *{stats['total_delivered']}*\n\n"
         f"━━━ *Referral* ━━━\n"
         f"🔑 Code: `{ref_code}`\n"
         f"👥 Referrals Made: *{ref_count}*\n"

@@ -314,11 +314,21 @@ async def cb_pay_bharatpe(callback: types.CallbackQuery, state: FSMContext):
     amt = escape_md(format_currency(amount))
     oid = escape_md(order_id)
 
+    # Get payment settings from DB
+    ps = await db.get_payment_settings()
+    bp_upi = ps.get("bharatpe_upi_id", "")
+
+    upi_line = ""
+    if bp_upi:
+        upi_esc = escape_md(bp_upi)
+        upi_line = f"\n📱 UPI ID: `{upi_esc}` _\\(tap to copy\\)_\n"
+
     caption = (
         f"💳 *Payment Required — Bharat Pay*\n\n"
         f"🏷️ {title}\n"
         f"💰 Amount: *{amt}*\n"
-        f"🧾 Order: `{oid}`\n\n"
+        f"🧾 Order: `{oid}`\n"
+        f"{upi_line}\n"
         f"📱 *Steps:*\n"
         f"1️⃣ Scan the QR with any UPI app\n"
         f"2️⃣ Pay *{amt}*\n"
@@ -332,12 +342,12 @@ async def cb_pay_bharatpe(callback: types.CallbackQuery, state: FSMContext):
     except Exception:
         pass
 
-    # Send the STATIC BharatPe QR image
-    qr_path = Config.BHARATPE_QR_IMAGE
+    # Send the BharatPe QR image from DB settings
+    qr_path = ps.get("bharatpe_qr_path", "")
     if qr_path and os.path.exists(qr_path):
         photo = FSInputFile(qr_path)
     else:
-        # Fallback — try from project root (handlers/ -> bot/ -> TelegramBot/)
+        # Fallback — try from project root
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         fallback = os.path.join(project_root, "bharatpe_qr.png")
         if os.path.exists(fallback):
