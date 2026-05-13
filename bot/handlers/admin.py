@@ -761,7 +761,7 @@ async def cb_bc_send_now(callback: types.CallbackQuery, state: FSMContext):
         pass
     await callback.message.answer(
         f"📢 *Broadcast Complete*\n\n"
-        f"📊 Type: {msg_type}\n"
+        f"📊 Type: {escape_md(msg_type)}\n"
         f"✅ Sent: {sent}\n❌ Failed: {failed}\n📊 Total: {total}",
         parse_mode="MarkdownV2", reply_markup=kb,
     )
@@ -932,18 +932,6 @@ async def msg_giveaway_codes_input(message: types.Message, state: FSMContext):
     )
 
 
-@router.callback_query(F.data.startswith("admin_giveaway_addcodes:"))
-@admin_only
-@error_handler
-async def cb_giveaway_add_more_codes(callback: types.CallbackQuery, state: FSMContext):
-    gid = int(callback.data.split(":")[1])
-    await state.update_data(add_codes_giveaway_id=gid)
-    await callback.message.edit_text(
-        "📄 Send more codes \\(one per line\\) or upload a \\.txt file:",
-        parse_mode="MarkdownV2",
-    )
-    await state.set_state(AdminStates.add_codes_input)
-    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("admin_giveaway_reclaim:"))
@@ -1059,13 +1047,14 @@ async def cb_admin_referral_settings(callback: types.CallbackQuery):
     reward = settings.get("reward_code") or "Not set"
 
     mode_label = "💰 Balance Commission" if mode == "balance" else "🎁 Code Reward"
+    pct_esc = escape_md(str(pct))
     text = (
         f"🤝 *Referral Settings*\n\n"
         f"Status: {active}\n"
         f"Mode: {mode_label}\n\n"
     )
     if mode == "balance":
-        text += f"💰 Commission: {pct}% per purchase\n"
+        text += f"💰 Commission: {pct_esc}% per purchase\n"
     else:
         text += (
             f"🎁 Referrals needed: {needed}\n"
@@ -1106,7 +1095,7 @@ async def cb_ref_toggle_active(callback: types.CallbackQuery):
 @error_handler
 async def cb_ref_edit_commission(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
-        "✏️ *Edit Commission Percentage*\n\nEnter new commission percentage (e.g. 10.5):",
+        "✏️ *Edit Commission Percentage*\n\nEnter new commission percentage \\(e\\.g\\. 10\\.5\\):",
         parse_mode="MarkdownV2"
     )
     await state.set_state(AdminStates.ref_commission_input)
@@ -1133,7 +1122,7 @@ async def msg_ref_commission_input(message: types.Message, state: FSMContext):
 @error_handler
 async def cb_ref_edit_needed(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
-        "✏️ *Edit Referrals Needed*\n\nEnter the number of referrals needed to earn the reward (e.g. 5):",
+        "✏️ *Edit Referrals Needed*\n\nEnter the number of referrals needed to earn the reward \\(e\\.g\\. 5\\):",
         parse_mode="MarkdownV2"
     )
     await state.set_state(AdminStates.ref_needed_input)
@@ -1159,7 +1148,7 @@ async def msg_ref_needed_input(message: types.Message, state: FSMContext):
 @error_handler
 async def cb_ref_edit_code(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
-        "✏️ *Edit Reward Code*\n\nEnter the coupon code to give as a reward (e.g. FREE100):",
+        "✏️ *Edit Reward Code*\n\nEnter the coupon code to give as a reward \\(e\\.g\\. FREE100\\):",
         parse_mode="MarkdownV2"
     )
     await state.set_state(AdminStates.ref_code_input)
@@ -1192,7 +1181,7 @@ async def cb_admin_bot_settings(callback: types.CallbackQuery):
         f"📢 *Force Join Channel*\n"
         f"Status: {status}\n"
         f"Channel: `{chan}`\n\n"
-        f"Users must join this channel before using the bot."
+        f"Users must join this channel before using the bot\\."
     )
     
     await callback.message.edit_text(
@@ -1216,8 +1205,8 @@ async def cb_admin_toggle_force_join(callback: types.CallbackQuery, state: FSMCo
     else:
         # Ask for new one
         await callback.message.edit_text(
-            "📢 Send the *Channel Username* (e.g. `@MyChannel`) or *ID* (e.g. `-100123...`)\n\n"
-            "⚠️ *IMPORTANT*: The bot MUST be an admin in the channel for this to work!",
+            "📢 Send the *Channel Username* \\(e\\.g\\. `@MyChannel`\\) or *ID* \\(e\\.g\\. `\\-100123\\.\\.\\.`\\)\n\n"
+            "⚠️ *IMPORTANT*: The bot MUST be an admin in the channel for this to work\\!",
             parse_mode="MarkdownV2"
         )
         await state.set_state(AdminStates.force_channel_input)

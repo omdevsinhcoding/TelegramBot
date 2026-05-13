@@ -4,7 +4,7 @@ Handles navigation from the persistent reply keyboard and callback queries.
 """
 
 from aiogram import Router, types, F
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 
@@ -54,32 +54,82 @@ async def text_buy_vouchers(message: types.Message):
 @router.message(F.text == "📦 My Orders")
 @error_handler
 async def text_my_orders(message: types.Message):
-    """Route 'My Orders' button press."""
-    from bot.services.order_service import get_user_order_history
+    """Route 'My Orders' button press — show paginated order history."""
+    from bot.services.order_service import get_user_order_history, get_user_order_history_count
     from bot.utils.helpers import format_currency
+    from bot.database import queries as db
 
-    orders = await get_user_order_history(message.from_user.id, 10)
+    total_orders = await get_user_order_history_count(message.from_user.id)
+    orders = await get_user_order_history(message.from_user.id, 5, 0)
+
     if not orders:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
         await message.answer(
             "📦 *My Orders*\n\nNo orders yet\\.",
-            parse_mode="MarkdownV2",
+            parse_mode="MarkdownV2", reply_markup=kb,
         )
         return
 
-    status_emoji = {
-        "pending": "🟡", "paid": "🟢", "delivered": "✅",
-        "expired": "⏰", "cancelled": "❌", "refunded": "🔄"
-    }
-    lines = ["📦 *My Orders*\n"]
-    for o in orders:
-        emoji = status_emoji.get(o["status"], "❓")
-        amt = escape_md(format_currency(float(o["amount"])))
-        oid = escape_md(o["order_id"])
-        st = escape_md(o["status"])
-        lines.append(f"{emoji} `{oid}` — {amt} \\({st}\\)")
+    lines = [
+        "📦 *ORDER HISTORY*",
+        "",
+        f"📊 Total: {total_orders} orders",
+    ]
+
+    buttons = []
+    pool = await db.get_pool()
+
+    for i, o in enumerate(orders):
+        num = total_orders - i
+        oid = o["order_id"]
+
+        coupon_row = await pool.fetchrow("SELECT title FROM coupons WHERE id = $1", o["coupon_id"])
+        coupon_title = coupon_row["title"] if coupon_row else "Unknown"
+
+        code_count = await pool.fetchval(
+            "SELECT COUNT(*) FROM coupon_codes WHERE order_id = $1 AND is_sold = TRUE", oid
+        ) or 0
+
+        amt = f"₹{float(o['amount']):.1f}"
+        qty = o.get("quantity", 1) or 1
+        created = o["created_at"]
+        date_str = created.strftime("%Y-%m-%d %H:%M:%S") if created else ""
+
+        oid_esc = escape_md(oid)
+        title_esc = escape_md(coupon_title)
+        amt_esc = escape_md(amt)
+        date_esc = escape_md(date_str)
+
+        lines.append(f"\n━━━━ \\#*{num}* ━━━━")
+        lines.append(f"🏷️ {title_esc}")
+        lines.append(f"🕐 {date_esc}")
+        lines.append(f"🛍️ Qty: {qty} • 💰 {amt_esc}")
+        lines.append(f"🆔 `{oid_esc}`")
+        if code_count > 0:
+            lines.append(f"📦 {code_count} coupon\\(s\\) \\- tap to view")
+        else:
+            lines.append(f"📦 Status: {escape_md(o['status'])}")
+
+        if o["status"] in ("delivered", "paid") and code_count > 0:
+            buttons.append([
+                InlineKeyboardButton(
+                    text=f"📋 #{num} View Codes",
+                    callback_data=f"view_codes:{oid}"
+                )
+            ])
 
     text = "\n".join(lines)
-    await message.answer(text, parse_mode="MarkdownV2")
+
+    nav_buttons = []
+    if total_orders > 5:
+        nav_buttons.append(InlineKeyboardButton(text="Next ➡️", callback_data="my_orders:page:2"))
+    if nav_buttons:
+        buttons.append(nav_buttons)
+
+    buttons.append([back_button("back_home")])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    await message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
 
 
 

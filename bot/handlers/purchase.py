@@ -758,7 +758,7 @@ async def cb_my_orders(callback: types.CallbackQuery):
     limit = 5
     offset = (page - 1) * limit
 
-    total_orders = await get_user_order_history_count(callback.fromuser.id if hasattr(callback, 'fromuser') else callback.from_user.id)
+    total_orders = await get_user_order_history_count(callback.from_user.id)
     orders = await get_user_order_history(callback.from_user.id, limit, offset)
 
     if not orders and page == 1:
@@ -776,14 +776,11 @@ async def cb_my_orders(callback: types.CallbackQuery):
         await callback.answer()
         return
 
-    # Build attractive order history exactly as requested
-    total_esc = str(total_orders)
+    # Build attractive order history matching the reference screenshot
     lines = [
-        "📖 *ORDER HISTORY*",
-        "═════════════════════════",
+        "📦 *ORDER HISTORY*",
         "",
-        f"📊 Total: {total_esc} orders",
-        ""
+        f"📊 Total: {total_orders} orders",
     ]
 
     buttons = []
@@ -815,17 +812,15 @@ async def cb_my_orders(callback: types.CallbackQuery):
         amt_esc = escape_md(amt)
         date_esc = escape_md(date_str)
 
-        lines.append(f"┌──────── \\#{num} ────────┐")
-        lines.append(f"│ 📦 {title_esc}")
-        lines.append(f"│ 🕒 {date_esc}")
-        lines.append(f"│ 🔢 Qty: {qty} • 💰 {amt_esc}")
-        lines.append(f"│ 🆔 `{oid_esc}`")
+        lines.append(f"\n━━━━ \\#*{num}* ━━━━")
+        lines.append(f"🏷️ {title_esc}")
+        lines.append(f"🕐 {date_esc}")
+        lines.append(f"🛍️ Qty: {qty} • 💰 {amt_esc}")
+        lines.append(f"🆔 `{oid_esc}`")
         if code_count > 0:
-            lines.append(f"│ 🎫 {code_count} coupon\\(s\\) \\- tap to view")
+            lines.append(f"📦 {code_count} coupon\\(s\\) \\- tap to view")
         else:
-            lines.append(f"│ 🎫 Status: {escape_md(o['status'])}")
-        lines.append("└────────────────────┘")
-        lines.append("")
+            lines.append(f"📦 Status: {escape_md(o['status'])}")
 
         # Add View Codes button for delivered/paid orders
         if o["status"] in ("delivered", "paid") and code_count > 0:
