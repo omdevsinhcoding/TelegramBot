@@ -94,7 +94,7 @@ class ForceJoinMiddleware(BaseMiddleware):
 
                     if url:
                         buttons.append([InlineKeyboardButton(
-                            text=f"📢 Join {ch['title'][:30]}",
+                            text="📢 Join Channel",
                             url=url,
                         )])
 
