@@ -539,52 +539,6 @@ async def cb_admin_orders(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# ── View Payments ─────────────────────────────────────────
-
-@router.callback_query(F.data == "admin_payments")
-@admin_only
-@error_handler
-async def cb_admin_payments(callback: types.CallbackQuery):
-    txns = await db.get_pending_transactions()
-    lines = [f"💳 *Pending Payments* \\({len(txns)}\\)\n"]
-    for t in txns:
-        ref = escape_md(t["txn_ref"])
-        amt = escape_md(str(t["amount"]))
-        st = escape_md(t["status"])
-        lines.append(f"• `{ref}` — ₹{amt} \\({st}\\)")
-    if not txns:
-        lines.append("No pending payments\\.")
-
-    text = "\n".join(lines)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_panel")]])
-    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
-    await callback.answer()
-
-
-# ── Analytics ─────────────────────────────────────────────
-
-@router.callback_query(F.data == "admin_analytics")
-@admin_only
-@error_handler
-async def cb_admin_analytics(callback: types.CallbackQuery):
-    stats = await db.get_sales_stats()
-    user_count = await db.get_user_count()
-
-    revenue = escape_md(format_currency(float(stats["total_revenue"])))
-    text = (
-        f"📊 *Sales Analytics*\n\n"
-        f"👥 Total Users: *{user_count}*\n"
-        f"📦 Total Orders: *{stats['total_orders']}*\n"
-        f"🟢 Paid: *{stats['total_paid']}*\n"
-        f"🟡 Pending: *{stats['total_pending']}*\n"
-        f"⏰ Expired: *{stats['total_expired']}*\n"
-        f"💰 Total Revenue: *{revenue}*"
-    )
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_panel")]])
-    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
-    await callback.answer()
-
 
 # ── Admin Logs ────────────────────────────────────────────
 

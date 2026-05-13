@@ -25,11 +25,12 @@ async def create_purchase_order(user_id: int, coupon_id: int, amount: float,
 
     await db.create_order(order_id, user_id, coupon_id, amount, timeout_sec)
 
-    # Use correct merchant ID based on selected gateway
+    # Use correct merchant ID based on selected gateway (dynamic from DB)
+    ps = await db.get_payment_settings()
     if gateway == "bharatpe":
-        merchant_id = Config.BHARATPE_MERCHANT_ID
+        merchant_id = ps["bharatpe_merchant_id"]
     else:
-        merchant_id = Config.PAYTM_MID
+        merchant_id = ps["paytm_mid"]
 
     await db.create_transaction(
         txn_ref, order_id, user_id, amount,

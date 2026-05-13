@@ -265,13 +265,14 @@ async def cb_ref_enter_code(callback: types.CallbackQuery, state: FSMContext):
 @error_handler
 async def msg_ref_enter_code(message: types.Message, state: FSMContext):
     code = message.text.strip()
-    referrer_id = await db.get_user_by_referral_code(code)
+    referrer = await db.get_user_by_referral_code(code)
     
-    if not referrer_id:
+    if not referrer:
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
         await message.answer("❌ Invalid referral code. Please try again or go back.", reply_markup=kb)
         return
-        
+    
+    referrer_id = referrer["telegram_id"]
     if referrer_id == message.from_user.id:
         await message.answer("❌ You cannot use your own referral code.")
         return

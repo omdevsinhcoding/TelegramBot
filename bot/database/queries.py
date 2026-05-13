@@ -635,15 +635,6 @@ async def search_user(query: str):
     return rows
 
 
-async def get_user_orders(telegram_id: int, limit: int = 20):
-    """Get all orders for a specific user."""
-    pool = await get_pool()
-    return await pool.fetch(
-        "SELECT * FROM orders WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2",
-        telegram_id, limit
-    )
-
-
 async def get_user_referrals(telegram_id: int, limit: int = 20):
     """Get all referrals made by a user."""
     pool = await get_pool()
@@ -694,9 +685,3 @@ async def get_referrer_of(telegram_id: int):
             "SELECT * FROM users WHERE telegram_id = $1", row["referred_by"]
         )
     return None
-
-async def get_user_by_referral_code(code: str):
-    """Get user ID by their referral code."""
-    pool = await get_pool()
-    row = await pool.fetchrow("SELECT telegram_id FROM users WHERE referral_code = $1", code)
-    return row["telegram_id"] if row else None
