@@ -383,7 +383,7 @@ async def text_channels(message: types.Message):
         support_line = f"\n💬 Support: @{escape_md(support)}"
     text = (
         f"📢 *Our Channels*\n\n"
-        f"Stay updated with latest deals & offers\\!{support_line}\n\n"
+        f"Stay updated with latest deals \\& offers\\!{support_line}\n\n"
         f"Follow us for exclusive discounts 🔥"
     )
     await message.answer(text, parse_mode="MarkdownV2")
@@ -408,9 +408,9 @@ async def text_admin_panel(message: types.Message):
     text = (
         f"👑 *Admin Panel*\n\n"
         f"👥 Total Users: *{user_count}*\n"
-        f"📊 Total Orders: *{stats['total_orders']}*\n"
+        f"📊 Total Orders: *{escape_md(str(stats['total_orders']))}*\n"
         f"💰 Revenue: *{revenue}*\n"
-        f"🟢 Paid: {stats['total_paid']} │ 🟡 Pending: {stats['total_pending']} │ ⏰ Expired: {stats['total_expired']}"
+        f"🟢 Paid: {escape_md(str(stats['total_paid']))} \\| 🟡 Pending: {escape_md(str(stats['total_pending']))} \\| ⏰ Expired: {escape_md(str(stats['total_expired']))}"
     )
 
     await message.answer(

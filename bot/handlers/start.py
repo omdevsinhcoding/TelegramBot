@@ -22,39 +22,54 @@ async def cmd_start(message: types.Message):
     await register_user(user.id, user.username, user.full_name)
     logger.info(f"/start from {user.id} (@{user.username})")
 
+    referral_msg = ""
+
     # Handle referral: /start REF_CODE
-    args = message.text.split(maxsplit=1)
-    if len(args) > 1:
-        ref_code = args[1].strip()
-        if ref_code.startswith("ERROROO"):
-            from bot.database import queries as db
-            referrer = await db.get_user_by_referral_code(ref_code)
-            if referrer and referrer["telegram_id"] != user.id:
-                success = await db.record_referral(referrer["telegram_id"], user.id)
-                if success:
-                    logger.info(f"Referral recorded: {referrer['telegram_id']} -> {user.id}")
-                    try:
-                        ref_name = escape_md(user.first_name or "Someone")
-                        await message.bot.send_message(
-                            referrer["telegram_id"],
-                            f"🎉 *New Referral\\!*\n\n"
-                            f"👤 {ref_name} joined using your link\\!\n"
-                            f"Keep sharing to earn more rewards 💰",
-                            parse_mode="MarkdownV2",
+    try:
+        args = message.text.split(maxsplit=1)
+        if len(args) > 1:
+            ref_code = args[1].strip()
+            if ref_code.startswith("ERROROO"):
+                from bot.database import queries as db
+                referrer = await db.get_user_by_referral_code(ref_code)
+                if referrer and referrer["telegram_id"] != user.id:
+                    success = await db.record_referral(referrer["telegram_id"], user.id)
+                    if success:
+                        referrer_name = referrer.get("full_name") or str(referrer["telegram_id"])
+                        logger.info(f"Referral recorded: {referrer['telegram_id']} -> {user.id}")
+
+                        # Notify the REFERRED user
+                        referral_msg = (
+                            f"\n\n🔗 You were referred by *{escape_md(referrer_name)}*\\!\n"
+                            f"Start shopping to unlock referral rewards 🎁"
                         )
-                    except Exception:
-                        pass
+
+                        # Notify the REFERRER
+                        try:
+                            ref_name = escape_md(user.first_name or "Someone")
+                            await message.bot.send_message(
+                                referrer["telegram_id"],
+                                f"🎉 *New Referral\\!*\n\n"
+                                f"👤 {ref_name} joined using your link\\!\n"
+                                f"Keep sharing to earn more rewards 💰",
+                                parse_mode="MarkdownV2",
+                            )
+                        except Exception:
+                            pass
+    except Exception as e:
+        logger.warning(f"Referral processing error (non-critical): {e}")
 
     first = escape_md(user.first_name or "there")
 
     welcome = (
         f"🌟 *Welcome to DreamX Store\\!*\n\n"
         f"Hey *{first}*\\! 👋\n\n"
-        f"🛍️ Browse exclusive coupons & deals\n"
+        f"🛍️ Browse exclusive coupons \\& deals\n"
         f"💰 Direct UPI payments\n"
         f"⚡ Instant payment verification\n"
-        f"🔒 Secure & verified transactions\n\n"
+        f"🔒 Secure \\& verified transactions\n\n"
         f"Use the buttons below to get started 👇"
+        f"{referral_msg}"
     )
 
     await message.answer(

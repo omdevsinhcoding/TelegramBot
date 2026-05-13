@@ -80,11 +80,11 @@ async def cb_admin_panel(callback: types.CallbackQuery):
     text = (
         f"👑 *Admin Panel*\n\n"
         f"👥 Total Users: *{user_count}*\n"
-        f"📊 Total Orders: *{stats['total_orders']}*\n"
+        f"📊 Total Orders: *{escape_md(str(stats['total_orders']))}*\n"
         f"💰 Revenue: *{revenue}*\n"
-        f"🟢 Paid: {stats['total_paid']} │ "
-        f"🟡 Pending: {stats['total_pending']} │ "
-        f"⏰ Expired: {stats['total_expired']}"
+        f"🟢 Paid: {escape_md(str(stats['total_paid']))} \\| "
+        f"🟡 Pending: {escape_md(str(stats['total_pending']))} \\| "
+        f"⏰ Expired: {escape_md(str(stats['total_expired']))}"
     )
 
     await callback.message.edit_text(
@@ -1667,12 +1667,12 @@ async def cb_admin_user_inspect(callback: types.CallbackQuery):
         f"💸 Referral Earnings: *{earnings}*\n"
         f"🏦 Total Spent: *{total_spent}*\n\n"
         f"━━━ *Order Stats* ━━━\n"
-        f"📦 Total: *{stats['total_orders']}* \\| "
-        f"✅ Paid: *{stats['total_paid']}*\n"
-        f"🟡 Pending: *{stats['total_pending']}* \\| "
-        f"❌ Cancelled: *{stats['total_cancelled']}*\n"
-        f"⏰ Expired: *{stats['total_expired']}* \\| "
-        f"📬 Delivered: *{stats['total_delivered']}*\n\n"
+        f"📦 Total: *{escape_md(str(stats['total_orders']))}* \\| "
+        f"✅ Paid: *{escape_md(str(stats['total_paid']))}*\n"
+        f"🟡 Pending: *{escape_md(str(stats['total_pending']))}* \\| "
+        f"❌ Cancelled: *{escape_md(str(stats['total_cancelled']))}*\n"
+        f"⏰ Expired: *{escape_md(str(stats['total_expired']))}* \\| "
+        f"📬 Delivered: *{escape_md(str(stats['total_delivered']))}*\n\n"
         f"━━━ *Referral* ━━━\n"
         f"🔑 Code: `{ref_code}`\n"
         f"👥 Referrals Made: *{ref_count}*\n"
@@ -1929,11 +1929,11 @@ async def cb_admin_analytics(callback: types.CallbackQuery):
     text = (
         f"📊 *Analytics Dashboard*\n\n"
         f"👥 Total Users: *{user_count}*\n"
-        f"📦 Total Orders: *{stats['total_orders']}*\n"
+        f"📦 Total Orders: *{escape_md(str(stats['total_orders']))}*\n"
         f"💰 Total Revenue: *{revenue}*\n\n"
-        f"✅ Paid: *{stats['total_paid']}*\n"
-        f"🟡 Pending: *{stats['total_pending']}*\n"
-        f"⏰ Expired: *{stats['total_expired']}*\n"
+        f"✅ Paid: *{escape_md(str(stats['total_paid']))}*\n"
+        f"🟡 Pending: *{escape_md(str(stats['total_pending']))}*\n"
+        f"⏰ Expired: *{escape_md(str(stats['total_expired']))}*\n"
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_panel")]])
