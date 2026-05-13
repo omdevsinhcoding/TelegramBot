@@ -20,6 +20,32 @@ import aiohttp
 from bot.config import Config
 from bot.utils.logger import logger
 
+# ── Reusable aiohttp session ────────────────────────────────
+_http_session: aiohttp.ClientSession | None = None
+
+
+async def _get_session() -> aiohttp.ClientSession:
+    """Return a reusable aiohttp session. Creates one if needed."""
+    global _http_session
+    if _http_session is None or _http_session.closed:
+        _http_session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=15),
+        )
+    return _http_session
+
+
+async def close_http_session():
+    """Close the shared HTTP session. Call on bot shutdown."""
+    global _http_session
+    if _http_session and not _http_session.closed:
+        await _http_session.close()
+        _http_session = None
+
+
+def _amounts_match(a: float, b: float) -> bool:
+    """Compare payment amounts safely (avoids floating-point precision issues)."""
+    return round(a, 2) == round(b, 2)
+
 
 # ══════════════════════════════════════════════════════════════
 # PAYTM — GET /order/status with JsonData param
@@ -35,19 +61,19 @@ async def check_paytm_status(order_id: str) -> dict:
     json_data = json.dumps(payload)
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                "https://securegw.paytm.in/order/status",
-                params={"JsonData": json_data},
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as resp:
-                result = await resp.json()
-                logger.info(
-                    f"Paytm status for {order_id}: "
-                    f"STATUS={result.get('STATUS')}, "
-                    f"TXNAMOUNT={result.get('TXNAMOUNT')}"
-                )
-                return result
+        session = await _get_session()
+        async with session.get(
+            "https://securegw.paytm.in/order/status",
+            params={"JsonData": json_data},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            result = await resp.json()
+            logger.info(
+                f"Paytm status for {order_id}: "
+                f"STATUS={result.get('STATUS')}, "
+                f"TXNAMOUNT={result.get('TXNAMOUNT')}"
+            )
+            return result
     except Exception as e:
         logger.error(f"Paytm status check failed for {order_id}: {e}")
         return {"STATUS": "API_ERROR", "error": str(e)}
@@ -70,7 +96,7 @@ def verify_paytm_response(
             status == "TXN_SUCCESS"
             and mid_from_response == Config.PAYTM_MID
             and orderid_from_response == order_id
-            and response_amount == expected_amount
+            and _amounts_match(response_amount, expected_amount)
         ):
             txn_id = response.get("TXNID", "N/A")
             utr = response.get("BANKTXNID", "N/A")
@@ -89,7 +115,7 @@ def verify_paytm_response(
                 logger.warning(f"MID mismatch: expected {Config.PAYTM_MID}, got {mid_from_response}")
             if orderid_from_response != order_id:
                 logger.warning(f"OrderID mismatch: expected {order_id}, got {orderid_from_response}")
-            if response_amount != expected_amount:
+            if not _amounts_match(response_amount, expected_amount):
                 logger.warning(f"Amount mismatch: expected {expected_amount}, got {response_amount}")
 
         return False, None
@@ -159,16 +185,16 @@ async def fetch_bharatpe_transactions() -> list:
     )
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                url,
-                headers={"token": token},
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
-                result = await resp.json()
-                transactions = result.get("data", {}).get("transactions", [])
-                logger.info(f"BharatPe fetched {len(transactions)} transactions")
-                return transactions
+        session = await _get_session()
+        async with session.get(
+            url,
+            headers={"token": token},
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as resp:
+            result = await resp.json()
+            transactions = result.get("data", {}).get("transactions", [])
+            logger.info(f"BharatPe fetched {len(transactions)} transactions")
+            return transactions
     except Exception as e:
         logger.error(f"BharatPe fetch failed: {e}")
         return []
@@ -193,7 +219,7 @@ async def verify_bharatpe_utr(utr: str, expected_amount: float) -> tuple[bool, d
         if bank_ref == utr:
             amount = float(txn.get("amount", 0))
 
-            if amount != expected_amount:
+            if not _amounts_match(amount, expected_amount):
                 logger.warning(
                     f"BharatPe UTR {utr}: amount mismatch "
                     f"(expected {expected_amount}, got {amount})"

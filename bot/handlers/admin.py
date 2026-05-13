@@ -34,7 +34,6 @@ class AdminStates(StatesGroup):
     add_description = State()
     add_original_price = State()
     add_discounted_price = State()
-    add_discounted_price = State()
     add_coupon_codes = State()     # ask for coupon codes directly after price
     # Edit fields
     edit_field_value = State()

@@ -18,6 +18,7 @@ from aiogram import Bot
 
 from bot.config import Config
 from bot.database import queries as db
+from bot.database.connection import wait_for_db
 from bot.services.order_service import complete_order, expire_orders
 from bot.payments.verifier import check_upi_status, verify_payment, is_payment_failed
 from bot.utils.helpers import escape_md
@@ -34,6 +35,14 @@ async def poll_payment_status(bot: Bot):
         f"Payment polling service started. "
         f"Interval={Config.POLL_INTERVAL}s, Timeout={Config.PAYMENT_TIMEOUT}s"
     )
+
+    # ── Wait for database to be ready before starting ──
+    try:
+        await wait_for_db(timeout=60)
+        logger.info("Payment polling: database is ready, starting poll loop.")
+    except RuntimeError as e:
+        logger.error(f"Payment polling: {e}. Polling will NOT start.")
+        return
 
     while True:
         try:

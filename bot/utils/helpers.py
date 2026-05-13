@@ -61,8 +61,56 @@ def escape_md(text: str) -> str:
 
     Per Telegram API docs, these characters must be escaped:
     _ * [ ] ( ) ~ ` > # + - = | { } . !
+    
+    Also handles the double-escape case: if text already has \\., 
+    we don't want to produce \\\\.
     """
+    if not isinstance(text, str):
+        text = str(text)
     special = r"_*[]()~`>#+-=|{}.!"
+    # Remove existing escapes first to prevent double-escaping
+    for ch in special:
+        text = text.replace(f"\\{ch}", ch)
     for ch in special:
         text = text.replace(ch, f"\\{ch}")
     return text
+
+
+async def safe_send_message(target, text: str, parse_mode: str = "MarkdownV2", **kwargs):
+    """Send a message with MarkdownV2, falling back to plain text on parse error.
+    
+    Works with both Message and Bot objects:
+    - Message.answer(...)
+    - Bot.send_message(chat_id, ...)
+    
+    Args:
+        target: A Message object (uses .answer) or a tuple of (Bot, chat_id)
+        text: Message text
+        parse_mode: Parse mode to try first
+        **kwargs: Additional kwargs passed to the send method
+    """
+    from aiogram import types, Bot
+    import re
+    
+    try:
+        if isinstance(target, types.Message):
+            return await target.answer(text, parse_mode=parse_mode, **kwargs)
+        elif isinstance(target, tuple) and len(target) == 2:
+            bot, chat_id = target
+            return await bot.send_message(chat_id, text, parse_mode=parse_mode, **kwargs)
+    except Exception as e:
+        error_str = str(e).lower()
+        if "parse" in error_str or "can't" in error_str or "markdown" in error_str:
+            # Strip all markdown formatting and retry as plain text
+            plain = re.sub(r'\\(.)', r'\1', text)      # remove escapes
+            plain = re.sub(r'[*_`~]', '', plain)        # remove formatting chars
+            try:
+                if isinstance(target, types.Message):
+                    return await target.answer(plain, parse_mode=None, **kwargs)
+                elif isinstance(target, tuple) and len(target) == 2:
+                    bot, chat_id = target
+                    return await bot.send_message(chat_id, plain, parse_mode=None, **kwargs)
+            except Exception:
+                pass  # Even plain text failed — nothing we can do
+        raise  # Re-raise non-parse errors
+

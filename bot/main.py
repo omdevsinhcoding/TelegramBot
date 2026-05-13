@@ -12,6 +12,7 @@ from aiogram.enums import ParseMode
 from bot.config import Config
 from bot.database.connection import init_db, close_db
 from bot.services.payment_service import poll_payment_status
+from bot.payments.verifier import close_http_session
 from bot.utils.logger import logger
 
 # Import routers
@@ -36,6 +37,7 @@ async def on_startup(bot: Bot):
 
 async def on_shutdown(bot: Bot):
     """Runs on bot shutdown."""
+    await close_http_session()
     await close_db()
     logger.info("Bot shutdown complete.")
 

@@ -194,8 +194,8 @@ async def cb_pay_bharatpe(callback: types.CallbackQuery, state: FSMContext):
     if qr_path and os.path.exists(qr_path):
         photo = FSInputFile(qr_path)
     else:
-        # Fallback — try from project root
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # Fallback — try from project root (handlers/ -> bot/ -> TelegramBot/)
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         fallback = os.path.join(project_root, "bharatpe_qr.png")
         if os.path.exists(fallback):
             photo = FSInputFile(fallback)

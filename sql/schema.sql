@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS orders (
     paid_at         TIMESTAMPTZ,
     delivered_at    TIMESTAMPTZ,
     expires_at      TIMESTAMPTZ,                   -- payment timeout
+    qr_message_id   BIGINT,                        -- Telegram message ID of QR code
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
