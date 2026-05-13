@@ -12,6 +12,11 @@ from bot.config import Config
 from bot.utils.helpers import escape_md, format_currency
 from bot.utils.decorators import error_handler
 from bot.keyboards.common import back_button
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import StatesGroup, State
+
+class ReferralStates(StatesGroup):
+    enter_referral_code = State()
 
 router = Router()
 
@@ -94,6 +99,12 @@ async def text_refer_earn(message: types.Message):
     )
 
     buttons = []
+    
+    # Allow manual entry if no referrer
+    referrer = await db.get_referrer_of(user_id)
+    if not referrer:
+        buttons.append([InlineKeyboardButton(text="🔗 Enter Referral Code", callback_data="ref_enter_code")])
+
     if mode == "code_reward":
         # Check if user has claimable rewards
         claimable = await db.get_claimable_rewards(user_id, ref_count)
@@ -236,3 +247,37 @@ async def process_referral_on_purchase(user_id: int, order_amount: float):
                 "WHERE referrer_id = $1 AND referred_id = $2",
                 referrer_id, user_id, commission
             )
+
+
+@router.callback_query(F.data == "ref_enter_code")
+@error_handler
+async def cb_ref_enter_code(callback: types.CallbackQuery, state: FSMContext):
+    await state.set_state(ReferralStates.enter_referral_code)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
+    await callback.message.edit_text(
+        "🔗 *Enter Referral Code*\n\nSend the code of the user who invited you:",
+        parse_mode="MarkdownV2", reply_markup=kb
+    )
+    await callback.answer()
+
+
+@router.message(ReferralStates.enter_referral_code)
+@error_handler
+async def msg_ref_enter_code(message: types.Message, state: FSMContext):
+    code = message.text.strip()
+    referrer_id = await db.get_user_by_referral_code(code)
+    
+    if not referrer_id:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
+        await message.answer("❌ Invalid referral code. Please try again or go back.", reply_markup=kb)
+        return
+        
+    if referrer_id == message.from_user.id:
+        await message.answer("❌ You cannot use your own referral code.")
+        return
+    
+    await db.set_user_referrer(message.from_user.id, referrer_id)
+    await state.clear()
+    
+    await message.answer("✅ Referral code applied successfully!")
+    await text_refer_earn(message)

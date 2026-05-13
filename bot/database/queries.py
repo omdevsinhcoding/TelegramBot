@@ -77,12 +77,12 @@ async def get_wallet_history(telegram_id: int, limit: int = 10):
 # ── COUPON QUERIES ────────────────────────────────────────
 
 async def create_coupon(title: str, description: str, original_price: float,
-                         discounted_price: float, stock: int, category: str = None):
+                         discounted_price: float, stock: int):
     pool = await get_pool()
     row = await pool.fetchrow("""
-        INSERT INTO coupons (title, description, original_price, discounted_price, stock, category)
-        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
-    """, title, description, original_price, discounted_price, stock, category)
+        INSERT INTO coupons (title, description, original_price, discounted_price, stock)
+        VALUES ($1, $2, $3, $4, $5) RETURNING id
+    """, title, description, original_price, discounted_price, stock)
     return row["id"]
 
 
@@ -694,3 +694,9 @@ async def get_referrer_of(telegram_id: int):
             "SELECT * FROM users WHERE telegram_id = $1", row["referred_by"]
         )
     return None
+
+async def get_user_by_referral_code(code: str):
+    """Get user ID by their referral code."""
+    pool = await get_pool()
+    row = await pool.fetchrow("SELECT telegram_id FROM users WHERE referral_code = $1", code)
+    return row["telegram_id"] if row else None
