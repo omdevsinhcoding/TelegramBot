@@ -48,29 +48,37 @@ async def create_purchase_order(user_id: int, coupon_id: int, amount: float,
 
 
 async def complete_order(order_id: str, txn_ref: str, user_id: int) -> bool:
-    """Mark order as paid and deliver coupon. Returns True on success."""
+    """Mark order as paid and deliver coupon(s). Returns True on success."""
     order = await db.get_order(order_id)
     if not order or order["status"] != "pending":
         logger.warning(f"Cannot complete order {order_id}: invalid status")
         return False
 
-    # Reduce stock atomically
-    stock_ok = await db.reduce_stock(order["coupon_id"])
-    if not stock_ok:
-        logger.warning(f"Stock reduction failed for coupon {order['coupon_id']}")
-        return False
+    qty = order.get("quantity", 1) or 1
+
+    # Reduce stock atomically for each unit
+    for _ in range(qty):
+        stock_ok = await db.reduce_stock(order["coupon_id"])
+        if not stock_ok:
+            logger.warning(f"Stock reduction failed for coupon {order['coupon_id']}")
+            break
 
     # Mark order paid
     await db.update_order_status(order_id, "paid", txn_ref)
     await db.update_transaction(txn_ref, "success")
 
-    # Try to deliver a coupon code
-    code_row = await db.get_available_code(order["coupon_id"])
-    if code_row:
-        await db.mark_code_sold(code_row["id"], user_id, order_id)
+    # Try to deliver coupon codes (one per qty)
+    delivered = 0
+    for _ in range(qty):
+        code_row = await db.get_available_code(order["coupon_id"])
+        if code_row:
+            await db.mark_code_sold(code_row["id"], user_id, order_id)
+            delivered += 1
+
+    if delivered > 0:
         await db.update_order_status(order_id, "delivered")
 
-    logger.info(f"Order completed: {order_id}")
+    logger.info(f"Order completed: {order_id}, delivered {delivered}/{qty} codes")
     return True
 
 
@@ -95,9 +103,22 @@ async def get_user_order_history(user_id: int, limit: int = 10) -> list:
 
 
 async def get_delivered_code(order_id: str, coupon_id: int):
-    """Get the coupon code that was delivered for this order."""
+    """Get the coupon code that was delivered for this order (returns first code)."""
     pool = await db.get_pool()
     return await pool.fetchrow(
-        "SELECT code FROM coupon_codes WHERE order_id = $1 AND coupon_id = $2 AND is_sold = TRUE",
+        "SELECT code FROM coupon_codes WHERE order_id = $1 AND coupon_id = $2 AND is_sold = TRUE LIMIT 1",
         order_id, coupon_id
     )
+
+
+async def get_all_delivered_codes(order_id: str) -> list:
+    """Get ALL coupon codes delivered for this order."""
+    pool = await db.get_pool()
+    rows = await pool.fetch(
+        "SELECT code FROM coupon_codes WHERE order_id = $1 AND is_sold = TRUE",
+        order_id
+    )
+    return [r["code"] for r in rows]
+
+
+

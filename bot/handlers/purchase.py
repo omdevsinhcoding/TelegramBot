@@ -21,7 +21,8 @@ from aiogram.fsm.state import StatesGroup, State
 
 from bot.services.coupon_service import get_coupon_detail
 from bot.services.order_service import (
-    create_purchase_order, cancel_order, get_delivered_code
+    create_purchase_order, cancel_order, get_delivered_code,
+    get_all_delivered_codes,
 )
 from bot.payments.upi import generate_upi_intent_url, create_qr_buffer
 from bot.payments.verifier import check_upi_status, verify_payment, verify_bharatpe_utr
@@ -35,6 +36,42 @@ from bot.utils.logger import logger
 
 router = Router()
 
+
+async def _build_success_message(order_id: str, coupon_id: int, amount: float, utr: str = "") -> str:
+    """Build an attractive payment success message with all delivered coupon codes."""
+    coupon = await get_coupon_detail(coupon_id)
+    codes = await get_all_delivered_codes(order_id)
+
+    coupon_title = escape_md(coupon["title"]) if coupon else "Coupon"
+    amt = escape_md(format_currency(amount))
+    oid = escape_md(order_id)
+
+    # Build codes section
+    if codes:
+        if len(codes) == 1:
+            codes_section = f"\n🔑 *Your Coupon Code:*\n`{escape_md(codes[0])}`"
+        else:
+            codes_list = "\n".join(f"`{escape_md(c)}`" for c in codes)
+            codes_section = f"\n🔑 *Your Coupon Codes \\({len(codes)}\\):*\n{codes_list}"
+    else:
+        codes_section = "\n⚠️ _Codes will be available in your order history_"
+
+    utr_line = f"🔢 *UTR:* `{escape_md(utr)}`\n" if utr else ""
+
+    text = (
+        f"🎉 *PAYMENT SUCCESSFUL\\!* 🎉\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🛍️ *Item:* {coupon_title}\n"
+        f"💸 *Amount Paid:* {amt}\n"
+        f"📦 *Order ID:* `{oid}`\n"
+        f"{utr_line}"
+        f"{codes_section}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"💾 *Save your Order ID:*\n"
+        f"`{oid}`\n\n"
+        f"🎊 *Thank you for your purchase\\! Enjoy\\!* 🎊"
+    )
+    return text
 
 # ── FSM States for BharatPe UTR Entry ────────────────────
 class BharatPeStates(StatesGroup):
@@ -413,29 +450,7 @@ async def msg_bharatpe_utr(message: types.Message, state: FSMContext):
         success = await complete_order(order_id, txn_ref, message.from_user.id)
 
         if success:
-            coupon = await get_coupon_detail(coupon_id)
-            code_row = await get_delivered_code(order_id, coupon_id)
-            code_text = ""
-            if code_row:
-                code_val = escape_md(code_row["code"])
-                code_text = f"\n\n🔑 Your coupon code:\n`{code_val}`"
-
-            coupon_title = escape_md(coupon["title"]) if coupon else "Coupon"
-            amt = escape_md(format_currency(amount))
-            oid = escape_md(order_id)
-            utr_esc = escape_md(utr)
-
-            text = (
-                f"🎉 *WOOHOO\\! PAYMENT SUCCESSFUL\\!* 🎉\n\n"
-                f"🛍️ *Item:* {coupon_title}\n"
-                f"💸 *Amount Paid:* {amt}\n"
-                f"📦 *Order ID:* `{oid}`\n"
-                f"🔢 *UTR:* `{utr_esc}`\n"
-                f"{code_text}\n\n"
-                f"💾 *Please save your Order ID for future reference:*\n"
-                f"`{oid}`\n\n"
-                f"🎊 *Thank you for your purchase\\! Enjoy\\!* 🎊"
-            )
+            text = await _build_success_message(order_id, coupon_id, amount, utr)
 
             try:
                 await checking_msg.delete()
@@ -500,27 +515,7 @@ async def cb_check_payment(callback: types.CallbackQuery):
 
     # Already completed
     if order["status"] in ("paid", "delivered"):
-        coupon = await get_coupon_detail(order["coupon_id"])
-        code_row = await get_delivered_code(order_id, order["coupon_id"])
-        code_text = ""
-        if code_row:
-            code_val = escape_md(code_row["code"])
-            code_text = f"\n\n🔑 Code: `{code_val}`"
-
-        coupon_title = escape_md(coupon["title"]) if coupon else "Coupon"
-        amt = escape_md(format_currency(float(order["amount"])))
-        oid = escape_md(order_id)
-
-        text = (
-            f"🎉 *WOOHOO\\! PAYMENT SUCCESSFUL\\!* 🎉\n\n"
-            f"🛍️ *Item:* {coupon_title}\n"
-            f"💸 *Amount Paid:* {amt}\n"
-            f"📦 *Order ID:* `{oid}`\n"
-            f"{code_text}\n\n"
-            f"💾 *Please save your Order ID for future reference:*\n"
-            f"`{oid}`\n\n"
-            f"🎊 *Thank you for your purchase\\! Enjoy\\!* 🎊"
-        )
+        text = await _build_success_message(order_id, order["coupon_id"], float(order["amount"]))
 
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
         
@@ -762,29 +757,125 @@ async def cb_my_orders(callback: types.CallbackQuery):
 
     if not orders:
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
-        await callback.message.edit_text(
-            "📦 *My Orders*\n\nNo orders yet\\.",
-            parse_mode="MarkdownV2", reply_markup=kb,
-        )
+        try:
+            await callback.message.edit_text(
+                "📦 *My Orders*\n\nNo orders yet\\.",
+                parse_mode="MarkdownV2", reply_markup=kb,
+            )
+        except Exception:
+            await callback.message.answer(
+                "📦 *My Orders*\n\nNo orders yet\\.",
+                parse_mode="MarkdownV2", reply_markup=kb,
+            )
         await callback.answer()
         return
 
-    status_emoji = {
-        "pending": "🟡", "paid": "🟢", "delivered": "✅",
-        "expired": "⏰", "cancelled": "❌", "refunded": "🔄"
-    }
+    # Build attractive order history
+    lines = [
+        "━━━━━━━━━━━━━━━━━━━━",
+        "📦 *ORDER HISTORY*",
+        "",
+        f"📊 Total: {len(orders)} orders",
+    ]
 
-    lines = ["📦 *My Orders*\n"]
-    for o in orders:
-        emoji = status_emoji.get(o["status"], "❓")
-        amt = escape_md(format_currency(float(o["amount"])))
-        oid = escape_md(o["order_id"])
-        st = escape_md(o["status"])
-        lines.append(
-            f"{emoji} `{oid}` — {amt} \\({st}\\)"
-        )
+    buttons = []
+    pool = await db.get_pool()
+
+    for i, o in enumerate(orders):
+        num = len(orders) - i
+        oid = o["order_id"]
+
+        # Get coupon title
+        coupon_row = await pool.fetchrow("SELECT title FROM coupons WHERE id = $1", o["coupon_id"])
+        coupon_title = coupon_row["title"] if coupon_row else "Unknown"
+
+        # Get code count for this order
+        code_count = await pool.fetchval(
+            "SELECT COUNT(*) FROM coupon_codes WHERE order_id = $1 AND is_sold = TRUE", oid
+        ) or 0
+
+        # Status emoji
+        status_map = {"delivered": "✅", "paid": "🟢", "pending": "🟡", "expired": "❌", "cancelled": "❌"}
+        s_emoji = status_map.get(o["status"], "❓")
+
+        amt = f"₹{float(o['amount']):.1f}"
+        qty = o.get("quantity", 1) or 1
+
+        # Format date
+        created = o["created_at"]
+        date_str = created.strftime("%Y-%m-%d %H:%M:%S") if created else ""
+
+        oid_esc = escape_md(oid)
+        title_esc = escape_md(coupon_title)
+        amt_esc = escape_md(amt)
+        date_esc = escape_md(date_str)
+
+        lines.append(f"\n━━━━ \\#*{num}* ━━━━")
+        lines.append(f"🏷️ {title_esc}")
+        lines.append(f"🕐 {date_esc}")
+        lines.append(f"🛍️ Qty: {qty} • 💰 {amt_esc}")
+        lines.append(f"🆔 `{oid_esc}`")
+        if code_count > 0:
+            lines.append(f"📦 {code_count} coupon\\(s\\)")
+        lines.append(f"Status: {s_emoji} {escape_md(o['status'])}")
+
+        # Add View Codes button for delivered/paid orders
+        if o["status"] in ("delivered", "paid") and code_count > 0:
+            buttons.append([
+                InlineKeyboardButton(
+                    text=f"📋 #{num} View Codes",
+                    callback_data=f"view_codes:{oid}"
+                )
+            ])
 
     text = "\n".join(lines)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
-    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    buttons.append([back_button("back_home")])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    try:
+        await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    except Exception:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        await callback.message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("view_codes:"))
+@error_handler
+async def cb_view_codes(callback: types.CallbackQuery):
+    """View coupon codes for a specific order."""
+    order_id = callback.data.split(":")[1]
+
+    pool = await db.get_pool()
+    codes = await pool.fetch(
+        "SELECT code FROM coupon_codes WHERE order_id = $1 AND is_sold = TRUE", order_id
+    )
+
+    if not codes:
+        await callback.answer("No codes found for this order.", show_alert=True)
+        return
+
+    oid_esc = escape_md(order_id)
+    lines = [
+        f"🔑 *Codes for Order* `{oid_esc}`\n",
+        "━━━━━━━━━━━━━━━━━━━━",
+    ]
+    for i, c in enumerate(codes, 1):
+        code_esc = escape_md(c["code"])
+        lines.append(f"{i}\\. `{code_esc}`")
+
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
+    lines.append(f"\n_💾 Save these codes\\!_")
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀️ Back to Orders", callback_data="my_orders")],
+        [back_button("back_home")],
+    ])
+    await callback.message.edit_text("\n".join(lines), parse_mode="MarkdownV2", reply_markup=kb)
+    await callback.answer()
+
+
+

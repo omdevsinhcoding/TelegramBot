@@ -67,17 +67,24 @@ def admin_giveaways_kb(giveaways: list) -> InlineKeyboardMarkup:
     buttons = []
     for g in giveaways:
         status = "🟢" if g["is_active"] else "🔴"
-        claimed = g["claimed_count"]
-        max_c = g["max_claims"] if g["max_claims"] > 0 else "∞"
+        total = g.get("total_codes", 0)
+        unclaimed = g.get("unclaimed_codes", 0)
         buttons.append([
             InlineKeyboardButton(
-                text=f"{status} {g['title']} ({claimed}/{max_c} claimed)",
+                text=f"{status} {g['title']} ({unclaimed}/{total} left)",
                 callback_data=f"admin_giveaway_view:{g['id']}"
             )
         ])
     buttons.append([
         InlineKeyboardButton(text="➕ Add New Giveaway", callback_data="admin_giveaway_add")
     ])
+    # Disable all button
+    if giveaways:
+        any_active = any(g["is_active"] for g in giveaways)
+        toggle_all_text = "🔴 Disable All Giveaways" if any_active else "🟢 Enable All Giveaways"
+        buttons.append([
+            InlineKeyboardButton(text=toggle_all_text, callback_data="admin_giveaway_toggle_all")
+        ])
     buttons.append([back_button("admin_panel")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 

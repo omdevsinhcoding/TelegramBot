@@ -42,6 +42,7 @@ class AdminStates(StatesGroup):
     add_codes_input = State()
     # Broadcast
     broadcast_message = State()
+    broadcast_buttons = State()
     # Giveaway flow
     giveaway_title = State()
     giveaway_code = State()
@@ -559,58 +560,190 @@ async def cb_admin_logs(callback: types.CallbackQuery):
 @admin_only
 @error_handler
 async def cb_broadcast(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.edit_text(
-        "📢 *Broadcast*\n\nSend the message you want to broadcast to all users:",
-        parse_mode="MarkdownV2",
+    await state.clear()
+    text = (
+        "📢 *Broadcast*\n\n"
+        "Send me what you want to broadcast:\n\n"
+        "📝 *Text* — Just type a message\n"
+        "📸 *Photo* — Send an image \\(with optional caption\\)\n"
+        "📎 *File* — Send any document\n\n"
+        "_You can add inline buttons in the next step_"
     )
+    await callback.message.edit_text(text, parse_mode="MarkdownV2")
     await state.set_state(AdminStates.broadcast_message)
     await callback.answer()
 
 
 @router.message(AdminStates.broadcast_message)
 @error_handler
-async def msg_broadcast(message: types.Message, state: FSMContext):
+async def msg_broadcast_content(message: types.Message, state: FSMContext):
+    """Receive broadcast content (text, photo, or document)."""
+    bc_data = {}
+
+    if message.photo:
+        bc_data["type"] = "photo"
+        bc_data["file_id"] = message.photo[-1].file_id
+        bc_data["caption"] = message.caption or ""
+    elif message.document:
+        bc_data["type"] = "document"
+        bc_data["file_id"] = message.document.file_id
+        bc_data["caption"] = message.caption or ""
+    elif message.video:
+        bc_data["type"] = "video"
+        bc_data["file_id"] = message.video.file_id
+        bc_data["caption"] = message.caption or ""
+    elif message.text:
+        bc_data["type"] = "text"
+        bc_data["text"] = message.text.strip()
+    else:
+        await message.answer("⚠️ Unsupported content type. Send text, photo, or file.")
+        return
+
+    await state.update_data(bc_data=bc_data)
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📤 Send Now (No Buttons)", callback_data="bc_send_now")],
+        [InlineKeyboardButton(text="➕ Add Inline Buttons", callback_data="bc_add_buttons")],
+        [InlineKeyboardButton(text="❌ Cancel", callback_data="admin_panel")],
+    ])
+    await message.answer(
+        "✅ Content received\\!\n\n"
+        "Do you want to add inline buttons to this broadcast?",
+        parse_mode="MarkdownV2", reply_markup=kb,
+    )
+
+
+@router.callback_query(F.data == "bc_add_buttons")
+@admin_only
+@error_handler
+async def cb_bc_add_buttons(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.edit_text(
+        "➕ *Add Inline Buttons*\n\n"
+        "Send buttons in this format \\(one per line\\):\n"
+        "`Button Text \\| https://link\\.com`\n\n"
+        "Example:\n"
+        "`Join Channel \\| https://t\\.me/channel`\n"
+        "`Visit Website \\| https://example\\.com`\n\n"
+        "_Send them now:_",
+        parse_mode="MarkdownV2",
+    )
+    await state.set_state(AdminStates.broadcast_buttons)
+    await callback.answer()
+
+
+@router.message(AdminStates.broadcast_buttons)
+@error_handler
+async def msg_broadcast_buttons(message: types.Message, state: FSMContext):
+    """Parse button definitions and store them."""
+    if not message.text:
+        await message.answer("⚠️ Please send button definitions as text.")
+        return
+
+    buttons_data = []
+    for line in message.text.strip().splitlines():
+        line = line.strip()
+        if "|" in line:
+            parts = line.split("|", 1)
+            btn_text = parts[0].strip()
+            btn_url = parts[1].strip()
+            if btn_text and btn_url:
+                buttons_data.append({"text": btn_text, "url": btn_url})
+
+    if not buttons_data:
+        await message.answer(
+            "⚠️ No valid buttons found\\. Use format: `Button Text \\| URL`",
+            parse_mode="MarkdownV2",
+        )
+        return
+
+    await state.update_data(bc_buttons=buttons_data)
+
+    preview = "\n".join(f"• {b['text']} → {b['url']}" for b in buttons_data)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📤 Send Now", callback_data="bc_send_now")],
+        [InlineKeyboardButton(text="❌ Cancel", callback_data="admin_panel")],
+    ])
+    await message.answer(
+        f"✅ {len(buttons_data)} button(s) added:\n\n{preview}\n\nReady to send?",
+        reply_markup=kb,
+    )
+
+
+@router.callback_query(F.data == "bc_send_now")
+@admin_only
+@error_handler
+async def cb_bc_send_now(callback: types.CallbackQuery, state: FSMContext):
+    """Execute the broadcast to all users."""
+    data = await state.get_data()
     await state.clear()
 
-    # Handle None text (e.g. if user sends a sticker/photo instead of text)
-    if not message.text:
-        await message.answer("⚠️ Please send a text message for broadcast.")
+    bc_data = data.get("bc_data")
+    if not bc_data:
+        await callback.answer("No broadcast content found.", show_alert=True)
         return
 
-    text = message.text.strip()
-    if not text:
-        await message.answer("⚠️ Broadcast message cannot be empty.")
-        return
+    bc_buttons = data.get("bc_buttons", [])
 
-    # Use message.bot instead of DI-injected bot parameter
-    bot_instance = message.bot
+    # Build inline keyboard from buttons
+    reply_markup = None
+    if bc_buttons:
+        kb_buttons = []
+        for b in bc_buttons:
+            kb_buttons.append([InlineKeyboardButton(text=b["text"], url=b["url"])])
+        reply_markup = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
 
+    bot_instance = callback.message.bot
     users = await db.get_all_users()
     total = len(users)
-    bid = await db.create_broadcast(message.from_user.id, text, total)
-    await db.update_broadcast(bid, 0, 0, "running")
-    logger.info(f"Admin {message.from_user.id} started broadcast #{bid} to {total} users")
 
-    # Send progress message
-    progress_msg = await message.answer(
+    bc_text = bc_data.get("text") or bc_data.get("caption") or "(media)"
+    bid = await db.create_broadcast(callback.from_user.id, bc_text[:200], total)
+    await db.update_broadcast(bid, 0, 0, "running")
+    logger.info(f"Admin {callback.from_user.id} started broadcast #{bid} to {total} users")
+
+    progress_msg = await callback.message.edit_text(
         f"📢 Broadcasting to {total} users\\.\\.\\.",
         parse_mode="MarkdownV2",
     )
 
     sent = 0
     failed = 0
+    msg_type = bc_data["type"]
+
+    import asyncio
     for u in users:
         try:
-            await bot_instance.send_message(u["telegram_id"], text)
+            uid = u["telegram_id"]
+            if msg_type == "text":
+                await bot_instance.send_message(uid, bc_data["text"], reply_markup=reply_markup)
+            elif msg_type == "photo":
+                await bot_instance.send_photo(
+                    uid, bc_data["file_id"],
+                    caption=bc_data.get("caption"), reply_markup=reply_markup
+                )
+            elif msg_type == "document":
+                await bot_instance.send_document(
+                    uid, bc_data["file_id"],
+                    caption=bc_data.get("caption"), reply_markup=reply_markup
+                )
+            elif msg_type == "video":
+                await bot_instance.send_video(
+                    uid, bc_data["file_id"],
+                    caption=bc_data.get("caption"), reply_markup=reply_markup
+                )
             sent += 1
         except Exception as e:
             logger.debug(f"Broadcast to {u['telegram_id']} failed: {e}")
             failed += 1
 
+        # Rate limit: small delay every 20 messages
+        if (sent + failed) % 20 == 0:
+            await asyncio.sleep(1)
+
     await db.update_broadcast(bid, sent, failed, "completed")
     await db.add_admin_log(
-        message.from_user.id, "broadcast", None, str(bid),
-        f"Sent: {sent}, Failed: {failed}, Total: {total}"
+        callback.from_user.id, "broadcast", None, str(bid),
+        f"Type: {msg_type}, Sent: {sent}, Failed: {failed}, Total: {total}"
     )
     logger.info(f"Broadcast #{bid} completed: sent={sent}, failed={failed}, total={total}")
 
@@ -619,11 +752,18 @@ async def msg_broadcast(message: types.Message, state: FSMContext):
         await progress_msg.delete()
     except Exception:
         pass
-    await message.answer(
+    await callback.message.answer(
         f"📢 *Broadcast Complete*\n\n"
+        f"📊 Type: {msg_type}\n"
         f"✅ Sent: {sent}\n❌ Failed: {failed}\n📊 Total: {total}",
         parse_mode="MarkdownV2", reply_markup=kb,
     )
+
+
+
+
+
+
 
 
 # ── Giveaway Management (Multi-Code) ─────────────────────
