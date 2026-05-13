@@ -131,11 +131,13 @@ async def cb_buy_custom_qty(callback: types.CallbackQuery, state: FSMContext):
 
     await state.update_data(custom_qty_coupon_id=coupon_id)
     title = escape_md(coupon["title"])
+    price_str = escape_md(f"₹{coupon['discounted_price']}")
+    stock_str = escape_md(str(coupon["stock"]))
     await callback.message.edit_text(
         f"✏️ *Custom Quantity*\n\n"
         f"🏷️ {title}\n"
-        f"📦 Available: {coupon['stock']}\n"
-        f"💰 Price: ₹{coupon['discounted_price']}/unit\n\n"
+        f"📦 Available: {stock_str}\n"
+        f"💰 Price: {price_str}/unit\n\n"
         f"Enter the quantity you want to buy:",
         parse_mode="MarkdownV2",
     )

@@ -435,8 +435,14 @@ async def update_referral_settings(**kwargs):
 async def get_or_create_referral_code(user_id: int) -> str:
     pool = await get_pool()
     row = await pool.fetchrow("SELECT referral_code FROM users WHERE telegram_id = $1", user_id)
-    if row and row["referral_code"]: return row["referral_code"]
     import random, string
+    if row and row["referral_code"]:
+        code = row["referral_code"]
+        # Auto-migrate old format codes to new ERRORO- format
+        if not code.startswith("ERRORO-"):
+            code = "ERRORO-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
+            await pool.execute("UPDATE users SET referral_code = $2 WHERE telegram_id = $1", user_id, code)
+        return code
     code = "ERRORO-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
     await pool.execute("UPDATE users SET referral_code = $2 WHERE telegram_id = $1", user_id, code)
     return code

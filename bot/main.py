@@ -80,6 +80,29 @@ async def main():
 
     logger.info("Starting DreamX Coupon Bot...")
 
+    # Global error handler — catches ANY unhandled exception from any handler
+    # This ensures the bot NEVER crashes from handler errors
+    from aiogram.types import ErrorEvent
+
+    @dp.errors()
+    async def global_error_handler(event: ErrorEvent):
+        logger.error(f"UNHANDLED ERROR: {event.exception}", exc_info=event.exception)
+        # Try to notify the user
+        try:
+            update = event.update
+            if update.callback_query:
+                await update.callback_query.answer(
+                    "❌ Something went wrong. Please try again.",
+                    show_alert=True,
+                )
+            elif update.message:
+                await update.message.answer(
+                    "❌ An error occurred. Please try again later."
+                )
+        except Exception:
+            pass  # Can't even notify — just swallow
+        return True  # Prevent exception from propagating
+
     # Start polling — handle_signals=False is critical for AlwaysData hosting
     # where the process manager sends SIGTERM to stop the bot
     await dp.start_polling(

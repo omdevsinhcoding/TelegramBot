@@ -75,7 +75,7 @@ async def cb_coupon_detail(callback: types.CallbackQuery):
         f"🏷️ *{title}*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"💰 Price: {sale_price} / unit\n"
-        f"📦 Stock: {coupon['stock']} available\n\n"
+        f"📦 Stock: {escape_md(str(coupon['stock']))} available\n\n"
         f"🛍️ *Select Quantity:*"
     )
 

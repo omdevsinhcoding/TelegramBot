@@ -150,6 +150,23 @@ async def init_db() -> asyncpg.Pool:
         except Exception:
             pass
 
+        # Migrate old referral codes to new ERRORO-XXXXXXXX format
+        try:
+            import random, string
+            old_codes = await conn.fetch(
+                "SELECT telegram_id FROM users WHERE referral_code IS NOT NULL AND referral_code != '' AND referral_code NOT LIKE 'ERRORO-%'"
+            )
+            for row in old_codes:
+                new_code = "ERRORO-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
+                await conn.execute(
+                    "UPDATE users SET referral_code = $2 WHERE telegram_id = $1",
+                    row["telegram_id"], new_code
+                )
+            if old_codes:
+                logger.info(f"Migrated {len(old_codes)} old referral codes to ERRORO- format")
+        except Exception as e:
+            logger.warning(f"Referral code migration error (non-critical): {e}")
+
         # Free coupons / giveaway tables (multi-code)
         try:
             await conn.execute("""

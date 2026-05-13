@@ -127,7 +127,7 @@ async def cb_admin_coupon_edit(callback: types.CallbackQuery):
         f"💬 Desc: {desc}\n"
         f"💰 Original: {orig}\n"
         f"🔥 Sale: {sale}\n"
-        f"📦 Stock: {coupon['stock']}\n"
+        f"📦 Stock: {escape_md(str(coupon['stock']))}\n"
         f"Status: {status}"
     )
 
