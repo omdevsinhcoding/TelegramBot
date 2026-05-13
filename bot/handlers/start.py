@@ -4,7 +4,7 @@ Registers user, tracks referrals, and shows welcome screen.
 """
 
 from aiogram import Router, types
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 
 from bot.services.user_service import register_user
 from bot.keyboards.main_menu import main_menu_kb
@@ -77,3 +77,48 @@ async def cmd_start(message: types.Message):
         parse_mode="MarkdownV2",
         reply_markup=main_menu_kb(user.id),
     )
+
+
+@router.message(Command("id"))
+async def cmd_id(message: types.Message):
+    """Show Telegram IDs — works in private, groups, and channels."""
+    user = message.from_user
+    chat = message.chat
+
+    user_id = user.id if user else "Unknown"
+    user_name = escape_md(user.first_name or "Unknown") if user else "Unknown"
+
+    if chat.type == "private":
+        # Private chat — just user ID
+        text = (
+            f"🆔 *Your Telegram ID*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"👤 Name: *{user_name}*\n"
+            f"🔑 ID: `{user_id}`"
+        )
+    elif chat.type in ("group", "supergroup"):
+        # Group — show both group ID and user ID
+        group_name = escape_md(chat.title or "Unknown")
+        text = (
+            f"🆔 *Telegram IDs*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"👥 Group: *{group_name}*\n"
+            f"🔑 Group ID: `{chat.id}`\n\n"
+            f"👤 Your Name: *{user_name}*\n"
+            f"🔑 Your ID: `{user_id}`"
+        )
+    elif chat.type == "channel":
+        # Channel — show channel ID and user ID
+        ch_name = escape_md(chat.title or "Unknown")
+        text = (
+            f"🆔 *Telegram IDs*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📢 Channel: *{ch_name}*\n"
+            f"🔑 Channel ID: `{chat.id}`\n\n"
+            f"👤 Your Name: *{user_name}*\n"
+            f"🔑 Your ID: `{user_id}`"
+        )
+    else:
+        text = f"🔑 Chat ID: `{chat.id}`\n👤 Your ID: `{user_id}`"
+
+    await message.answer(text, parse_mode="MarkdownV2")
