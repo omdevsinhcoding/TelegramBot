@@ -178,12 +178,13 @@ CREATE INDEX IF NOT EXISTS idx_coupon_codes_coupon ON coupon_codes (coupon_id, i
 CREATE TABLE IF NOT EXISTS free_coupons (
     id              SERIAL PRIMARY KEY,
     title           VARCHAR(128) NOT NULL,
-    code            TEXT NOT NULL,
+    code            TEXT DEFAULT '',                -- legacy single-code field
     max_claims      INTEGER NOT NULL DEFAULT 0,    -- 0 = unlimited
     claimed_count   INTEGER NOT NULL DEFAULT 0,
     is_active       BOOLEAN DEFAULT TRUE,
     created_by      BIGINT NOT NULL,
-    created_at      TIMESTAMPTZ DEFAULT NOW()
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    codes_per_user  INTEGER DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS free_coupon_claims (
@@ -196,3 +197,18 @@ CREATE TABLE IF NOT EXISTS free_coupon_claims (
 
 CREATE INDEX IF NOT EXISTS idx_free_coupon_claims_user ON free_coupon_claims (user_id);
 CREATE INDEX IF NOT EXISTS idx_free_coupon_claims_coupon ON free_coupon_claims (free_coupon_id);
+
+-- ────────────────────────────────────────────────────────────
+-- 10. FREE COUPON CODES (multi-code giveaway inventory)
+-- ────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS free_coupon_codes (
+    id              SERIAL PRIMARY KEY,
+    free_coupon_id  INTEGER NOT NULL REFERENCES free_coupons(id) ON DELETE CASCADE,
+    code            TEXT NOT NULL,
+    is_claimed      BOOLEAN DEFAULT FALSE,
+    claimed_by      BIGINT,
+    claimed_at      TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_free_coupon_codes_coupon ON free_coupon_codes (free_coupon_id, is_claimed);

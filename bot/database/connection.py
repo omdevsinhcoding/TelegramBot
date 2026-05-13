@@ -159,6 +159,30 @@ async def init_db() -> asyncpg.Pool:
         except Exception:
             pass
 
+        # Fix free_coupons.code NOT NULL constraint (legacy)
+        try:
+            await conn.execute("ALTER TABLE free_coupons ALTER COLUMN code SET DEFAULT '';")
+            await conn.execute("ALTER TABLE free_coupons ALTER COLUMN code DROP NOT NULL;")
+            await conn.execute("ALTER TABLE free_coupons ADD COLUMN IF NOT EXISTS codes_per_user INTEGER DEFAULT 1;")
+        except Exception:
+            pass
+
+        # Ensure free_coupon_codes table exists (multi-code giveaway inventory)
+        try:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS free_coupon_codes (
+                    id SERIAL PRIMARY KEY,
+                    free_coupon_id INTEGER NOT NULL REFERENCES free_coupons(id) ON DELETE CASCADE,
+                    code TEXT NOT NULL,
+                    is_claimed BOOLEAN DEFAULT FALSE,
+                    claimed_by BIGINT,
+                    claimed_at TIMESTAMPTZ,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                );
+            """)
+        except Exception:
+            pass
+
         # Wallet balance column on users
         try:
             await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS wallet_balance NUMERIC(12,2) DEFAULT 0.00;")
