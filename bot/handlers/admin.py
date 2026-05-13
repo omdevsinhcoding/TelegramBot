@@ -72,26 +72,37 @@ class AdminStates(StatesGroup):
     ban_message_buttons_input = State()
 
 
-# ── Universal /cancel — works in ANY FSM state ───────────
+# ── Universal Cancel — inline ❌ button + /cancel fallback ──
+
+@router.callback_query(F.data == "admin_fsm_cancel")
+async def cb_admin_fsm_cancel(callback: types.CallbackQuery, state: FSMContext):
+    """Cancel any active admin FSM operation via inline ❌ button."""
+    await state.clear()
+    await callback.message.edit_text(
+        "❌ *Operation cancelled\\.*",
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [back_button("admin_panel")]
+        ]),
+    )
+    await callback.answer("Cancelled!")
+
 
 @router.message(Command("cancel"))
 async def cmd_cancel(message: types.Message, state: FSMContext):
-    """Cancel any active admin operation."""
+    """Fallback: cancel via /cancel command."""
     current = await state.get_state()
     if current is None:
         await message.answer("ℹ️ Nothing to cancel.")
         return
     await state.clear()
-    if Config.is_admin(message.from_user.id):
-        from bot.keyboards.admin_kb import admin_panel_kb
-        await message.answer(
-            "❌ *Operation cancelled\\.*\n\n"
-            "Returning to Admin Panel\\.\\.\\.",
-            parse_mode="MarkdownV2",
-            reply_markup=admin_panel_kb(),
-        )
-    else:
-        await message.answer("❌ Operation cancelled.")
+    await message.answer(
+        "❌ *Operation cancelled\\.*",
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [back_button("admin_panel")]
+        ]),
+    )
 
 
 # ── Admin Panel Entry ─────────────────────────────────────
@@ -173,9 +184,9 @@ async def cb_admin_coupon_edit(callback: types.CallbackQuery):
 @error_handler
 async def cb_add_coupon_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
-        "📝 *Step 1/6* — Enter the *coupon title*:\n\n"
-        "_Send /cancel to abort\\._",
+        "📝 *Step 1/6* — Enter the *coupon title*:",
         parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[admin_cancel_button()]]),
     )
     await state.set_state(AdminStates.add_title)
     await callback.answer()
@@ -749,9 +760,10 @@ async def cb_broadcast(callback: types.CallbackQuery, state: FSMContext):
         "📝 *Text* — Just type a message\n"
         "📸 *Photo* — Send an image \\(with optional caption\\)\n"
         "📎 *File* — Send any document\n\n"
-        "_You can add inline buttons in the next step_\n_Send /cancel to abort\\._"
+        "_You can add inline buttons in the next step_"
     )
-    await callback.message.edit_text(text, parse_mode="MarkdownV2")
+    await callback.message.edit_text(text, parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[admin_cancel_button()]]))
     await state.set_state(AdminStates.broadcast_message)
     await callback.answer()
 
@@ -1030,10 +1042,6 @@ async def cb_giveaway_add_start(callback: types.CallbackQuery, state: FSMContext
 @router.message(AdminStates.giveaway_title)
 @error_handler
 async def msg_giveaway_title(message: types.Message, state: FSMContext):
-    if message.text and message.text.strip() == "/cancel":
-        await state.clear()
-        await message.answer("❌ Cancelled.")
-        return
 
     title = message.text.strip() if message.text else ""
     if not title:
@@ -1044,9 +1052,9 @@ async def msg_giveaway_title(message: types.Message, state: FSMContext):
     await message.answer(
         f"✅ Title: *{escape_md(title)}*\n\n"
         f"🔢 *Step 2/3* — How many codes *per user*?\n"
-        f"\\(e\\.g\\. `1` \\= 1 code per user, `3` \\= 3 codes per user\\)\n\n"
-        f"_Send /cancel to abort\\._",
+        f"\\(e\\.g\\. `1` \\= 1 code per user, `3` \\= 3 codes per user\\)",
         parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[admin_cancel_button()]]),
     )
     await state.set_state(AdminStates.giveaway_code)
 
@@ -1054,10 +1062,6 @@ async def msg_giveaway_title(message: types.Message, state: FSMContext):
 @router.message(AdminStates.giveaway_code)
 @error_handler
 async def msg_giveaway_codes_per_user(message: types.Message, state: FSMContext):
-    if message.text and message.text.strip() == "/cancel":
-        await state.clear()
-        await message.answer("❌ Cancelled.")
-        return
 
     try:
         cpu = int(message.text.strip())
@@ -1170,15 +1174,16 @@ async def cb_giveaway_pick_coupon(callback: types.CallbackQuery, state: FSMConte
 @admin_only
 @error_handler
 async def cb_giveaway_src_manual(callback: types.CallbackQuery, state: FSMContext):
-    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_giveaways")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [admin_cancel_button()],
+    ])
     await callback.message.edit_text(
         "📝 *Paste Codes*\n\n"
         "Send coupon codes, *one per line*:\n\n"
         "Example:\n"
         "`CODE123`\n"
         "`CODE456`\n"
-        "`CODE789`\n\n"
-        "_Send /cancel to abort\\._",
+        "`CODE789`",
         parse_mode="MarkdownV2",
         reply_markup=kb,
     )
@@ -1190,10 +1195,6 @@ async def cb_giveaway_src_manual(callback: types.CallbackQuery, state: FSMContex
 @error_handler
 async def msg_giveaway_manual_codes(message: types.Message, state: FSMContext):
     """Receive manually pasted codes."""
-    if message.text and message.text.strip() == "/cancel":
-        await state.clear()
-        await message.answer("❌ Cancelled.")
-        return
 
     if not message.text:
         await message.answer("⚠️ Please send codes as text, one per line.")
@@ -1213,11 +1214,12 @@ async def msg_giveaway_manual_codes(message: types.Message, state: FSMContext):
 @admin_only
 @error_handler
 async def cb_giveaway_src_file(callback: types.CallbackQuery, state: FSMContext):
-    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_giveaways")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [admin_cancel_button()],
+    ])
     await callback.message.edit_text(
         "📄 *Upload File*\n\n"
-        "Send a *\\.txt file* with codes \\(one per line\\)\\.\n\n"
-        "_Send /cancel to abort\\._",
+        "Send a *\\.txt file* with codes \\(one per line\\)\\.",
         parse_mode="MarkdownV2",
         reply_markup=kb,
     )
@@ -1229,10 +1231,6 @@ async def cb_giveaway_src_file(callback: types.CallbackQuery, state: FSMContext)
 @error_handler
 async def msg_giveaway_codes_input(message: types.Message, state: FSMContext):
     """Receive codes from file upload."""
-    if message.text and message.text.strip() == "/cancel":
-        await state.clear()
-        await message.answer("❌ Cancelled.")
-        return
 
     codes = []
 
@@ -1354,10 +1352,9 @@ async def cb_giveaway_delete(callback: types.CallbackQuery):
 async def cb_giveaway_add_more_codes(callback: types.CallbackQuery, state: FSMContext):
     gid = int(callback.data.split(":")[1])
     await state.update_data(add_codes_giveaway_id=gid)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_giveaways")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[admin_cancel_button()]])
     await callback.message.edit_text(
-        "📄 Send more codes \\(one per line\\) or upload a \\.txt file:\n\n"
-        "_Send /cancel to abort\\._",
+        "📄 Send more codes \\(one per line\\) or upload a \\.txt file:",
         parse_mode="MarkdownV2",
         reply_markup=kb,
     )
@@ -1369,10 +1366,6 @@ async def cb_giveaway_add_more_codes(callback: types.CallbackQuery, state: FSMCo
 @error_handler
 async def msg_giveaway_add_more_codes(message: types.Message, state: FSMContext):
     """Receive additional codes for existing giveaway."""
-    if message.text and message.text.strip() == "/cancel":
-        await state.clear()
-        await message.answer("❌ Cancelled.")
-        return
 
     codes = []
     if message.document:
@@ -2456,9 +2449,9 @@ async def cb_admin_discl_edit_text(callback: types.CallbackQuery, state: FSMCont
     await callback.message.edit_text(
         "✏️ *Edit Disclaimer Text*\n\n"
         "Send the new disclaimer text\\.\n"
-        "Use plain text \\— formatting will be applied automatically\\.\n\n"
-        "_Send /cancel to abort\\._",
+        "Use plain text \\— formatting will be applied automatically\\.",
         parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[admin_cancel_button()]]),
     )
     await callback.answer()
 
@@ -2466,10 +2459,6 @@ async def cb_admin_discl_edit_text(callback: types.CallbackQuery, state: FSMCont
 @router.message(AdminStates.disclaimer_text_input)
 @error_handler
 async def msg_disclaimer_text(message: types.Message, state: FSMContext):
-    if message.text and message.text.strip() == "/cancel":
-        await state.clear()
-        await message.answer("❌ Cancelled.")
-        return
 
     text = message.text.strip() if message.text else ""
     await state.clear()
@@ -2498,9 +2487,9 @@ async def cb_admin_discl_edit_btns(callback: types.CallbackQuery, state: FSMCont
         "Example:\n"
         "`📺 Watch Video \\| https://t\\.me/channel/123`\n"
         "`💬 Support \\| https://t\\.me/supportbot`\n\n"
-        "Send *clear* to remove all buttons\\.\n"
-        "Send /cancel to abort\\.",
+        "Send *clear* to remove all buttons\\.",
         parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[admin_cancel_button()]]),
     )
     await callback.answer()
 
@@ -2510,10 +2499,6 @@ async def cb_admin_discl_edit_btns(callback: types.CallbackQuery, state: FSMCont
 async def msg_disclaimer_buttons(message: types.Message, state: FSMContext):
     import json
 
-    if message.text and message.text.strip() == "/cancel":
-        await state.clear()
-        await message.answer("❌ Cancelled.")
-        return
 
     text = message.text.strip() if message.text else ""
     await state.clear()
@@ -2617,9 +2602,9 @@ async def cb_admin_ban_msg_edit_text(callback: types.CallbackQuery, state: FSMCo
         "✏️ *Edit Ban Message*\n\n"
         "Send the message that banned users will see\\.\n"
         "Use plain text \\— formatting will be applied automatically\\.\n\n"
-        "💡 *Tip:* Include contact info or appeal instructions\\.\n\n"
-        "_Send /cancel to abort\\._",
+        "💡 *Tip:* Include contact info or appeal instructions\\.",
         parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[admin_cancel_button()]]),
     )
     await callback.answer()
 
@@ -2627,10 +2612,6 @@ async def cb_admin_ban_msg_edit_text(callback: types.CallbackQuery, state: FSMCo
 @router.message(AdminStates.ban_message_text_input)
 @error_handler
 async def msg_ban_message_text(message: types.Message, state: FSMContext):
-    if message.text and message.text.strip() == "/cancel":
-        await state.clear()
-        await message.answer("❌ Cancelled.")
-        return
 
     text = message.text.strip() if message.text else ""
     await state.clear()
@@ -2659,9 +2640,9 @@ async def cb_admin_ban_msg_edit_btns(callback: types.CallbackQuery, state: FSMCo
         "Example:\n"
         "`📩 Appeal Ban \\| https://t\\.me/supportbot`\n"
         "`📜 Rules \\| https://t\\.me/rules`\n\n"
-        "Send *clear* to remove all buttons\\.\n"
-        "Send /cancel to abort\\.",
+        "Send *clear* to remove all buttons\\.",
         parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[admin_cancel_button()]]),
     )
     await callback.answer()
 
@@ -2671,10 +2652,6 @@ async def cb_admin_ban_msg_edit_btns(callback: types.CallbackQuery, state: FSMCo
 async def msg_ban_message_buttons(message: types.Message, state: FSMContext):
     import json
 
-    if message.text and message.text.strip() == "/cancel":
-        await state.clear()
-        await message.answer("❌ Cancelled.")
-        return
 
     text = message.text.strip() if message.text else ""
     await state.clear()
