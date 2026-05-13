@@ -12,36 +12,25 @@ ITEMS_PER_PAGE = 8  # Max items before showing pagination
 def buying_menu_kb(coupons: list, free_coupon_count: int = 0, page: int = 0) -> InlineKeyboardMarkup:
     """Build the buying menu shown on /start or Buy Vouchers.
 
-    Shows a flat numbered list of all coupons with prices and stock.
+    Shows a flat list of all coupons with prices and stock — no numbering.
     Adds Free Coupons button at bottom, and paginates if needed.
     """
     buttons = []
 
-    # Build flat item list — all products numbered
-    all_items = []
-    for idx, c in enumerate(coupons, start=1):
-        all_items.append({
-            "idx": idx,
-            "coupon": c,
-        })
-
     # Pagination
-    total_items = len(all_items)
+    total_items = len(coupons)
     start = page * ITEMS_PER_PAGE
     end = start + ITEMS_PER_PAGE
-    page_items = all_items[start:end]
+    page_items = coupons[start:end]
 
-    for item in page_items:
-        c = item["coupon"]
-        idx_num = item["idx"]
+    for c in page_items:
         stock = c["stock"]
         disc = c.get("discounted_price", 0)
 
         if stock <= 0:
-            stock_label = "❌ Out"
-            label = f"{idx_num}. {c['title']} | ₹{disc} | {stock_label}"
+            label = f"🛍️ {c['title']} | ₹{disc} | ❌ Sold Out"
         else:
-            label = f"{idx_num}. {c['title']} | ₹{disc} | 📦 {stock}"
+            label = f"🛍️ {c['title']} | ₹{disc} | 📦 {stock}"
 
         buttons.append([
             InlineKeyboardButton(
@@ -114,10 +103,13 @@ def coupons_list_kb(coupons: list, page: int = 0) -> InlineKeyboardMarkup:
     page_items = coupons[start:end]
 
     for c in page_items:
-        stock_label = f"📦 {c['stock']}" if c["stock"] > 0 else "❌ Out"
+        if c["stock"] > 0:
+            stock_label = f"📦 {c['stock']}"
+        else:
+            stock_label = "❌ Sold Out"
         buttons.append([
             InlineKeyboardButton(
-                text=f"{c['title']} | ₹{c['discounted_price']} | {stock_label}",
+                text=f"🛍️ {c['title']} | ₹{c['discounted_price']} | {stock_label}",
                 callback_data=f"coupon_detail:{c['id']}" if c["stock"] > 0 else "noop"
             )
         ])

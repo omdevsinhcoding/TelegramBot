@@ -34,7 +34,12 @@ async def cb_browse(callback: types.CallbackQuery):
         await callback.answer()
         return
 
-    text = "🛒 *Available Coupons:*"
+    text = (
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "🛍️ *VOUCHER SHOP*\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "👉 *Select a product below:*"
+    )
     await callback.message.edit_text(
         text,
         parse_mode="MarkdownV2",

@@ -89,7 +89,12 @@ async def text_buy_vouchers(message: types.Message):
         )
         return
 
-    text = "📁 *Select a Category below:*"
+    text = (
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "🛍️ *VOUCHER SHOP*\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "👉 *Select a product below:*"
+    )
     await message.answer(
         text,
         parse_mode="MarkdownV2",
