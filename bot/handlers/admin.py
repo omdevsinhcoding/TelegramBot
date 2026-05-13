@@ -1895,11 +1895,14 @@ async def msg_admin_wallet_edit(message: types.Message, state: FSMContext):
         return
 
     await db.update_wallet_balance(user_id, new_balance)
-    await db.add_wallet_transaction(
-        user_id, delta, "admin_adjust",
-        bal_before=current, bal_after=new_balance,
-        description=f"Admin adjustment by {message.from_user.id}",
-    )
+    try:
+        await db.add_wallet_transaction(
+            user_id, delta, "admin_adjust",
+            bal_before=current, bal_after=new_balance,
+            description=f"Admin adjustment by {message.from_user.id}",
+        )
+    except Exception as e:
+        logger.warning(f"Wallet transaction log failed (non-critical): {e}")
 
     await state.clear()
 
@@ -1913,6 +1916,37 @@ async def msg_admin_wallet_edit(message: types.Message, state: FSMContext):
         f"💎 New Balance: *{escape_md(format_currency(new_balance))}*",
         parse_mode="MarkdownV2", reply_markup=kb,
     )
+
+    # Notify the user about wallet update
+    try:
+        delta_str = escape_md(format_currency(abs(delta)))
+        bal_str = escape_md(format_currency(new_balance))
+        if delta >= 0:
+            user_msg = (
+                f"🎉 *Reward Wallet Credited\\!*\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"💰 Amount Added: *\\+{delta_str}*\n"
+                f"💎 New Balance: *{bal_str}*\n\n"
+                f"You can use this balance to\n"
+                f"purchase coupons directly\\! 🛍️\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"🛒 Head to *Voucher Shop* to start shopping\\!"
+            )
+        else:
+            user_msg = (
+                f"📢 *Wallet Balance Updated*\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"➖ Amount Deducted: *{delta_str}*\n"
+                f"💎 Remaining Balance: *{bal_str}*\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"Contact support if you have questions\\."
+            )
+        await message.bot.send_message(
+            user_id, user_msg, parse_mode="MarkdownV2",
+        )
+    except Exception as e:
+        logger.warning(f"Could not notify user {user_id} about wallet update: {e}")
+
     logger.info(f"Admin {message.from_user.id} adjusted wallet for {user_id}: {delta:+.1f}, new={new_balance:.1f}")
 
 

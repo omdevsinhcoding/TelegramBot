@@ -268,10 +268,10 @@ async def cb_pay_wallet(callback: types.CallbackQuery):
     # Create order
     order_info = await create_purchase_order(user_id, coupon_id, amount, "wallet")
     order_id = order_info["order_id"]
-    txn_id = order_info["txn_id"]
+    txn_ref = order_info["txn_ref"]
 
     # Complete order — delivers codes + marks paid
-    success = await complete_order(order_id, txn_id, user_id)
+    success = await complete_order(order_id, txn_ref, user_id)
 
     if success:
         title = escape_md(coupon["title"])
