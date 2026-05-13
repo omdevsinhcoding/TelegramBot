@@ -35,6 +35,14 @@ async def get_user_count():
     return row["cnt"]
 
 
+async def get_total_stock():
+    """Get total available stock across all active coupons."""
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "SELECT COALESCE(SUM(stock), 0) as total FROM coupons WHERE is_active = TRUE"
+    )
+    return row["total"]
+
 async def ban_user(telegram_id: int, banned: bool = True):
     pool = await get_pool()
     await pool.execute("UPDATE users SET is_banned = $2 WHERE telegram_id = $1", telegram_id, banned)

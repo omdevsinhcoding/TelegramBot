@@ -59,21 +59,60 @@ async def cmd_start(message: types.Message):
     except Exception as e:
         logger.warning(f"Referral processing error (non-critical): {e}")
 
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    from bot.database import queries as db
+    from bot.config import Config
+
     first = escape_md(user.first_name or "there")
 
+    # Get dynamic data
+    try:
+        total_stock = await db.get_total_stock()
+    except Exception:
+        total_stock = 0
+
+    support_user = escape_md(Config.SUPPORT_USERNAME or "@support")
+
     welcome = (
-        f"🌟 *Welcome to DreamX Store\\!*\n\n"
-        f"Hey *{first}*\\! 👋\n\n"
-        f"🛍️ Browse exclusive coupons \\& deals\n"
-        f"💰 Direct UPI payments\n"
-        f"⚡ Instant payment verification\n"
-        f"🔒 Secure \\& verified transactions\n\n"
-        f"Use the buttons below to get started 👇"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"👋 *WELCOME, {first}\\!*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🚀 *Instant Delivery System*\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"✅ Verified Vouchers\n"
+        f"⚡ Auto Payment Verification\n"
+        f"📦 Available Stock: *{total_stock}* coupons\n"
+        f"🆘 Support: _{support_user}_\n"
+        f"━━━━━━━━━━━━━━━━━━"
         f"{referral_msg}"
     )
 
+    # Inline buttons that fly in
+    inline_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🛍️ Stock Status", callback_data="browse_coupons"),
+            InlineKeyboardButton(text="🛒 Buy Now", callback_data="browse_coupons"),
+        ],
+        [
+            InlineKeyboardButton(text="📁 My Orders", callback_data="my_orders"),
+            InlineKeyboardButton(text="🆘 Support", callback_data="show_support"),
+        ],
+        [
+            InlineKeyboardButton(text="🤝 Refer & Earn", callback_data="referral_menu"),
+            InlineKeyboardButton(text="📢 Join Channels", callback_data="show_channels"),
+        ],
+    ])
+
+    # Send welcome with inline buttons
     await message.answer(
         welcome,
+        parse_mode="MarkdownV2",
+        reply_markup=inline_kb,
+    )
+
+    # Send persistent reply keyboard
+    await message.answer(
+        "📋 *Quick Menu:*",
         parse_mode="MarkdownV2",
         reply_markup=main_menu_kb(user.id),
     )

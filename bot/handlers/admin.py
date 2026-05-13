@@ -1728,44 +1728,6 @@ async def cb_ref_reward_del(callback: types.CallbackQuery):
     await cb_admin_referral_settings(callback)
 
 
-# ── Stop Bot (Terminate Process) ─────────────────────────
-
-@router.callback_query(F.data == "admin_stop_bot")
-@admin_only
-@error_handler
-async def cb_admin_stop_bot(callback: types.CallbackQuery):
-    """Ask for confirmation before stopping the bot."""
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⛔ Yes, Stop Bot", callback_data="admin_stop_bot_confirm")],
-        [back_button("admin_panel")],
-    ])
-    await callback.message.edit_text(
-        "⚠️ *Stop Bot?*\n\n"
-        "This will *terminate the bot process*\\.\n"
-        "The bot will go offline until manually restarted\\.\n\n"
-        "Are you sure?",
-        parse_mode="MarkdownV2",
-        reply_markup=kb,
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "admin_stop_bot_confirm")
-@admin_only
-@error_handler
-async def cb_admin_stop_bot_confirm(callback: types.CallbackQuery):
-    """Terminate the bot process."""
-    import sys
-    logger.info(f"Bot stopped by admin {callback.from_user.id}")
-    await callback.message.edit_text(
-        "⛔ *Bot is shutting down\\.\\.\\.*\n\n"
-        "Goodbye\\! 👋",
-        parse_mode="MarkdownV2",
-    )
-    await callback.answer("Stopping bot...")
-    sys.exit(0)
-
-
 # ── Bot Settings ─────────────────────────────────────────
 
 @router.callback_query(F.data == "admin_bot_settings")
@@ -2490,13 +2452,13 @@ async def cb_admin_analytics(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# ── Disclaimer Management ────────────────────────────────
+# ── Support Settings ──────────────────────────────────────
 
 @router.callback_query(F.data == "admin_disclaimer")
 @admin_only
 @error_handler
 async def cb_admin_disclaimer(callback: types.CallbackQuery):
-    """Show current disclaimer and management options."""
+    """Show current support info and management options."""
     import json
     settings = await db.get_bot_settings()
     current_text = settings.get("disclaimer_text") or ""
@@ -2513,7 +2475,7 @@ async def cb_admin_disclaimer(callback: types.CallbackQuery):
         if len(current_text) > 200:
             preview += "\\.\\.\\."
     else:
-        preview = "_No disclaimer set \\— using default_"
+        preview = "_No support info set \\— using default_"
 
     btn_preview = ""
     if buttons_list:
@@ -2523,7 +2485,7 @@ async def cb_admin_disclaimer(callback: types.CallbackQuery):
         btn_preview = "\n📎 _No inline buttons_"
 
     text = (
-        f"📜 *Disclaimer Settings*\n"
+        f"🆘 *Support Settings*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"📝 *Current Text:*\n{preview}\n"
         f"{btn_preview}\n"
@@ -2545,8 +2507,8 @@ async def cb_admin_disclaimer(callback: types.CallbackQuery):
 async def cb_admin_discl_edit_text(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.disclaimer_text_input)
     await callback.message.edit_text(
-        "✏️ *Edit Disclaimer Text*\n\n"
-        "Send the new disclaimer text\\.\n"
+        "✏️ *Edit Support Info*\n\n"
+        "Send the new support text \\(e\\.g\\. username, contact info\\)\\.\n"
         "Use plain text \\— formatting will be applied automatically\\.",
         parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[admin_cancel_button()]]),
@@ -2567,7 +2529,7 @@ async def msg_disclaimer_text(message: types.Message, state: FSMContext):
 
     await db.update_bot_settings(disclaimer_text=text)
     await message.answer(
-        "✅ Disclaimer text updated\\!",
+        "✅ Support info updated\\!",
         parse_mode="MarkdownV2",
     )
     logger.info(f"Admin {message.from_user.id} updated disclaimer text")
@@ -2579,7 +2541,7 @@ async def msg_disclaimer_text(message: types.Message, state: FSMContext):
 async def cb_admin_discl_edit_btns(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.disclaimer_buttons_input)
     await callback.message.edit_text(
-        "📎 *Edit Disclaimer Buttons*\n\n"
+        "📎 *Edit Support Buttons*\n\n"
         "Send inline buttons, *one per line* in this format:\n\n"
         "`Button Text \\| https://example\\.com`\n\n"
         "Example:\n"
@@ -2603,7 +2565,7 @@ async def msg_disclaimer_buttons(message: types.Message, state: FSMContext):
 
     if text.lower() == "clear":
         await db.update_bot_settings(disclaimer_buttons="[]")
-        await message.answer("✅ All disclaimer buttons removed\\!", parse_mode="MarkdownV2")
+        await message.answer("✅ All support buttons removed\\!", parse_mode="MarkdownV2")
         return
 
     # Parse buttons

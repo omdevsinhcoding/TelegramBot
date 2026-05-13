@@ -30,7 +30,7 @@ def main_menu_kb(user_id: int) -> ReplyKeyboardMarkup:
         ],
         [
             KeyboardButton(text="🎁 Refer & Earn"),
-            KeyboardButton(text="⚠️ Disclaimer"),
+            KeyboardButton(text="🆘 Support"),
         ],
     ]
     if Config.is_admin(user_id):

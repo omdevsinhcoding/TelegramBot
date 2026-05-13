@@ -326,10 +326,10 @@ async def msg_recover_by_order_id(message: types.Message, state: FSMContext):
         )
 
 
-@router.message(F.text == "⚠️ Disclaimer")
+@router.message(F.text == "🆘 Support")
 @error_handler
-async def text_disclaimer(message: types.Message):
-    """Show bot disclaimer — dynamic from admin panel."""
+async def text_support(message: types.Message):
+    """Show support info — dynamic from admin panel."""
     import json
     from bot.database import queries as db
 
@@ -338,18 +338,18 @@ async def text_disclaimer(message: types.Message):
     buttons_json = settings.get("disclaimer_buttons") or "[]"
 
     if custom_text:
-        # Use admin-set disclaimer
-        text = f"⚠️ *Disclaimer*\n\n{escape_md(custom_text)}"
+        # Use admin-set support info
+        text = f"🆘 *Support*\n\n{escape_md(custom_text)}"
     else:
-        # Default disclaimer
+        # Default support message
         text = (
-            "⚠️ *Disclaimer*\n\n"
-            "• All coupons are sold as\\-is\\.\n"
-            "• Verify details before purchasing\\.\n"
-            "• No refunds once a coupon code is delivered\\.\n"
-            "• We are not responsible for expired or invalid codes\\.\n"
-            "• Contact support for any disputes\\.\n\n"
-            "By using this bot, you agree to these terms\\."
+            "🆘 *Support*\n\n"
+            "Need help? We're here for you\\!\n\n"
+            "📩 Contact us for any issues:\n"
+            "• Payment problems\n"
+            "• Missing coupons\n"
+            "• Account questions\n\n"
+            "_Use the buttons below to reach out\\._"
         )
 
     # Parse inline buttons
@@ -387,6 +387,98 @@ async def text_channels(message: types.Message):
         f"Follow us for exclusive discounts 🔥"
     )
     await message.answer(text, parse_mode="MarkdownV2")
+
+
+# ── Inline button callbacks (from /start welcome) ────────
+
+@router.callback_query(F.data == "show_support")
+@error_handler
+async def cb_show_support(callback: types.CallbackQuery):
+    """Show support info from inline button."""
+    import json
+    from bot.database import queries as db
+
+    settings = await db.get_bot_settings()
+    custom_text = settings.get("disclaimer_text") or ""
+    buttons_json = settings.get("disclaimer_buttons") or "[]"
+
+    if custom_text:
+        text = f"🆘 *Support*\n\n{escape_md(custom_text)}"
+    else:
+        text = (
+            "🆘 *Support*\n\n"
+            "Need help? We're here for you\\!\n\n"
+            "📩 Contact us for any issues:\n"
+            "• Payment problems\n"
+            "• Missing coupons\n"
+            "• Account questions\n\n"
+            "_Use the buttons below to reach out\\._"
+        )
+
+    try:
+        btn_list = json.loads(buttons_json)
+    except Exception:
+        btn_list = []
+
+    buttons = []
+    for b in btn_list:
+        try:
+            buttons.append([InlineKeyboardButton(text=b["text"], url=b["url"])])
+        except Exception:
+            pass
+
+    buttons.append([back_button("back_home")])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "show_channels")
+@error_handler
+async def cb_show_channels(callback: types.CallbackQuery):
+    """Show channels info from inline button."""
+    support = Config.SUPPORT_USERNAME
+    support_line = ""
+    if support:
+        support_line = f"\n💬 Support: @{escape_md(support)}"
+    text = (
+        f"📢 *Our Channels*\n\n"
+        f"Stay updated with latest deals \\& offers\\!{support_line}\n\n"
+        f"Follow us for exclusive discounts 🔥"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
+    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "referral_menu")
+@error_handler
+async def cb_referral_menu(callback: types.CallbackQuery):
+    """Show referral info from inline button."""
+    from bot.database import queries as db
+    settings = await db.get_referral_settings()
+
+    if not settings or not settings.get("is_active"):
+        await callback.answer("🎁 Referral program is currently inactive.", show_alert=True)
+        return
+
+    user = await db.get_user(callback.from_user.id)
+    ref_code = user.get("referral_code", "") if user else ""
+    ref_count = await db.get_referral_count(callback.from_user.id)
+
+    bot_info = await callback.bot.get_me()
+    ref_link = f"https://t.me/{bot_info.username}?start={ref_code}" if ref_code else "N/A"
+
+    text = (
+        f"🤝 *Refer \\& Earn*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"👥 Your Referrals: *{ref_count}*\n"
+        f"🔗 Your Link:\n`{escape_md(ref_link)}`\n\n"
+        f"Share your link to earn rewards\\!"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
+    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    await callback.answer()
 
 
 @router.message(F.text == "👑 Admin Panel")
