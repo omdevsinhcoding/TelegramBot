@@ -1078,7 +1078,7 @@ async def msg_giveaway_codes_per_user(message: types.Message, state: FSMContext)
         [InlineKeyboardButton(text="📦 Select from Existing Coupons", callback_data="giveaway_src_existing")],
         [InlineKeyboardButton(text="📝 Paste Codes Manually", callback_data="giveaway_src_manual")],
         [InlineKeyboardButton(text="📄 Upload .txt File", callback_data="giveaway_src_file")],
-        [back_button("admin_giveaways")],
+        [admin_cancel_button()],
     ]
     await message.answer(
         f"✅ Codes per user: *{cpu}*\n\n"
@@ -1087,6 +1087,33 @@ async def msg_giveaway_codes_per_user(message: types.Message, state: FSMContext)
         parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
     )
+
+
+# ── Step 3: Re-show method choices (back from sub-steps) ──
+
+@router.callback_query(F.data == "giveaway_step3")
+@admin_only
+@error_handler
+async def cb_giveaway_step3(callback: types.CallbackQuery, state: FSMContext):
+    """Go back to giveaway step 3 — choose code input method."""
+    data = await state.get_data()
+    cpu = data.get("codes_per_user", 1)
+    # Clear any sub-step FSM state, keep data
+    await state.set_state(None)
+    buttons = [
+        [InlineKeyboardButton(text="📦 Select from Existing Coupons", callback_data="giveaway_src_existing")],
+        [InlineKeyboardButton(text="📝 Paste Codes Manually", callback_data="giveaway_src_manual")],
+        [InlineKeyboardButton(text="📄 Upload .txt File", callback_data="giveaway_src_file")],
+        [admin_cancel_button()],
+    ]
+    await callback.message.edit_text(
+        f"📄 *Step 3/3* — How to add codes?\n"
+        f"Codes per user: *{cpu}*\n\n"
+        f"Choose a method below:",
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
+    await callback.answer()
 
 
 # ── Step 3A: Select from existing coupons ────────────────
@@ -1109,7 +1136,7 @@ async def cb_giveaway_src_existing(callback: types.CallbackQuery, state: FSMCont
             text=btn_text,
             callback_data=f"giveaway_pick_coupon:{c['id']}"
         )])
-    buttons.append([back_button("admin_giveaways")])
+    buttons.append([back_button("giveaway_step3")])
 
     await callback.message.edit_text(
         "📦 *Select a Coupon*\n\n"
@@ -1175,7 +1202,7 @@ async def cb_giveaway_pick_coupon(callback: types.CallbackQuery, state: FSMConte
 @error_handler
 async def cb_giveaway_src_manual(callback: types.CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [admin_cancel_button()],
+        [back_button("giveaway_step3"), admin_cancel_button()],
     ])
     await callback.message.edit_text(
         "📝 *Paste Codes*\n\n"
@@ -1215,7 +1242,7 @@ async def msg_giveaway_manual_codes(message: types.Message, state: FSMContext):
 @error_handler
 async def cb_giveaway_src_file(callback: types.CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [admin_cancel_button()],
+        [back_button("giveaway_step3"), admin_cancel_button()],
     ])
     await callback.message.edit_text(
         "📄 *Upload File*\n\n"
