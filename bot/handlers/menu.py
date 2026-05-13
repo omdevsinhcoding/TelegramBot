@@ -22,6 +22,43 @@ class RecoverStates(StatesGroup):
     waiting_order_id = State()
 
 
+# ── /id Command — works in private, group, and channel ────
+
+@router.message(F.text == "/id")
+@error_handler
+async def cmd_id(message: types.Message):
+    """Show the chat/channel/group ID. Works everywhere."""
+    chat = message.chat
+
+    if chat.type in ("group", "supergroup"):
+        title = escape_md(chat.title or "Unknown Group")
+        text = (
+            f"👥 *Group Info*\n\n"
+            f"📝 Name: *{title}*\n"
+            f"🆔 Group ID: `{chat.id}`"
+        )
+    elif chat.type == "channel":
+        title = escape_md(chat.title or "Unknown Channel")
+        text = (
+            f"📢 *Channel Info*\n\n"
+            f"📝 Name: *{title}*\n"
+            f"🆔 Channel ID: `{chat.id}`"
+        )
+    else:
+        # Private chat
+        user = message.from_user
+        name = escape_md(user.full_name or "Unknown")
+        username = f"@{escape_md(user.username)}" if user.username else "Not set"
+        text = (
+            f"👤 *Your Info*\n\n"
+            f"📝 Name: *{name}*\n"
+            f"👤 Username: {username}\n"
+            f"🆔 User ID: `{user.id}`"
+        )
+
+    await message.answer(text, parse_mode="MarkdownV2")
+
+
 # ── Persistent Reply Keyboard Text Handlers ───────────────
 
 @router.message(F.text == "🛍️ Buy Vouchers")
