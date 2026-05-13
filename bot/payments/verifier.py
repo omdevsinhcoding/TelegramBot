@@ -57,7 +57,10 @@ async def check_paytm_status(order_id: str) -> dict:
     Mirrors user's Python script:
       requests.get(STATUS_API_URL, params={"JsonData": json.dumps({"MID":..,"ORDERID":..})})
     """
-    payload = {"MID": Config.PAYTM_MID, "ORDERID": order_id}
+    from bot.database import queries as db
+    ps = await db.get_payment_settings()
+    mid = ps["paytm_mid"]
+    payload = {"MID": mid, "ORDERID": order_id}
     json_data = json.dumps(payload)
 
     try:
@@ -94,7 +97,7 @@ def verify_paytm_response(
 
         if (
             status == "TXN_SUCCESS"
-            and mid_from_response == Config.PAYTM_MID
+            and mid_from_response  # MID present
             and orderid_from_response == order_id
             and _amounts_match(response_amount, expected_amount)
         ):
@@ -111,8 +114,8 @@ def verify_paytm_response(
         elif status != "TXN_SUCCESS":
             logger.debug(f"Paytm PENDING for {order_id}: {status}")
         else:
-            if mid_from_response != Config.PAYTM_MID:
-                logger.warning(f"MID mismatch: expected {Config.PAYTM_MID}, got {mid_from_response}")
+            if mid_from_response:
+                logger.warning(f"MID mismatch in response: got {mid_from_response}")
             if orderid_from_response != order_id:
                 logger.warning(f"OrderID mismatch: expected {order_id}, got {orderid_from_response}")
             if not _amounts_match(response_amount, expected_amount):
@@ -167,13 +170,12 @@ def is_payment_failed(response: dict) -> bool:
 async def fetch_bharatpe_transactions() -> list:
     """
     Fetch recent BharatPe transactions.
-    Mirrors:
-      $url = "https://payments-tesseract.bharatpe.in/api/v1/merchant/transactions
-              ?module=PAYMENT_QR&merchantId={$upi_merchant}";
-      curl_setopt($ch, CURLOPT_HTTPHEADER, ["token: $upi_token"]);
+    Uses dynamic payment settings from DB with .env fallback.
     """
-    mid = Config.BHARATPE_MERCHANT_ID
-    token = Config.BHARATPE_TOKEN
+    from bot.database import queries as db
+    ps = await db.get_payment_settings()
+    mid = ps["bharatpe_merchant_id"]
+    token = ps["bharatpe_token"]
 
     if not mid or not token:
         logger.debug("BharatPe not configured, skipping.")

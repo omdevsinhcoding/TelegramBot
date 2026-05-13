@@ -28,7 +28,7 @@ def generate_unique_txn_id() -> str:
     return f"TXN_{timestamp}_{random_str}"
 
 
-def generate_upi_intent_url(
+async def generate_upi_intent_url(
     amount: float,
     txn_ref_id: str,
     note: str = "Coupon Purchase",
@@ -40,10 +40,12 @@ def generate_upi_intent_url(
     gateway='paytm'   → uses Paytm UPI ID + paytmqr param
     gateway='bharatpe' → uses BharatPe UPI ID (no paytmqr)
     """
-    payee = Config.UPI_PAYEE_NAME
+    from bot.database import queries as db
+    ps = await db.get_payment_settings()
+    payee = ps["upi_payee_name"] or "Paytm Merchant"
 
-    if gateway == "bharatpe" and Config.BHARATPE_UPI_ID:
-        vpa = Config.BHARATPE_UPI_ID
+    if gateway == "bharatpe" and ps["bharatpe_upi_id"]:
+        vpa = ps["bharatpe_upi_id"]
         url = (
             f"upi://pay?pa={vpa}"
             f"&pn={payee}"
@@ -54,8 +56,8 @@ def generate_upi_intent_url(
         )
     else:
         # Paytm gateway
-        vpa = Config.PAYTM_UPI_ID
-        paytmqr = Config.PAYTM_QR_CODE
+        vpa = ps["paytm_upi_id"]
+        paytmqr = ps["paytm_qr_code"]
         url = (
             f"upi://pay?pa={vpa}"
             f"&pn={payee}"

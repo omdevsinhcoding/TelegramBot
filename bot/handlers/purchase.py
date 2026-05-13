@@ -244,7 +244,7 @@ async def cb_pay_paytm(callback: types.CallbackQuery):
     txn_ref = order_info["txn_ref"]
 
     # Generate dynamic QR for Paytm
-    upi_url = generate_upi_intent_url(amount, txn_ref, f"Order {order_id}", "paytm")
+    upi_url = await generate_upi_intent_url(amount, txn_ref, f"Order {order_id}", "paytm")
     qr_buf = create_qr_buffer(upi_url, amount, txn_ref)
 
     timeout_min = Config.PAYMENT_TIMEOUT // 60
@@ -466,6 +466,9 @@ async def msg_bharatpe_utr(message: types.Message, state: FSMContext):
 
             kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
             await message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
+            # Re-send main menu keyboard so user can continue without /start
+            from bot.keyboards.main_menu import main_menu_kb
+            await message.answer("👇 Use buttons below to continue:", reply_markup=main_menu_kb(message.from_user.id))
 
             logger.info(f"BharatPe VERIFIED: order={order_id}, UTR={utr}, amount={amount}")
         else:
@@ -531,6 +534,9 @@ async def cb_check_payment(callback: types.CallbackQuery):
         except Exception:
             pass
         await callback.message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
+        # Re-send main menu keyboard
+        from bot.keyboards.main_menu import main_menu_kb
+        await callback.message.answer("👇 Use buttons below to continue:", reply_markup=main_menu_kb(callback.from_user.id))
         await callback.answer("Payment verified! ✅", show_alert=True)
         return
 
@@ -614,6 +620,9 @@ async def cb_check_payment(callback: types.CallbackQuery):
                     except Exception:
                         pass
                     await callback.message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
+                    # Re-send main menu keyboard
+                    from bot.keyboards.main_menu import main_menu_kb
+                    await callback.message.answer("👇 Use buttons below to continue:", reply_markup=main_menu_kb(callback.from_user.id))
                     await callback.answer("Payment verified! ✅", show_alert=True)
                     return
 

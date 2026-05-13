@@ -54,6 +54,12 @@ class AdminStates(StatesGroup):
     # Referral
     ref_commission_input = State()
     ref_reward_count_input = State()  # for setting referrals_needed on a coupon reward
+    # Payment settings
+    payment_field_input = State()
+    payment_qr_upload = State()
+    # User management
+    user_search_input = State()
+    user_change_referrer = State()
 
 
 # ── Admin Panel Entry ─────────────────────────────────────
@@ -1392,4 +1398,442 @@ async def msg_force_channel_input(message: types.Message, state: FSMContext):
     
     kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_bot_settings")]])
     await message.answer(result, parse_mode="MarkdownV2", reply_markup=kb)
+
+
+# ══════════════════════════════════════════════════════════
+# PAYMENT SETTINGS (Dynamic from Admin Panel)
+# ══════════════════════════════════════════════════════════
+
+@router.callback_query(F.data == "admin_payments")
+@admin_only
+@error_handler
+async def cb_admin_payments(callback: types.CallbackQuery):
+    """Show current payment gateway configuration."""
+    ps = await db.get_payment_settings()
+
+    paytm_mid = escape_md(ps["paytm_mid"] or "Not Set")
+    paytm_upi = escape_md(ps["paytm_upi_id"] or "Not Set")
+    paytm_qr = escape_md(ps["paytm_qr_code"] or "Not Set")
+    bp_mid = escape_md(ps["bharatpe_merchant_id"] or "Not Set")
+    bp_token = escape_md((ps["bharatpe_token"] or "Not Set")[:20] + "..." if ps["bharatpe_token"] and len(ps["bharatpe_token"]) > 20 else ps["bharatpe_token"] or "Not Set")
+    bp_upi = escape_md(ps["bharatpe_upi_id"] or "Not Set")
+    bp_qr = "✅ Uploaded" if ps["bharatpe_qr_path"] else "❌ Not Set"
+    payee = escape_md(ps["upi_payee_name"] or "Not Set")
+
+    text = (
+        f"💳 *Payment Settings*\n\n"
+        f"━━━ *Paytm* ━━━\n"
+        f"🏢 MID: `{paytm_mid}`\n"
+        f"📱 UPI ID: `{paytm_upi}`\n"
+        f"📷 QR Code: `{paytm_qr}`\n\n"
+        f"━━━ *BharatPe* ━━━\n"
+        f"🏢 Merchant ID: `{bp_mid}`\n"
+        f"🔑 Token: `{bp_token}`\n"
+        f"📱 UPI ID: `{bp_upi}`\n"
+        f"📷 QR Image: {bp_qr}\n\n"
+        f"━━━ *General* ━━━\n"
+        f"👤 Payee Name: `{payee}`\n"
+    )
+
+    buttons = [
+        [InlineKeyboardButton(text="🏢 Paytm MID", callback_data="admin_pay_edit:paytm_mid"),
+         InlineKeyboardButton(text="📱 Paytm UPI", callback_data="admin_pay_edit:paytm_upi_id")],
+        [InlineKeyboardButton(text="📷 Paytm QR Code", callback_data="admin_pay_edit:paytm_qr_code")],
+        [InlineKeyboardButton(text="🏢 BP Merchant", callback_data="admin_pay_edit:bharatpe_merchant_id"),
+         InlineKeyboardButton(text="🔑 BP Token", callback_data="admin_pay_edit:bharatpe_token")],
+        [InlineKeyboardButton(text="📱 BP UPI ID", callback_data="admin_pay_edit:bharatpe_upi_id")],
+        [InlineKeyboardButton(text="📷 Upload BP QR Image", callback_data="admin_pay_upload_qr")],
+        [InlineKeyboardButton(text="👤 Payee Name", callback_data="admin_pay_edit:upi_payee_name")],
+        [back_button("admin_panel")],
+    ]
+
+    await callback.message.edit_text(text, parse_mode="MarkdownV2",
+                                      reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    await callback.answer()
+
+
+PAYMENT_FIELD_LABELS = {
+    "paytm_mid": "Paytm Merchant ID",
+    "paytm_upi_id": "Paytm UPI ID",
+    "paytm_qr_code": "Paytm QR Code ID",
+    "bharatpe_merchant_id": "BharatPe Merchant ID",
+    "bharatpe_token": "BharatPe Token",
+    "bharatpe_upi_id": "BharatPe UPI ID",
+    "upi_payee_name": "UPI Payee Name",
+}
+
+
+@router.callback_query(F.data.startswith("admin_pay_edit:"))
+@admin_only
+@error_handler
+async def cb_admin_pay_edit(callback: types.CallbackQuery, state: FSMContext):
+    field = callback.data.split(":")[1]
+    label = PAYMENT_FIELD_LABELS.get(field, field)
+    await state.set_data({"payment_field": field})
+    await state.set_state(AdminStates.payment_field_input)
+    await callback.message.edit_text(
+        f"✏️ *Edit {escape_md(label)}*\n\nSend the new value:",
+        parse_mode="MarkdownV2"
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.payment_field_input)
+@error_handler
+async def msg_payment_field_input(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    field = data["payment_field"]
+    value = message.text.strip()
+    await db.update_bot_settings(**{field: value})
+    await state.clear()
+    label = PAYMENT_FIELD_LABELS.get(field, field)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_payments")]])
+    await message.answer(f"✅ {label} updated\\!", parse_mode="MarkdownV2", reply_markup=kb)
+
+
+@router.callback_query(F.data == "admin_pay_upload_qr")
+@admin_only
+@error_handler
+async def cb_admin_pay_upload_qr(callback: types.CallbackQuery, state: FSMContext):
+    await state.set_state(AdminStates.payment_qr_upload)
+    await callback.message.edit_text(
+        "📷 *Upload BharatPe QR Image*\n\nSend the QR code image as a photo:",
+        parse_mode="MarkdownV2"
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.payment_qr_upload, F.photo)
+@error_handler
+async def msg_payment_qr_upload(message: types.Message, state: FSMContext):
+    import os
+    # Create data directory
+    qr_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", "qr")
+    os.makedirs(qr_dir, exist_ok=True)
+
+    # Delete old QR if exists
+    ps = await db.get_payment_settings()
+    old_path = ps.get("bharatpe_qr_path")
+    if old_path and os.path.exists(old_path):
+        try:
+            os.remove(old_path)
+        except Exception:
+            pass
+
+    # Download new QR
+    photo = message.photo[-1]  # Largest size
+    file = await message.bot.get_file(photo.file_id)
+    save_path = os.path.join(qr_dir, f"bharatpe_qr_{photo.file_unique_id}.jpg")
+    await message.bot.download_file(file.file_path, save_path)
+
+    # Save path to DB
+    await db.update_bot_settings(bharatpe_qr_path=save_path)
+    await state.clear()
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_payments")]])
+    await message.answer("✅ BharatPe QR image uploaded\\!", parse_mode="MarkdownV2", reply_markup=kb)
+
+
+# ══════════════════════════════════════════════════════════
+# USER MANAGEMENT
+# ══════════════════════════════════════════════════════════
+
+@router.callback_query(F.data == "admin_users")
+@admin_only
+@error_handler
+async def cb_admin_users(callback: types.CallbackQuery, state: FSMContext):
+    user_count = await db.get_user_count()
+    text = (
+        f"👥 *User Management*\n\n"
+        f"📊 Total Users: *{user_count}*\n\n"
+        f"🔍 Send a *Telegram ID* or *@username* to search:"
+    )
+    await state.set_state(AdminStates.user_search_input)
+    buttons = [
+        [InlineKeyboardButton(text="📋 List Recent Users", callback_data="admin_users_recent")],
+        [back_button("admin_panel")],
+    ]
+    await callback.message.edit_text(text, parse_mode="MarkdownV2",
+                                      reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_users_recent")
+@admin_only
+@error_handler
+async def cb_admin_users_recent(callback: types.CallbackQuery):
+    users = await db.get_all_users()
+    recent = users[:15]  # Show last 15
+
+    if not recent:
+        await callback.answer("No users found.", show_alert=True)
+        return
+
+    buttons = []
+    for u in recent:
+        name = u["full_name"] or u["username"] or str(u["telegram_id"])
+        banned = "🚫 " if u.get("is_banned") else ""
+        buttons.append([InlineKeyboardButton(
+            text=f"{banned}{name[:25]} ({u['telegram_id']})",
+            callback_data=f"admin_user_inspect:{u['telegram_id']}"
+        )])
+    buttons.append([back_button("admin_users")])
+
+    await callback.message.edit_text(
+        "👥 *Recent Users*\n\nTap a user to inspect:",
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.user_search_input)
+@error_handler
+async def msg_user_search(message: types.Message, state: FSMContext):
+    query = message.text.strip()
+    results = await db.search_user(query)
+    await state.clear()
+
+    if not results:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_users")]])
+        await message.answer(
+            f"❌ No users found for *{escape_md(query)}*",
+            parse_mode="MarkdownV2", reply_markup=kb
+        )
+        return
+
+    buttons = []
+    for u in results[:10]:
+        name = u["full_name"] or u["username"] or str(u["telegram_id"])
+        banned = "🚫 " if u.get("is_banned") else ""
+        buttons.append([InlineKeyboardButton(
+            text=f"{banned}{name[:25]} ({u['telegram_id']})",
+            callback_data=f"admin_user_inspect:{u['telegram_id']}"
+        )])
+    buttons.append([back_button("admin_users")])
+
+    await message.answer(
+        f"🔍 *Search Results for* `{escape_md(query)}`:",
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
+
+
+@router.callback_query(F.data.startswith("admin_user_inspect:"))
+@admin_only
+@error_handler
+async def cb_admin_user_inspect(callback: types.CallbackQuery):
+    """Full user profile card."""
+    user_id = int(callback.data.split(":")[1])
+    user = await db.get_user(user_id)
+    if not user:
+        await callback.answer("User not found.", show_alert=True)
+        return
+
+    name = escape_md(user["full_name"] or "Unknown")
+    uname = f"@{escape_md(user['username'])}" if user.get("username") else "Not set"
+    joined = escape_md(str(user.get("joined_at", "Unknown"))[:19])
+    banned = "🚫 *BANNED*" if user.get("is_banned") else "✅ Active"
+    wallet = escape_md(format_currency(float(user.get("wallet_balance") or 0)))
+    earnings = escape_md(format_currency(float(user.get("referral_earnings") or 0)))
+    ref_code = escape_md(user.get("referral_code") or "None")
+
+    # Get referrer info
+    referrer = await db.get_referrer_of(user_id)
+    if referrer:
+        ref_by = f"{escape_md(referrer['full_name'] or 'Unknown')} \\(`{referrer['telegram_id']}`\\)"
+    else:
+        ref_by = "None"
+
+    ref_count = await db.get_referral_count(user_id)
+
+    text = (
+        f"👤 *User Profile*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📝 Name: *{name}*\n"
+        f"👤 Username: {uname}\n"
+        f"🆔 ID: `{user_id}`\n"
+        f"📅 Joined: {joined}\n"
+        f"🔰 Status: {banned}\n\n"
+        f"━━━ *Financial* ━━━\n"
+        f"💰 Wallet: *{wallet}*\n"
+        f"💸 Referral Earnings: *{earnings}*\n\n"
+        f"━━━ *Referral* ━━━\n"
+        f"🔑 Code: `{ref_code}`\n"
+        f"👥 Referrals Made: *{ref_count}*\n"
+        f"🔗 Referred By: {ref_by}\n"
+    )
+
+    ban_text = "🔓 Unban User" if user.get("is_banned") else "🚫 Ban User"
+    ban_data = f"admin_user_unban:{user_id}" if user.get("is_banned") else f"admin_user_ban:{user_id}"
+
+    buttons = [
+        [InlineKeyboardButton(text="📦 View Orders", callback_data=f"admin_user_orders:{user_id}"),
+         InlineKeyboardButton(text="👥 View Referrals", callback_data=f"admin_user_referrals:{user_id}")],
+        [InlineKeyboardButton(text="🔄 Change Referrer", callback_data=f"admin_user_chg_ref:{user_id}")],
+        [InlineKeyboardButton(text=ban_text, callback_data=ban_data)],
+        [back_button("admin_users")],
+    ]
+
+    await callback.message.edit_text(text, parse_mode="MarkdownV2",
+                                      reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_user_orders:"))
+@admin_only
+@error_handler
+async def cb_admin_user_orders(callback: types.CallbackQuery):
+    user_id = int(callback.data.split(":")[1])
+    orders = await db.get_user_orders(user_id)
+
+    if not orders:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_user_inspect:{user_id}")]])
+        await callback.message.edit_text(
+            f"📦 *No orders found for user* `{user_id}`",
+            parse_mode="MarkdownV2", reply_markup=kb
+        )
+        await callback.answer()
+        return
+
+    lines = [f"📦 *Orders for user* `{user_id}`\n"]
+    for o in orders[:15]:
+        status_icon = {"paid": "✅", "delivered": "✅", "pending": "🟡", "expired": "⏰", "cancelled": "❌"}.get(o["status"], "❓")
+        amt = format_currency(float(o["amount"]))
+        date = str(o.get("created_at", ""))[:10]
+        oid = o["order_id"][:12]
+        lines.append(f"{status_icon} `{escape_md(oid)}` — {escape_md(amt)} — {escape_md(date)}")
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_user_inspect:{user_id}")]])
+    await callback.message.edit_text(
+        "\n".join(lines), parse_mode="MarkdownV2", reply_markup=kb
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_user_referrals:"))
+@admin_only
+@error_handler
+async def cb_admin_user_referrals(callback: types.CallbackQuery):
+    user_id = int(callback.data.split(":")[1])
+    referrals = await db.get_user_referrals(user_id)
+
+    if not referrals:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_user_inspect:{user_id}")]])
+        await callback.message.edit_text(
+            f"👥 *No referrals found for user* `{user_id}`",
+            parse_mode="MarkdownV2", reply_markup=kb
+        )
+        await callback.answer()
+        return
+
+    lines = [f"👥 *Referrals by user* `{user_id}`\n"]
+    for r in referrals[:15]:
+        name = escape_md(r.get("full_name") or r.get("username") or "Unknown")
+        status = "✅" if r["status"] == "purchased" else "👤"
+        comm = escape_md(format_currency(float(r["commission"])))
+        lines.append(f"{status} {name} — {comm}")
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_user_inspect:{user_id}")]])
+    await callback.message.edit_text(
+        "\n".join(lines), parse_mode="MarkdownV2", reply_markup=kb
+    )
+    await callback.answer()
+
+
+# ── Ban / Unban ──────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("admin_user_ban:"))
+@admin_only
+@error_handler
+async def cb_admin_user_ban(callback: types.CallbackQuery):
+    user_id = int(callback.data.split(":")[1])
+    await db.ban_user(user_id, True)
+    await callback.answer(f"🚫 User {user_id} has been BANNED!", show_alert=True)
+    await cb_admin_user_inspect(callback)
+
+
+@router.callback_query(F.data.startswith("admin_user_unban:"))
+@admin_only
+@error_handler
+async def cb_admin_user_unban(callback: types.CallbackQuery):
+    user_id = int(callback.data.split(":")[1])
+    await db.ban_user(user_id, False)
+    await callback.answer(f"✅ User {user_id} has been UNBANNED!", show_alert=True)
+    await cb_admin_user_inspect(callback)
+
+
+# ── Change Referrer ──────────────────────────────────────
+
+@router.callback_query(F.data.startswith("admin_user_chg_ref:"))
+@admin_only
+@error_handler
+async def cb_admin_user_chg_ref(callback: types.CallbackQuery, state: FSMContext):
+    user_id = int(callback.data.split(":")[1])
+    await state.set_data({"change_ref_for": user_id})
+    await state.set_state(AdminStates.user_change_referrer)
+    await callback.message.edit_text(
+        f"🔄 *Change Referrer for user* `{user_id}`\n\n"
+        f"Send the *Telegram ID* of the new referrer:",
+        parse_mode="MarkdownV2"
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.user_change_referrer)
+@error_handler
+async def msg_user_change_referrer(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    user_id = data["change_ref_for"]
+
+    try:
+        referrer_id = int(message.text.strip())
+    except ValueError:
+        await message.answer("⚠️ Please send a valid Telegram ID (number).")
+        return
+
+    # Verify referrer exists
+    referrer = await db.get_user(referrer_id)
+    if not referrer:
+        await message.answer("❌ That user is not in the database.")
+        return
+
+    if referrer_id == user_id:
+        await message.answer("❌ A user cannot refer themselves.")
+        return
+
+    await db.set_user_referrer(user_id, referrer_id)
+    await state.clear()
+
+    ref_name = escape_md(referrer["full_name"] or str(referrer_id))
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_user_inspect:{user_id}")]])
+    await message.answer(
+        f"✅ Referrer updated\\!\n\nUser `{user_id}` is now referred by *{ref_name}* \\(`{referrer_id}`\\)",
+        parse_mode="MarkdownV2", reply_markup=kb
+    )
+
+
+# ── Analytics ────────────────────────────────────────────
+
+@router.callback_query(F.data == "admin_analytics")
+@admin_only
+@error_handler
+async def cb_admin_analytics(callback: types.CallbackQuery):
+    stats = await db.get_sales_stats()
+    user_count = await db.get_user_count()
+
+    revenue = escape_md(format_currency(float(stats["total_revenue"])))
+    text = (
+        f"📊 *Analytics Dashboard*\n\n"
+        f"👥 Total Users: *{user_count}*\n"
+        f"📦 Total Orders: *{stats['total_orders']}*\n"
+        f"💰 Total Revenue: *{revenue}*\n\n"
+        f"✅ Paid: *{stats['total_paid']}*\n"
+        f"🟡 Pending: *{stats['total_pending']}*\n"
+        f"⏰ Expired: *{stats['total_expired']}*\n"
+    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_panel")]])
+    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    await callback.answer()
 

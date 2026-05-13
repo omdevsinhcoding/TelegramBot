@@ -597,3 +597,100 @@ async def update_bot_settings(**kwargs):
     sets = ", ".join(f"{k} = ${i+1}" for i, k in enumerate(kwargs.keys()))
     await pool.execute(f"UPDATE bot_settings SET {sets}, updated_at = NOW()", *list(kwargs.values()))
 
+
+async def get_payment_settings():
+    """Get payment settings from DB, falling back to .env values."""
+    from bot.config import Config
+    settings = await get_bot_settings()
+
+    return {
+        "paytm_mid": settings.get("paytm_mid") or Config.PAYTM_MID,
+        "paytm_upi_id": settings.get("paytm_upi_id") or Config.PAYTM_UPI_ID,
+        "paytm_qr_code": settings.get("paytm_qr_code") or Config.PAYTM_QR_CODE,
+        "bharatpe_merchant_id": settings.get("bharatpe_merchant_id") or Config.BHARATPE_MERCHANT_ID,
+        "bharatpe_token": settings.get("bharatpe_token") or Config.BHARATPE_TOKEN,
+        "bharatpe_upi_id": settings.get("bharatpe_upi_id") or Config.BHARATPE_UPI_ID,
+        "bharatpe_qr_path": settings.get("bharatpe_qr_path") or Config.BHARATPE_QR_IMAGE,
+        "upi_payee_name": settings.get("upi_payee_name") or Config.UPI_PAYEE_NAME,
+    }
+
+
+# ── USER MANAGEMENT QUERIES ─────────────────────────────
+
+async def search_user(query: str):
+    """Search user by Telegram ID or username."""
+    pool = await get_pool()
+    # Try as integer (Telegram ID)
+    if query.lstrip("-").isdigit():
+        tid = int(query)
+        row = await pool.fetchrow("SELECT * FROM users WHERE telegram_id = $1", tid)
+        if row:
+            return [row]
+    # Search by username (partial match)
+    clean = query.lstrip("@")
+    rows = await pool.fetch(
+        "SELECT * FROM users WHERE username ILIKE $1 OR full_name ILIKE $1 LIMIT 10",
+        f"%{clean}%"
+    )
+    return rows
+
+
+async def get_user_orders(telegram_id: int, limit: int = 20):
+    """Get all orders for a specific user."""
+    pool = await get_pool()
+    return await pool.fetch(
+        "SELECT * FROM orders WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2",
+        telegram_id, limit
+    )
+
+
+async def get_user_referrals(telegram_id: int, limit: int = 20):
+    """Get all referrals made by a user."""
+    pool = await get_pool()
+    return await pool.fetch("""
+        SELECT r.*, u.username, u.full_name
+        FROM referrals r
+        JOIN users u ON u.telegram_id = r.referred_id
+        WHERE r.referrer_id = $1
+        ORDER BY r.created_at DESC LIMIT $2
+    """, telegram_id, limit)
+
+
+async def set_user_referrer(user_id: int, referrer_id: int):
+    """Set or change who referred a user. Admin-only operation."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # Update users table
+            await conn.execute(
+                "UPDATE users SET referred_by = $2 WHERE telegram_id = $1",
+                user_id, referrer_id
+            )
+            # Upsert referral record
+            await conn.execute("""
+                INSERT INTO referrals (referrer_id, referred_id, status)
+                VALUES ($1, $2, 'joined')
+                ON CONFLICT (referred_id) DO UPDATE SET referrer_id = $1
+            """, referrer_id, user_id)
+
+
+async def is_user_banned(telegram_id: int) -> bool:
+    """Check if a user is banned."""
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "SELECT is_banned FROM users WHERE telegram_id = $1", telegram_id
+    )
+    return bool(row and row["is_banned"])
+
+
+async def get_referrer_of(telegram_id: int):
+    """Get who referred this user."""
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "SELECT referred_by FROM users WHERE telegram_id = $1", telegram_id
+    )
+    if row and row["referred_by"]:
+        return await pool.fetchrow(
+            "SELECT * FROM users WHERE telegram_id = $1", row["referred_by"]
+        )
+    return None

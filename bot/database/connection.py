@@ -129,6 +129,21 @@ async def init_db() -> asyncpg.Pool:
                     updated_at TIMESTAMPTZ DEFAULT NOW()
                 );
             """)
+            # Payment settings columns
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS paytm_mid TEXT DEFAULT '';")
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS paytm_upi_id TEXT DEFAULT '';")
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS paytm_qr_code TEXT DEFAULT '';")
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS bharatpe_merchant_id TEXT DEFAULT '';")
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS bharatpe_token TEXT DEFAULT '';")
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS bharatpe_upi_id TEXT DEFAULT '';")
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS bharatpe_qr_path TEXT DEFAULT '';")
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS upi_payee_name TEXT DEFAULT '';")
+        except Exception:
+            pass
+
+        # User ban column
+        try:
+            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_banned BOOLEAN DEFAULT FALSE;")
         except Exception:
             pass
 

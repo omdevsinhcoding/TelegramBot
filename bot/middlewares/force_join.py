@@ -39,6 +39,20 @@ class ForceJoinMiddleware(BaseMiddleware):
         if Config.is_admin(user.id):
             return await handler(event, data)
 
+        # Check if user is banned
+        try:
+            is_banned = await db.is_user_banned(user.id)
+            if is_banned:
+                ban_text = "⛔ *You are banned from using this bot\\.*\n\nContact support if you think this is a mistake\\."
+                if isinstance(event, CallbackQuery):
+                    await event.answer("⛔ You are banned from this bot.", show_alert=True)
+                    return
+                elif isinstance(event, Message):
+                    await event.answer(ban_text, parse_mode="MarkdownV2")
+                    return
+        except Exception as e:
+            logger.warning(f"Ban check error: {e}")
+
         try:
             settings = await db.get_bot_settings()
             force_channel_raw = settings.get("force_channel") if settings else None
