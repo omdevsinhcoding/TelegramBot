@@ -324,17 +324,48 @@ async def msg_recover_by_order_id(message: types.Message, state: FSMContext):
 @router.message(F.text == "⚠️ Disclaimer")
 @error_handler
 async def text_disclaimer(message: types.Message):
-    """Show bot disclaimer."""
-    text = (
-        "⚠️ *Disclaimer*\n\n"
-        "• All coupons are sold as\\-is\\.\n"
-        "• Verify details before purchasing\\.\n"
-        "• No refunds once a coupon code is delivered\\.\n"
-        "• We are not responsible for expired or invalid codes\\.\n"
-        "• Contact support for any disputes\\.\n\n"
-        "By using this bot, you agree to these terms\\."
-    )
-    await message.answer(text, parse_mode="MarkdownV2")
+    """Show bot disclaimer — dynamic from admin panel."""
+    import json
+    from bot.database import queries as db
+
+    settings = await db.get_bot_settings()
+    custom_text = settings.get("disclaimer_text") or ""
+    buttons_json = settings.get("disclaimer_buttons") or "[]"
+
+    if custom_text:
+        # Use admin-set disclaimer
+        text = f"⚠️ *Disclaimer*\n\n{escape_md(custom_text)}"
+    else:
+        # Default disclaimer
+        text = (
+            "⚠️ *Disclaimer*\n\n"
+            "• All coupons are sold as\\-is\\.\n"
+            "• Verify details before purchasing\\.\n"
+            "• No refunds once a coupon code is delivered\\.\n"
+            "• We are not responsible for expired or invalid codes\\.\n"
+            "• Contact support for any disputes\\.\n\n"
+            "By using this bot, you agree to these terms\\."
+        )
+
+    # Parse inline buttons
+    try:
+        btn_list = json.loads(buttons_json)
+    except Exception:
+        btn_list = []
+
+    kb = None
+    if btn_list:
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        buttons = []
+        for b in btn_list:
+            try:
+                buttons.append([InlineKeyboardButton(text=b["text"], url=b["url"])])
+            except Exception:
+                pass
+        if buttons:
+            kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    await message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
 
 
 @router.message(F.text == "📢 Our Channels")

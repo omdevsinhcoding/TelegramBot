@@ -139,23 +139,18 @@ def coupon_detail_kb(coupon_id: int, in_stock: bool, stock: int = 0, price: floa
     """Show quantity selection like the reference image."""
     buttons = []
     if in_stock and stock > 0:
-        # Quantity options
-        qty_options = []
-        if stock >= 1:
-            qty_options.append((1, price))
-        if stock >= 5:
-            qty_options.append((5, price * 5))
-        if stock >= 10:
-            qty_options.append((10, price * 10))
-
-        for qty, total in qty_options:
-            if qty == 1:
-                label = f"🛍️ 1 Qty • ₹{total:.1f}"
-            else:
-                label = f"🛍️ {qty} Qty • ₹{total:.1f} [₹{price:.1f}/ea]"
-            buttons.append([
-                InlineKeyboardButton(text=label, callback_data=f"buy_qty:{coupon_id}:{qty}")
-            ])
+        # Quantity presets matching reference: 1, 5, 10, 20, 50
+        presets = [1, 5, 10, 20, 50]
+        for qty in presets:
+            if stock >= qty:
+                total = price * qty
+                if qty == 1:
+                    label = f"🛍️ {qty} Qty • ₹{total:.1f}"
+                else:
+                    label = f"🛍️ {qty} Qty • ₹{total:.1f} [₹{price:.1f}/ea]"
+                buttons.append([
+                    InlineKeyboardButton(text=label, callback_data=f"buy_qty:{coupon_id}:{qty}")
+                ])
 
         buttons.append([
             InlineKeyboardButton(text="✏️ Custom Qty", callback_data=f"buy_custom_qty:{coupon_id}")
@@ -177,13 +172,29 @@ def payment_pending_kb(order_id: str) -> InlineKeyboardMarkup:
     ])
 
 
-def gateway_selection_kb(coupon_id: int, qty: int = 1) -> InlineKeyboardMarkup:
-    """Show payment gateway options after quantity is selected."""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Pay via Paytm", callback_data=f"pay_gateway:paytm:{coupon_id}:{qty}")],
-        [InlineKeyboardButton(text="🏦 Pay via BharatPe", callback_data=f"pay_gateway:bharatpe:{coupon_id}:{qty}")],
-        [back_button("browse_coupons")],
-    ])
+def gateway_selection_kb(coupon_id: int, qty: int = 1, wallet_balance: float = 0.0, total: float = 0.0) -> InlineKeyboardMarkup:
+    """Show payment gateway options with reward wallet."""
+    buttons = []
+
+    # Reward Wallet button — always visible (shows balance)
+    wallet_label = f"💰 Reward Wallet: ₹{wallet_balance:.1f}"
+    if wallet_balance >= total and total > 0:
+        # Enough balance — make it clickable to pay
+        buttons.append([InlineKeyboardButton(
+            text=wallet_label,
+            callback_data=f"pay_gateway:wallet:{coupon_id}:{qty}"
+        )])
+    else:
+        # Not enough — show as info only
+        buttons.append([InlineKeyboardButton(
+            text=wallet_label,
+            callback_data="noop"
+        )])
+
+    buttons.append([InlineKeyboardButton(text="✅ Pay via Paytm", callback_data=f"pay_gateway:paytm:{coupon_id}:{qty}")])
+    buttons.append([InlineKeyboardButton(text="🏦 Pay via BharatPe", callback_data=f"pay_gateway:bharatpe:{coupon_id}:{qty}")])
+    buttons.append([InlineKeyboardButton(text="❌ Cancel", callback_data="browse_coupons")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def stock_status_kb() -> InlineKeyboardMarkup:

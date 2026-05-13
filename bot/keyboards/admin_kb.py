@@ -24,7 +24,8 @@ def admin_panel_kb() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="👥 Users", callback_data="admin_users"),
             InlineKeyboardButton(text="📊 Analytics", callback_data="admin_analytics")
         ],
-        [InlineKeyboardButton(text="⚙️ Bot Settings (Force Join)", callback_data="admin_bot_settings")],
+        [InlineKeyboardButton(text="⚙️ Bot Settings", callback_data="admin_bot_settings"),
+         InlineKeyboardButton(text="📜 Disclaimer", callback_data="admin_disclaimer")],
         [
             InlineKeyboardButton(text="📋 Logs", callback_data="admin_logs"),
             InlineKeyboardButton(text="🏠 Home", callback_data="back_home")

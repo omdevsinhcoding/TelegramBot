@@ -27,7 +27,9 @@ async def create_purchase_order(user_id: int, coupon_id: int, amount: float,
 
     # Use correct merchant ID based on selected gateway (dynamic from DB)
     ps = await db.get_payment_settings()
-    if gateway == "bharatpe":
+    if gateway == "wallet":
+        merchant_id = "WALLET"
+    elif gateway == "bharatpe":
         merchant_id = ps["bharatpe_merchant_id"]
     else:
         merchant_id = ps["paytm_mid"]

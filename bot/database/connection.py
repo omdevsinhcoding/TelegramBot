@@ -138,6 +138,9 @@ async def init_db() -> asyncpg.Pool:
             await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS bharatpe_upi_id TEXT DEFAULT '';")
             await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS bharatpe_qr_path TEXT DEFAULT '';")
             await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS upi_payee_name TEXT DEFAULT '';")
+            # Disclaimer columns
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS disclaimer_text TEXT DEFAULT '';")
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS disclaimer_buttons TEXT DEFAULT '';")
         except Exception:
             pass
 

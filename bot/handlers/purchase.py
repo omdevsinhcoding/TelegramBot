@@ -102,6 +102,7 @@ async def cb_buy_qty(callback: types.CallbackQuery):
     total = float(coupon["discounted_price"]) * qty
     title = escape_md(coupon["title"])
     amt = escape_md(format_currency(total))
+    wallet = await db.get_wallet_balance(callback.from_user.id)
 
     from bot.keyboards.coupon_kb import gateway_selection_kb
     text = (
@@ -113,7 +114,7 @@ async def cb_buy_qty(callback: types.CallbackQuery):
     )
     await callback.message.edit_text(
         text, parse_mode="MarkdownV2",
-        reply_markup=gateway_selection_kb(coupon_id, qty),
+        reply_markup=gateway_selection_kb(coupon_id, qty, wallet_balance=wallet, total=total),
     )
     await callback.answer()
 
@@ -170,6 +171,7 @@ async def msg_custom_qty(message: types.Message, state: FSMContext):
     total = float(coupon["discounted_price"]) * qty
     title = escape_md(coupon["title"])
     amt = escape_md(format_currency(total))
+    wallet = await db.get_wallet_balance(message.from_user.id)
 
     from bot.keyboards.coupon_kb import gateway_selection_kb
     text = (
@@ -181,7 +183,7 @@ async def msg_custom_qty(message: types.Message, state: FSMContext):
     )
     await message.answer(
         text, parse_mode="MarkdownV2",
-        reply_markup=gateway_selection_kb(coupon_id, qty),
+        reply_markup=gateway_selection_kb(coupon_id, qty, wallet_balance=wallet, total=total),
     )
 
 
@@ -198,9 +200,11 @@ async def cb_buy_coupon(callback: types.CallbackQuery):
         await callback.answer("Sorry, this coupon is out of stock!", show_alert=True)
         return
 
+    total = float(coupon["discounted_price"])
+    wallet = await db.get_wallet_balance(callback.from_user.id)
     from bot.keyboards.coupon_kb import gateway_selection_kb
     title = escape_md(coupon["title"])
-    amt = escape_md(format_currency(float(coupon["discounted_price"])))
+    amt = escape_md(format_currency(total))
     text = (
         f"💳 *Select Payment Gateway*\n\n"
         f"🏷️ {title}\n"
@@ -209,10 +213,83 @@ async def cb_buy_coupon(callback: types.CallbackQuery):
     )
     await callback.message.edit_text(
         text, parse_mode="MarkdownV2",
-        reply_markup=gateway_selection_kb(coupon_id),
+        reply_markup=gateway_selection_kb(coupon_id, wallet_balance=wallet, total=total),
     )
     await callback.answer()
 
+
+# ══════════════════════════════════════════════════════════════
+# WALLET GATEWAY — Pay from Reward Wallet
+# ══════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("pay_gateway:wallet:"))
+@error_handler
+async def cb_pay_wallet(callback: types.CallbackQuery):
+    """Pay using reward wallet balance."""
+    parts = callback.data.split(":")
+    coupon_id = int(parts[2])
+    qty = int(parts[3]) if len(parts) > 3 else 1
+    coupon = await get_coupon_detail(coupon_id)
+
+    if not coupon:
+        await callback.answer("Coupon not found.", show_alert=True)
+        return
+    if coupon["stock"] < qty:
+        await callback.answer(f"Not enough stock! Only {coupon['stock']} left.", show_alert=True)
+        return
+
+    user_id = callback.from_user.id
+    amount = float(coupon["discounted_price"]) * qty
+    wallet = await db.get_wallet_balance(user_id)
+
+    if wallet < amount:
+        await callback.answer(
+            f"⚠️ Insufficient wallet balance! Need ₹{amount:.1f}, have ₹{wallet:.1f}",
+            show_alert=True,
+        )
+        return
+
+    # Deduct wallet balance
+    old_balance = wallet
+    new_balance = wallet - amount
+    await db.update_wallet_balance(user_id, new_balance)
+    await db.add_wallet_transaction(
+        user_id, -amount, "purchase",
+        bal_before=old_balance, bal_after=new_balance,
+        reference=f"coupon_{coupon_id}_qty{qty}",
+    )
+
+    # Create order (already paid)
+    order_info = await create_purchase_order(user_id, coupon_id, amount, "wallet")
+    order_id = order_info["order_id"]
+
+    # Mark as paid + deliver codes
+    pool = await db.get_pool()
+    await pool.execute(
+        "UPDATE orders SET status = 'paid', paid_at = NOW() WHERE order_id = $1", order_id
+    )
+    await verify_payment(order_id, callback.bot)
+
+    title = escape_md(coupon["title"])
+    amt = escape_md(format_currency(amount))
+    bal = escape_md(f"₹{new_balance:.1f}")
+
+    success_text = await _build_success_message(order_id, coupon_id, amount)
+    success_text += f"\n\n💰 *Wallet Balance:* {bal}"
+
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
+    from bot.keyboards.main_menu import main_menu_kb
+    await callback.message.answer(
+        success_text,
+        parse_mode="MarkdownV2",
+        reply_markup=main_menu_kb(Config.is_admin(user_id)),
+    )
+    await callback.answer()
+    logger.info(f"Wallet payment: user={user_id}, order={order_id}, amount={amount}, balance_left={new_balance}")
 
 
 # ══════════════════════════════════════════════════════════════
