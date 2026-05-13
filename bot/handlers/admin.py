@@ -41,6 +41,7 @@ class AdminStates(StatesGroup):
     edit_field_value = State()
     # Add codes
     add_codes_input = State()
+    upload_codes_file = State()
     # Broadcast
     broadcast_message = State()
     broadcast_buttons = State()
@@ -280,7 +281,7 @@ async def cb_edit_field(callback: types.CallbackQuery, state: FSMContext):
     coupon_id = int(parts[1])
     field = parts[2]
 
-    field_labels = {"title": "title", "price": "discounted price", "desc": "description", "category": "category"}
+    field_labels = {"title": "title", "price": "discounted price", "desc": "description"}
     label = field_labels.get(field, field)
 
     await state.update_data(edit_coupon_id=coupon_id, edit_field=field)
@@ -312,8 +313,6 @@ async def msg_edit_field_value(message: types.Message, state: FSMContext):
         except ValueError:
             await message.answer("⚠️ Enter a valid number.")
             return
-    elif field == "category":
-        update["category"] = value
 
     await edit_coupon(coupon_id, **update)
     await db.add_admin_log(
@@ -397,7 +396,8 @@ async def cb_add_codes(callback: types.CallbackQuery, state: FSMContext):
     coupon_id = int(callback.data.split(":")[1])
     await state.update_data(codes_coupon_id=coupon_id)
     await callback.message.edit_text(
-        "🔑 Send coupon codes, *one per line*:",
+        "🔑 Send coupon codes, *one per line*\\.\n\n"
+        "_Or use 📄 Upload File button for bulk upload\\._",
         parse_mode="MarkdownV2",
     )
     await state.set_state(AdminStates.add_codes_input)
@@ -437,30 +437,79 @@ async def msg_add_codes(message: types.Message, state: FSMContext):
     )
 
 
-# ── View Users ────────────────────────────────────────────
+# ── Upload Codes File ─────────────────────────────────────
 
-@router.callback_query(F.data == "admin_users")
+@router.callback_query(F.data.startswith("admin_upload_codes:"))
 @admin_only
 @error_handler
-async def cb_admin_users(callback: types.CallbackQuery):
-    users = await db.get_all_users()
-    lines = [f"👥 *Users* \\({len(users)} total\\)\n"]
-    for u in users[:20]:
-        ban = " 🚫" if u["is_banned"] else ""
-        tid = escape_md(str(u["telegram_id"]))
-        uname = escape_md(u["username"] or "N/A")
-        bal = escape_md(str(u["wallet_balance"]))
-        lines.append(
-            f"• `{tid}` — @{uname} │ ₹{bal}{ban}"
-        )
-    if len(users) > 20:
-        remaining = len(users) - 20
-        lines.append(f"\n_\\.\\.\\.and {remaining} more_")
-
-    text = "\n".join(lines)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_panel")]])
-    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+async def cb_upload_codes(callback: types.CallbackQuery, state: FSMContext):
+    coupon_id = int(callback.data.split(":")[1])
+    await state.update_data(upload_codes_coupon_id=coupon_id)
+    await state.set_state(AdminStates.upload_codes_file)
+    await callback.message.edit_text(
+        "📄 *Upload Codes File*\n\n"
+        "Send a *\\.txt* file with one code per line\\.\n"
+        "The bot will extract all codes and add them to stock\\.",
+        parse_mode="MarkdownV2",
+    )
     await callback.answer()
+
+
+@router.message(AdminStates.upload_codes_file, F.document)
+@error_handler
+async def msg_upload_codes_file(message: types.Message, state: FSMContext):
+    import io
+    data = await state.get_data()
+    coupon_id = data["upload_codes_coupon_id"]
+    await state.clear()
+
+    doc = message.document
+    if not doc.file_name.endswith(".txt"):
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_coupon_edit:{coupon_id}")]])
+        await message.answer("⚠️ Please send a *.txt* file only.", reply_markup=kb)
+        return
+
+    # Download file content
+    file = await message.bot.get_file(doc.file_id)
+    file_bytes = await message.bot.download_file(file.file_path)
+    
+    # Read and parse codes
+    if isinstance(file_bytes, io.BytesIO):
+        content = file_bytes.read().decode("utf-8", errors="ignore")
+    else:
+        content = file_bytes.decode("utf-8", errors="ignore")
+    
+    codes = [c.strip() for c in content.split("\n") if c.strip()]
+    
+    if not codes:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_coupon_edit:{coupon_id}")]])
+        await message.answer("⚠️ No codes found in the file.", reply_markup=kb)
+        return
+
+    # Add codes to database
+    for code in codes:
+        await db.add_coupon_code(coupon_id, code)
+
+    # Update stock
+    pool = await db.get_pool()
+    count_row = await pool.fetchrow(
+        "SELECT COUNT(*) as cnt FROM coupon_codes WHERE coupon_id = $1 AND is_sold = FALSE",
+        coupon_id
+    )
+    new_stock = count_row["cnt"] if count_row else len(codes)
+    await edit_coupon(coupon_id, stock=new_stock)
+    await db.add_admin_log(
+        message.from_user.id, "upload_codes", "coupon", str(coupon_id),
+        f"Uploaded {len(codes)} codes from file, new stock: {new_stock}"
+    )
+    logger.info(f"Admin {message.from_user.id} uploaded {len(codes)} codes from file to coupon {coupon_id}")
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_coupon_edit:{coupon_id}")]])
+    await message.answer(
+        f"✅ Uploaded *{len(codes)}* codes from file\\!\n"
+        f"📦 Updated stock: *{new_stock}*",
+        parse_mode="MarkdownV2", reply_markup=kb,
+    )
 
 
 # ── View Orders ───────────────────────────────────────────

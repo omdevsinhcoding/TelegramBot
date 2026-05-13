@@ -420,7 +420,7 @@ async def cb_buy_page(callback: types.CallbackQuery):
     free_coupons = await db.get_active_free_coupons()
     free_count = len(free_coupons)
 
-    text = "📁 *Select a Category below:*"
+    text = "🛒 *Available Coupons:*"
     await callback.message.edit_text(
         text,
         parse_mode="MarkdownV2",
@@ -432,28 +432,11 @@ async def cb_buy_page(callback: types.CallbackQuery):
 @router.callback_query(F.data.startswith("cat_view:"))
 @error_handler
 async def cb_category_view(callback: types.CallbackQuery):
-    """Show coupons within a specific category."""
-    parts = callback.data.split(":")
-    cat_name = parts[1]
-    page = int(parts[2]) if len(parts) > 2 else 0
-
-    from bot.services.coupon_service import list_active_coupons
-    from bot.keyboards.coupon_kb import category_view_kb
-
-    all_coupons = await list_active_coupons()
-    cat_coupons = [c for c in all_coupons if (c.get("category") or "") == cat_name]
-
-    if not cat_coupons:
-        await callback.answer("No coupons in this category.", show_alert=True)
-        return
-
-    text = f"📂 *{escape_md(cat_name)}* — {len(cat_coupons)} items"
-    await callback.message.edit_text(
-        text,
-        parse_mode="MarkdownV2",
-        reply_markup=category_view_kb(cat_name, cat_coupons, page),
-    )
-    await callback.answer()
+    """Categories removed — redirect to browse."""
+    await callback.answer("Categories have been removed. Showing all coupons.", show_alert=True)
+    from bot.handlers.coupons import cb_browse
+    callback.data = "browse_coupons"
+    await cb_browse(callback)
 
 
 @router.callback_query(F.data.startswith("coupon_page:"))

@@ -34,7 +34,7 @@ async def cb_browse(callback: types.CallbackQuery):
         await callback.answer()
         return
 
-    text = "📁 *Select a Category below:*"
+    text = "🛒 *Available Coupons:*"
     await callback.message.edit_text(
         text,
         parse_mode="MarkdownV2",
@@ -64,7 +64,7 @@ async def cb_coupon_detail(callback: types.CallbackQuery):
     desc = escape_md(coupon["description"] or "No description")
     orig_price = escape_md(f"₹{coupon['original_price']:.2f}")
     sale_price = escape_md(f"₹{coupon['discounted_price']:.2f}")
-    cat = escape_md(coupon.get("category") or "General")
+
 
     text = (
         f"🏷️ *{title}*\n"
