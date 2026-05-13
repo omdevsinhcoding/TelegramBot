@@ -4,6 +4,7 @@ Full admin CRUD for coupons, users, orders, analytics, broadcasts.
 """
 
 from aiogram import Router, types, F
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -68,6 +69,28 @@ class AdminStates(StatesGroup):
     # Ban message
     ban_message_text_input = State()
     ban_message_buttons_input = State()
+
+
+# ── Universal /cancel — works in ANY FSM state ───────────
+
+@router.message(Command("cancel"))
+async def cmd_cancel(message: types.Message, state: FSMContext):
+    """Cancel any active admin operation."""
+    current = await state.get_state()
+    if current is None:
+        await message.answer("ℹ️ Nothing to cancel.")
+        return
+    await state.clear()
+    if Config.is_admin(message.from_user.id):
+        from bot.keyboards.admin_kb import admin_panel_kb
+        await message.answer(
+            "❌ *Operation cancelled\\.*\n\n"
+            "Returning to Admin Panel\\.\\.\\.",
+            parse_mode="MarkdownV2",
+            reply_markup=admin_panel_kb(),
+        )
+    else:
+        await message.answer("❌ Operation cancelled.")
 
 
 # ── Admin Panel Entry ─────────────────────────────────────
@@ -149,7 +172,8 @@ async def cb_admin_coupon_edit(callback: types.CallbackQuery):
 @error_handler
 async def cb_add_coupon_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
-        "📝 *Step 1/6* — Enter the *coupon title*:",
+        "📝 *Step 1/6* — Enter the *coupon title*:\n\n"
+        "_Send /cancel to abort\\._",
         parse_mode="MarkdownV2",
     )
     await state.set_state(AdminStates.add_title)
@@ -724,7 +748,7 @@ async def cb_broadcast(callback: types.CallbackQuery, state: FSMContext):
         "📝 *Text* — Just type a message\n"
         "📸 *Photo* — Send an image \\(with optional caption\\)\n"
         "📎 *File* — Send any document\n\n"
-        "_You can add inline buttons in the next step_"
+        "_You can add inline buttons in the next step_\n_Send /cancel to abort\\._"
     )
     await callback.message.edit_text(text, parse_mode="MarkdownV2")
     await state.set_state(AdminStates.broadcast_message)
@@ -991,7 +1015,8 @@ async def cb_admin_giveaway_view(callback: types.CallbackQuery):
 @error_handler
 async def cb_giveaway_add_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
-        "🎁 *Step 1/3* — Enter the *giveaway title*:",
+        "🎁 *Step 1/3* — Enter the *giveaway title*:\n\n"
+        "_Send /cancel to abort\\._",
         parse_mode="MarkdownV2",
     )
     await state.set_state(AdminStates.giveaway_title)
@@ -1041,13 +1066,14 @@ async def msg_giveaway_codes_input(message: types.Message, state: FSMContext):
     codes = []
 
     if message.document:
-        # File upload
-        file = await message.bot.get_file(message.document.file_id)
+        # File upload — handle both BytesIO and raw bytes
         import io
-        buf = io.BytesIO()
-        await message.bot.download_file(file.file_path, buf)
-        buf.seek(0)
-        content = buf.read().decode("utf-8", errors="ignore")
+        file = await message.bot.get_file(message.document.file_id)
+        file_bytes = await message.bot.download_file(file.file_path)
+        if isinstance(file_bytes, io.BytesIO):
+            content = file_bytes.read().decode("utf-8", errors="ignore")
+        else:
+            content = file_bytes.decode("utf-8", errors="ignore")
         codes = [line.strip() for line in content.splitlines() if line.strip()]
     elif message.text:
         codes = [line.strip() for line in message.text.strip().splitlines() if line.strip()]
@@ -1153,12 +1179,13 @@ async def msg_giveaway_add_more_codes(message: types.Message, state: FSMContext)
     """Receive additional codes for existing giveaway."""
     codes = []
     if message.document:
-        file = await message.bot.get_file(message.document.file_id)
         import io
-        buf = io.BytesIO()
-        await message.bot.download_file(file.file_path, buf)
-        buf.seek(0)
-        content = buf.read().decode("utf-8", errors="ignore")
+        file = await message.bot.get_file(message.document.file_id)
+        file_bytes = await message.bot.download_file(file.file_path)
+        if isinstance(file_bytes, io.BytesIO):
+            content = file_bytes.read().decode("utf-8", errors="ignore")
+        else:
+            content = file_bytes.decode("utf-8", errors="ignore")
         codes = [line.strip() for line in content.splitlines() if line.strip()]
     elif message.text:
         codes = [line.strip() for line in message.text.strip().splitlines() if line.strip()]
