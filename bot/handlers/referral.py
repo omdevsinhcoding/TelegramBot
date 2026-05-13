@@ -1,6 +1,7 @@
 """
 DreamX Coupon Bot — Referral System Handler
-Handles Refer & Earn flow, referral tracking, and commission distribution.
+Handles Refer & Earn flow, referral tracking, commission distribution,
+and coupon-based milestone rewards.
 """
 
 from aiogram import Router, types, F
@@ -18,7 +19,7 @@ router = Router()
 @router.message(F.text == "🎁 Refer & Earn")
 @error_handler
 async def text_refer_earn(message: types.Message):
-    """Show the Refer & Earn page matching reference image."""
+    """Show the Refer & Earn page with milestone rewards."""
     settings = await db.get_referral_settings()
     if not settings or not settings["is_active"]:
         await message.answer("🎁 Referral program is currently inactive.")
@@ -35,13 +36,31 @@ async def text_refer_earn(message: types.Message):
 
     mode = settings["mode"]
     if mode == "code_reward":
-        needed = settings["referrals_needed"]
-        how_it_works = (
-            f"✨ *How it works:*\n"
-            f"1️⃣ Share your link\n"
-            f"2️⃣ Friends join the bot\n"
-            f"3️⃣ After *{needed}* referrals, get a free coupon\\!\n"
-        )
+        # Show milestone-based rewards
+        rewards = await db.get_referral_rewards()
+        active_rewards = [r for r in rewards if r["is_active"]]
+        if active_rewards:
+            how_it_works = (
+                f"✨ *How it works:*\n"
+                f"1️⃣ Share your link\n"
+                f"2️⃣ Friends join the bot\n"
+                f"3️⃣ Reach milestones to claim free coupons\\!\n\n"
+                f"🎁 *Available Rewards:*\n"
+            )
+            for r in active_rewards:
+                title_esc = escape_md(r["title"])
+                needed = r["referrals_needed"]
+                if ref_count >= needed:
+                    how_it_works += f"✅ {title_esc} — {needed} refs \\(unlocked\\!\\)\n"
+                else:
+                    how_it_works += f"🔒 {title_esc} — {needed} refs\n"
+        else:
+            how_it_works = (
+                f"✨ *How it works:*\n"
+                f"1️⃣ Share your link\n"
+                f"2️⃣ Friends join the bot\n"
+                f"3️⃣ Earn free coupons\\!\n"
+            )
     else:
         pct = settings["commission_percent"]
         how_it_works = (
@@ -74,12 +93,91 @@ async def text_refer_earn(message: types.Message):
         f"━━━━━━━━━━━━━━━━━━━━"
     )
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📋 My Referral History", callback_data="ref_history")],
-        [InlineKeyboardButton(text="◀️ Back", callback_data="back_home")],
-    ])
+    buttons = []
+    if mode == "code_reward":
+        # Check if user has claimable rewards
+        claimable = await db.get_claimable_rewards(user_id, ref_count)
+        if claimable:
+            buttons.append([InlineKeyboardButton(text="🎁 Claim Rewards", callback_data="ref_claim_rewards")])
+    buttons.append([InlineKeyboardButton(text="📋 My Referral History", callback_data="ref_history")])
+    buttons.append([InlineKeyboardButton(text="◀️ Back", callback_data="back_home")])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
 
     await message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
+
+
+@router.callback_query(F.data == "ref_claim_rewards")
+@error_handler
+async def cb_ref_claim_rewards(callback: types.CallbackQuery):
+    """Show rewards user can claim based on their referral count."""
+    user_id = callback.from_user.id
+    ref_count = await db.get_referral_count(user_id)
+    claimable = await db.get_claimable_rewards(user_id, ref_count)
+
+    if not claimable:
+        await callback.answer("No rewards to claim right now. Keep referring!", show_alert=True)
+        return
+
+    text = (
+        "🎁 *Claim Your Referral Rewards*\n\n"
+        f"👥 Your referrals: *{ref_count}*\n\n"
+        "Select a reward to claim:"
+    )
+
+    buttons = []
+    for r in claimable:
+        title = r["title"][:30]
+        buttons.append([InlineKeyboardButton(
+            text=f"🎁 {title} ({r['referrals_needed']} refs)",
+            callback_data=f"ref_claim:{r['id']}"
+        )])
+    buttons.append([back_button("back_home")])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("ref_claim:"))
+@error_handler
+async def cb_ref_claim(callback: types.CallbackQuery):
+    """User claims a specific referral reward."""
+    reward_id = int(callback.data.split(":")[1])
+    user_id = callback.from_user.id
+
+    # Verify user has enough referrals
+    ref_count = await db.get_referral_count(user_id)
+    reward = await db.get_referral_reward(reward_id)
+    if not reward:
+        await callback.answer("Reward not found.", show_alert=True)
+        return
+
+    if ref_count < reward["referrals_needed"]:
+        await callback.answer(
+            f"You need {reward['referrals_needed']} referrals. You have {ref_count}.",
+            show_alert=True
+        )
+        return
+
+    # Try to claim
+    code = await db.claim_referral_reward(user_id, reward_id)
+    if not code:
+        await callback.answer("Could not claim. Already claimed or out of stock.", show_alert=True)
+        return
+
+    title_esc = escape_md(reward["title"])
+    code_esc = escape_md(code)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
+
+    await callback.message.edit_text(
+        f"🎉 *Congratulations\\!*\n\n"
+        f"You claimed: *{title_esc}*\n\n"
+        f"🔑 Your coupon code:\n"
+        f"`{code_esc}`\n\n"
+        f"_Save this code\\!_",
+        parse_mode="MarkdownV2", reply_markup=kb
+    )
+    await callback.answer("Reward claimed! 🎉")
 
 
 @router.callback_query(F.data == "ref_history")
@@ -138,25 +236,3 @@ async def process_referral_on_purchase(user_id: int, order_amount: float):
                 "WHERE referrer_id = $1 AND referred_id = $2",
                 referrer_id, user_id, commission
             )
-
-    elif mode == "code_reward":
-        # Code reward: after N referrals, send reward code
-        needed = settings["referrals_needed"]
-        count = await db.get_referral_count(referrer_id)
-        if count >= needed and settings.get("reward_code"):
-            # Check if already rewarded (avoid duplicates)
-            already = await pool.fetchrow(
-                "SELECT id FROM referrals WHERE referrer_id = $1 AND status = 'rewarded' LIMIT 1",
-                referrer_id
-            )
-            if not already:
-                await pool.execute(
-                    "UPDATE referrals SET status = 'rewarded' WHERE referrer_id = $1 AND referred_id = $2",
-                    referrer_id, user_id
-                )
-                # The bot instance is not available here, so we store the reward
-                # and it gets checked on the referrer's next interaction
-                await pool.execute(
-                    "UPDATE users SET wallet_balance = wallet_balance WHERE telegram_id = $1",
-                    referrer_id  # no-op, reward code is sent via notification
-                )

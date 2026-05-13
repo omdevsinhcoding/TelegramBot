@@ -472,6 +472,115 @@ async def get_user_referral_earnings(user_id: int) -> float:
     return float(row["referral_earnings"]) if row else 0.0
 
 
+# ── REFERRAL REWARDS (Coupon-based milestones) ────────────
+
+async def get_referral_rewards() -> list:
+    pool = await get_pool()
+    return await pool.fetch(
+        "SELECT rr.*, c.title, c.stock FROM referral_rewards rr "
+        "JOIN coupons c ON rr.coupon_id = c.id "
+        "ORDER BY rr.referrals_needed ASC"
+    )
+
+async def get_referral_reward(reward_id: int):
+    pool = await get_pool()
+    return await pool.fetchrow(
+        "SELECT rr.*, c.title, c.stock FROM referral_rewards rr "
+        "JOIN coupons c ON rr.coupon_id = c.id WHERE rr.id = $1", reward_id
+    )
+
+async def add_referral_reward(coupon_id: int, referrals_needed: int):
+    pool = await get_pool()
+    await pool.execute(
+        "INSERT INTO referral_rewards (coupon_id, referrals_needed) VALUES ($1, $2) "
+        "ON CONFLICT (coupon_id) DO UPDATE SET referrals_needed = $2, is_active = TRUE",
+        coupon_id, referrals_needed
+    )
+
+async def remove_referral_reward(reward_id: int):
+    pool = await get_pool()
+    await pool.execute("DELETE FROM referral_rewards WHERE id = $1", reward_id)
+
+async def toggle_referral_reward(reward_id: int) -> bool:
+    pool = await get_pool()
+    row = await pool.fetchrow("SELECT is_active FROM referral_rewards WHERE id = $1", reward_id)
+    if not row:
+        return False
+    new = not row["is_active"]
+    await pool.execute("UPDATE referral_rewards SET is_active = $2 WHERE id = $1", reward_id, new)
+    return new
+
+async def update_referral_reward_count(reward_id: int, count: int):
+    pool = await get_pool()
+    await pool.execute("UPDATE referral_rewards SET referrals_needed = $2 WHERE id = $1", reward_id, count)
+
+async def get_claimable_rewards(user_id: int, ref_count: int) -> list:
+    """Get rewards user can claim (enough referrals + not already claimed + has stock)."""
+    pool = await get_pool()
+    return await pool.fetch(
+        "SELECT rr.*, c.title, c.stock FROM referral_rewards rr "
+        "JOIN coupons c ON rr.coupon_id = c.id "
+        "WHERE rr.is_active = TRUE AND rr.referrals_needed <= $2 AND c.stock > 0 "
+        "AND rr.id NOT IN (SELECT reward_id FROM referral_claims WHERE user_id = $1) "
+        "ORDER BY rr.referrals_needed ASC",
+        user_id, ref_count
+    )
+
+async def get_user_referral_claims(user_id: int) -> list:
+    pool = await get_pool()
+    return await pool.fetch(
+        "SELECT rc.*, c.title FROM referral_claims rc "
+        "JOIN coupons c ON rc.coupon_id = c.id "
+        "WHERE rc.user_id = $1 ORDER BY rc.claimed_at DESC",
+        user_id
+    )
+
+async def claim_referral_reward(user_id: int, reward_id: int) -> str | None:
+    """Claim a referral reward — assigns a coupon code to the user. Returns the code or None."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # Get reward details
+            reward = await conn.fetchrow(
+                "SELECT rr.*, c.stock FROM referral_rewards rr "
+                "JOIN coupons c ON rr.coupon_id = c.id WHERE rr.id = $1 AND rr.is_active = TRUE",
+                reward_id
+            )
+            if not reward or reward["stock"] <= 0:
+                return None
+
+            # Check not already claimed
+            existing = await conn.fetchrow(
+                "SELECT id FROM referral_claims WHERE user_id = $1 AND reward_id = $2",
+                user_id, reward_id
+            )
+            if existing:
+                return None
+
+            # Get available code
+            code_row = await conn.fetchrow(
+                "SELECT id, code FROM coupon_codes WHERE coupon_id = $1 AND is_sold = FALSE LIMIT 1",
+                reward["coupon_id"]
+            )
+            if not code_row:
+                return None
+
+            # Mark code as sold
+            await conn.execute(
+                "UPDATE coupon_codes SET is_sold = TRUE, sold_to = $2, sold_at = NOW() WHERE id = $1",
+                code_row["id"], user_id
+            )
+            # Decrease stock
+            await conn.execute(
+                "UPDATE coupons SET stock = stock - 1 WHERE id = $1",
+                reward["coupon_id"]
+            )
+            # Record claim
+            await conn.execute(
+                "INSERT INTO referral_claims (user_id, reward_id, coupon_id, code) VALUES ($1, $2, $3, $4)",
+                user_id, reward_id, reward["coupon_id"], code_row["code"]
+            )
+            return code_row["code"]
 
 # ── BOT SETTINGS QUERIES ─────────────────────────────────
 

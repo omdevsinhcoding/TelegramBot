@@ -208,6 +208,32 @@ async def init_db() -> asyncpg.Pool:
         except Exception:
             pass
 
+        # Referral rewards — admin picks existing coupons as milestones
+        try:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS referral_rewards (
+                    id              SERIAL PRIMARY KEY,
+                    coupon_id       INTEGER NOT NULL REFERENCES coupons(id) ON DELETE CASCADE,
+                    referrals_needed INTEGER NOT NULL DEFAULT 3,
+                    is_active       BOOLEAN DEFAULT TRUE,
+                    created_at      TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE(coupon_id)
+                );
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS referral_claims (
+                    id              SERIAL PRIMARY KEY,
+                    user_id         BIGINT NOT NULL REFERENCES users(telegram_id),
+                    reward_id       INTEGER NOT NULL REFERENCES referral_rewards(id) ON DELETE CASCADE,
+                    coupon_id       INTEGER NOT NULL REFERENCES coupons(id) ON DELETE CASCADE,
+                    code            TEXT NOT NULL,
+                    claimed_at      TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE(user_id, reward_id)
+                );
+            """)
+        except Exception:
+            pass
+
         # Orders: add quantity column
         try:
             await conn.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;")
