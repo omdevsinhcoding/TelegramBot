@@ -11,7 +11,7 @@ from aiogram.enums import ParseMode
 
 from bot.config import Config
 from bot.database.connection import init_db, close_db
-from bot.services.payment_service import poll_payment_status
+from bot.services.payment_service import expire_orders_loop
 from bot.payments.verifier import close_http_session
 from bot.utils.logger import logger
 
@@ -30,8 +30,8 @@ async def on_startup(bot: Bot):
 
     await init_db()
 
-    # Start payment polling as background task
-    asyncio.create_task(poll_payment_status(bot))
+    # Start lightweight order expiry task (NO payment API polling)
+    asyncio.create_task(expire_orders_loop(bot))
 
     me = await bot.get_me()
     logger.info(f"Bot started: @{me.username} (ID: {me.id})")

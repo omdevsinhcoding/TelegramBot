@@ -441,6 +441,13 @@ async def cb_check_payment(callback: types.CallbackQuery):
         await callback.answer("This order was cancelled.", show_alert=True)
         return
 
+    # Check if order expired but status not yet updated by background task
+    from datetime import datetime, timezone
+    if order.get("expires_at") and order["expires_at"] < datetime.now(timezone.utc):
+        await db.update_order_status(order_id, "expired")
+        await callback.answer("This order has expired. Please create a new order.", show_alert=True)
+        return
+
     # Status is pending — do a LIVE check with Paytm right now
     pool = await db.get_pool()
     txn_row = await pool.fetchrow(
