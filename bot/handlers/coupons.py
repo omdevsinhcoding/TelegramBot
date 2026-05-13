@@ -58,25 +58,18 @@ async def cb_coupon_detail(callback: types.CallbackQuery):
         await callback.answer("Coupon not found.", show_alert=True)
         return
 
-    stock_text = f"📦 Stock: {coupon['stock']}" if coupon["stock"] > 0 else "🔴 Out of Stock"
-    discount_pct = 0
-    if coupon["original_price"] > 0:
-        discount_pct = int(
-            (1 - coupon["discounted_price"] / coupon["original_price"]) * 100
-        )
-
     title = escape_md(coupon["title"])
-    desc = escape_md(coupon["description"] or "No description")
-    orig_price = escape_md(f"₹{coupon['original_price']:.2f}")
-    sale_price = escape_md(f"₹{coupon['discounted_price']:.2f}")
-
+    sale_price = escape_md(f"₹{coupon['discounted_price']:.1f}")
+    stock = escape_md(str(coupon["stock"]))
 
     text = (
-        f"🏷️ *{title}*\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"💰 Price: {sale_price} / unit\n"
-        f"📦 Stock: {escape_md(str(coupon['stock']))} available\n\n"
-        f"🛍️ *Select Quantity:*"
+        f"┌─────────────────────────┐\n"
+        f"│ 🛍️ *{title}*\n"
+        f"├─────────────────────────┤\n"
+        f"│ 💎 Price: *{sale_price}* / unit\n"
+        f"│ 📦 Stock: *{stock}* available\n"
+        f"└─────────────────────────┘\n\n"
+        f"🔢 *Select Quantity:*"
     )
 
     in_stock = coupon["stock"] > 0

@@ -61,6 +61,7 @@ class AdminStates(StatesGroup):
     # User management
     user_search_input = State()
     user_change_referrer = State()
+    user_wallet_edit = State()
     # Disclaimer
     disclaimer_text_input = State()
     disclaimer_buttons_input = State()
@@ -1684,7 +1685,8 @@ async def cb_admin_user_inspect(callback: types.CallbackQuery):
     buttons = [
         [InlineKeyboardButton(text="📦 View Orders", callback_data=f"admin_user_orders:{user_id}"),
          InlineKeyboardButton(text="👥 View Referrals", callback_data=f"admin_user_referrals:{user_id}")],
-        [InlineKeyboardButton(text="🔄 Change Referrer", callback_data=f"admin_user_chg_ref:{user_id}")],
+        [InlineKeyboardButton(text="💰 Edit Wallet", callback_data=f"admin_user_wallet:{user_id}"),
+         InlineKeyboardButton(text="🔄 Change Referrer", callback_data=f"admin_user_chg_ref:{user_id}")],
         [InlineKeyboardButton(text=ban_text, callback_data=ban_data)],
         [back_button("admin_users")],
     ]
@@ -1829,6 +1831,89 @@ async def msg_user_change_referrer(message: types.Message, state: FSMContext):
         f"✅ Referrer updated\\!\n\nUser `{user_id}` is now referred by *{ref_name}* \\(`{referrer_id}`\\)",
         parse_mode="MarkdownV2", reply_markup=kb
     )
+
+
+# ── Admin Wallet Management ─────────────────────────────
+
+@router.callback_query(F.data.startswith("admin_user_wallet:"))
+@admin_only
+@error_handler
+async def cb_admin_user_wallet(callback: types.CallbackQuery, state: FSMContext):
+    """Show wallet edit options for user."""
+    user_id = int(callback.data.split(":")[1])
+    balance = await db.get_wallet_balance(user_id)
+    bal_str = escape_md(f"₹{balance:.1f}")
+
+    await state.set_data({"wallet_edit_user": user_id})
+    await state.set_state(AdminStates.user_wallet_edit)
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [back_button(f"admin_user_inspect:{user_id}")],
+    ])
+    await callback.message.edit_text(
+        f"💰 *Edit Wallet for user* `{user_id}`\n\n"
+        f"Current Balance: *{bal_str}*\n\n"
+        f"Send the amount to *add* to the wallet:\n"
+        f"• Positive number \\= add \\(e\\.g\\. `50`\\)\n"
+        f"• Negative number \\= deduct \\(e\\.g\\. `\\-20`\\)\n"
+        f"• `set:100` \\= set exact balance to ₹100",
+        parse_mode="MarkdownV2", reply_markup=kb,
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.user_wallet_edit)
+@admin_only
+@error_handler
+async def msg_admin_wallet_edit(message: types.Message, state: FSMContext):
+    """Process wallet edit input."""
+    data = await state.get_data()
+    user_id = data["wallet_edit_user"]
+    text = message.text.strip()
+
+    current = await db.get_wallet_balance(user_id)
+
+    if text.lower().startswith("set:"):
+        # Set exact balance
+        try:
+            new_balance = float(text[4:].strip())
+        except ValueError:
+            await message.answer("⚠️ Invalid amount. Use format: `set:100`")
+            return
+        delta = new_balance - current
+    else:
+        # Add/deduct
+        try:
+            delta = float(text)
+        except ValueError:
+            await message.answer("⚠️ Invalid amount. Send a number like `50` or `-20`.")
+            return
+        new_balance = current + delta
+
+    if new_balance < 0:
+        await message.answer("⚠️ Balance cannot go below ₹0.")
+        return
+
+    await db.update_wallet_balance(user_id, new_balance)
+    await db.add_wallet_transaction(
+        user_id, delta, "admin_adjust",
+        bal_before=current, bal_after=new_balance,
+        description=f"Admin adjustment by {message.from_user.id}",
+    )
+
+    await state.clear()
+
+    action = "added" if delta >= 0 else "deducted"
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_user_inspect:{user_id}")]])
+    await message.answer(
+        f"✅ Wallet updated\\!\n\n"
+        f"👤 User: `{user_id}`\n"
+        f"💰 Previous: *{escape_md(format_currency(current))}*\n"
+        f"{'➕' if delta >= 0 else '➖'} {action.title()}: *{escape_md(format_currency(abs(delta)))}*\n"
+        f"💎 New Balance: *{escape_md(format_currency(new_balance))}*",
+        parse_mode="MarkdownV2", reply_markup=kb,
+    )
+    logger.info(f"Admin {message.from_user.id} adjusted wallet for {user_id}: {delta:+.1f}, new={new_balance:.1f}")
 
 
 # ── Analytics ────────────────────────────────────────────

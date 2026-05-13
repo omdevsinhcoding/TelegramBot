@@ -128,22 +128,43 @@ def coupons_list_kb(coupons: list, page: int = 0) -> InlineKeyboardMarkup:
 
 
 def coupon_detail_kb(coupon_id: int, in_stock: bool, stock: int = 0, price: float = 0) -> InlineKeyboardMarkup:
-    """Show quantity selection like the reference image."""
+    """Show quantity selection with attractive compact layout."""
     buttons = []
     if in_stock and stock > 0:
-        # Quantity presets matching reference: 1, 5, 10, 20, 50
-        presets = [1, 5, 10, 20, 50]
-        for qty in presets:
-            if stock >= qty:
-                total = price * qty
-                if qty == 1:
-                    label = f"🛍️ {qty} Qty • ₹{total:.1f}"
-                else:
-                    label = f"🛍️ {qty} Qty • ₹{total:.1f} [₹{price:.1f}/ea]"
-                buttons.append([
-                    InlineKeyboardButton(text=label, callback_data=f"buy_qty:{coupon_id}:{qty}")
-                ])
+        # First row: 1 Qty (full width)
+        if stock >= 1:
+            buttons.append([
+                InlineKeyboardButton(
+                    text=f"🛍️ 1 Qty • ₹{price:.1f}",
+                    callback_data=f"buy_qty:{coupon_id}:1"
+                )
+            ])
 
+        # Second row: 3 & 5 side by side (compact)
+        row2 = []
+        if stock >= 3:
+            row2.append(InlineKeyboardButton(
+                text=f"📦 3 Qty • ₹{price*3:.1f}",
+                callback_data=f"buy_qty:{coupon_id}:3"
+            ))
+        if stock >= 5:
+            row2.append(InlineKeyboardButton(
+                text=f"📦 5 Qty • ₹{price*5:.1f}",
+                callback_data=f"buy_qty:{coupon_id}:5"
+            ))
+        if row2:
+            buttons.append(row2)
+
+        # Third row: 10 (full width)
+        if stock >= 10:
+            buttons.append([
+                InlineKeyboardButton(
+                    text=f"🎁 10 Qty • ₹{price*10:.1f} [₹{price:.1f}/ea]",
+                    callback_data=f"buy_qty:{coupon_id}:10"
+                )
+            ])
+
+        # Custom Qty
         buttons.append([
             InlineKeyboardButton(text="✏️ Custom Qty", callback_data=f"buy_custom_qty:{coupon_id}")
         ])
@@ -177,10 +198,10 @@ def gateway_selection_kb(coupon_id: int, qty: int = 1, wallet_balance: float = 0
             callback_data=f"pay_gateway:wallet:{coupon_id}:{qty}"
         )])
     else:
-        # Not enough — show as info only
+        # Not enough — show balance info with proper callback
         buttons.append([InlineKeyboardButton(
             text=wallet_label,
-            callback_data="noop"
+            callback_data="wallet_insufficient"
         )])
 
     buttons.append([InlineKeyboardButton(text="✅ Pay via Paytm", callback_data=f"pay_gateway:paytm:{coupon_id}:{qty}")])

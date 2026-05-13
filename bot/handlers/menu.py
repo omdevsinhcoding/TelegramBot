@@ -621,4 +621,12 @@ async def cb_help(callback: types.CallbackQuery):
 
 @router.callback_query(F.data == "noop")
 async def cb_noop(callback: types.CallbackQuery):
-    await callback.answer("This item is currently unavailable.", show_alert=True)
+    await callback.answer("🔴 This item is sold out.", show_alert=True)
+
+
+@router.callback_query(F.data == "wallet_insufficient")
+async def cb_wallet_insufficient(callback: types.CallbackQuery):
+    await callback.answer(
+        "⚠️ Insufficient wallet balance!\nEarn more via referrals or use other payment methods.",
+        show_alert=True,
+    )
