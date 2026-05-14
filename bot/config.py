@@ -1,7 +1,13 @@
 """
 DreamX Coupon Bot — Configuration Module
-Loads core settings from environment variables.
-Payment credentials are managed via Admin Panel (stored in DB).
+Loads MINIMAL core settings from environment variables.
+
+Everything else is managed dynamically via Admin Panel (stored in DB):
+- Payment credentials (Paytm, BharatPe, Razorpay)
+- Payment timeout, min recharge, poll interval
+- Support/Disclaimer text
+- Gateway toggles
+- Additional admins
 """
 
 import os
@@ -13,12 +19,15 @@ env_path = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
 
+# Cached set of DB admin IDs (refreshed on add/remove)
+_db_admin_ids: set[int] = set()
+
+
 class Config:
-    """Central configuration loaded from environment variables.
+    """Central configuration — only truly static values from .env.
     
-    NOTE: Payment gateway credentials (Paytm, BharatPe) are NOT stored here.
-    They are managed dynamically from the Admin Panel and stored in the database.
-    See: bot.database.queries.get_payment_settings()
+    Dynamic settings (payment timeout, min recharge, etc.) are fetched
+    from the database via bot.database.queries.get_dynamic_config().
     """
 
     # ── Telegram ──────────────────────────────────────────
@@ -30,16 +39,18 @@ class Config:
     # ── Database ──────────────────────────────────────────
     DATABASE_URL: str = os.getenv("DATABASE_URL", "")
 
-    # ── Payment (non-credential config) ───────────────────
-    PAYMENT_TIMEOUT: int = int(os.getenv("PAYMENT_TIMEOUT_SECONDS", "600"))
-    BHARATPE_MIN_RECHARGE: float = float(os.getenv("BHARATPE_MIN_RECHARGE", "10"))
-
     # ── Logging ───────────────────────────────────────────
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     LOG_FILE: str = os.getenv("LOG_FILE", "bot.log")
 
     @classmethod
     def is_admin(cls, telegram_id: int) -> bool:
+        """Check if user is admin — checks .env seed admins AND DB admins."""
+        return telegram_id in cls.ADMIN_IDS or telegram_id in _db_admin_ids
+
+    @classmethod
+    def is_seed_admin(cls, telegram_id: int) -> bool:
+        """Check if user is a seed admin (from .env). These cannot be removed."""
         return telegram_id in cls.ADMIN_IDS
 
     @classmethod
@@ -53,3 +64,9 @@ class Config:
         if not cls.DATABASE_URL:
             errors.append("DATABASE_URL is required")
         return errors
+
+
+def refresh_admin_cache(admin_ids: set[int]):
+    """Update the cached DB admin IDs. Called after add/remove admin."""
+    global _db_admin_ids
+    _db_admin_ids = admin_ids

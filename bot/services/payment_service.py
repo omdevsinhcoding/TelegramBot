@@ -50,7 +50,12 @@ async def expire_orders_loop(bot: Bot):
                 """)
             except Exception as e:
                 logger.error(f"Error fetching expiring orders: {e}")
-                await asyncio.sleep(30)
+                try:
+                    dyn = await db.get_dynamic_config()
+                    poll_sec = dyn["payment_poll_interval"]
+                except Exception:
+                    poll_sec = 30
+                await asyncio.sleep(poll_sec)
                 continue
 
             # Expire them
@@ -104,4 +109,9 @@ async def expire_orders_loop(bot: Bot):
             logger.error(f"Expiry loop error: {e}\n{traceback.format_exc()}")
 
         # Check every 30 seconds — lightweight, no API calls
-        await asyncio.sleep(30)
+        try:
+            dyn = await db.get_dynamic_config()
+            poll_sec = dyn["payment_poll_interval"]
+        except Exception:
+            poll_sec = 30
+        await asyncio.sleep(poll_sec)

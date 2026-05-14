@@ -5,7 +5,6 @@ Business logic for order creation, payment, and delivery.
 
 from datetime import datetime, timezone, timedelta
 
-from bot.config import Config
 from bot.database import queries as db
 from bot.payments.upi import generate_unique_txn_id
 from bot.utils.helpers import generate_order_id
@@ -21,7 +20,8 @@ async def create_purchase_order(user_id: int, coupon_id: int, amount: float,
     """
     order_id = generate_order_id()           # human-readable: DX-xxxxx-XXXXXX
     txn_ref = generate_unique_txn_id()       # Paytm ORDERID: TXN_{timestamp}_{random}
-    timeout_sec = Config.PAYMENT_TIMEOUT
+    dyn = await db.get_dynamic_config()
+    timeout_sec = dyn["payment_timeout_seconds"]
 
     await db.create_order(order_id, user_id, coupon_id, amount, timeout_sec, qty)
 

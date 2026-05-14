@@ -32,6 +32,16 @@ async def on_startup(bot: Bot):
 
     await init_db()
 
+    # Load DB admin IDs into cache for is_admin() checks
+    try:
+        from bot.database import queries as db
+        from bot.config import refresh_admin_cache
+        db_admins = await db.get_db_admin_ids()
+        refresh_admin_cache(db_admins)
+        logger.info(f"Loaded {len(db_admins)} DB admins into cache.")
+    except Exception as e:
+        logger.warning(f"Could not load DB admins: {e}")
+
     # Start lightweight order expiry task (NO payment API polling)
     asyncio.create_task(expire_orders_loop(bot))
 

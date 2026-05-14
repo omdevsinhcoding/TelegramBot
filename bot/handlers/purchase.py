@@ -29,7 +29,6 @@ from bot.payments.verifier import check_upi_status, verify_payment, verify_bhara
 from bot.keyboards.coupon_kb import payment_pending_kb
 from bot.keyboards.common import back_button
 from bot.database import queries as db
-from bot.config import Config
 from bot.utils.helpers import format_currency, escape_md
 from bot.utils.decorators import error_handler
 from bot.utils.logger import logger
@@ -340,7 +339,8 @@ async def cb_pay_paytm(callback: types.CallbackQuery):
     upi_url = await generate_upi_intent_url(amount, txn_ref, f"Order {order_id}", "paytm")
     qr_buf = create_qr_buffer(upi_url, amount, txn_ref)
 
-    timeout_min = Config.PAYMENT_TIMEOUT // 60
+    dyn = await db.get_dynamic_config()
+    timeout_min = dyn["payment_timeout_seconds"] // 60
     title = escape_md(coupon["title"])
     amt = escape_md(format_currency(amount))
     oid = escape_md(order_id)
@@ -402,7 +402,8 @@ async def cb_pay_bharatpe(callback: types.CallbackQuery, state: FSMContext):
     order_info = await create_purchase_order(user_id, coupon_id, amount, "bharatpe", qty)
     order_id = order_info["order_id"]
 
-    timeout_min = Config.PAYMENT_TIMEOUT // 60
+    dyn = await db.get_dynamic_config()
+    timeout_min = dyn["payment_timeout_seconds"] // 60
     title = escape_md(coupon["title"])
     amt = escape_md(format_currency(amount))
     oid = escape_md(order_id)
@@ -590,7 +591,8 @@ async def msg_bharatpe_utr(message: types.Message, state: FSMContext):
         except Exception:
             pass
 
-        min_amt = escape_md(format_currency(Config.BHARATPE_MIN_RECHARGE))
+        dyn = await db.get_dynamic_config()
+        min_amt = escape_md(format_currency(dyn["bharatpe_min_recharge"]))
         await message.answer(
             f"❌ *Payment Not Found*\n\n"
             f"UTR `{escape_md(utr)}` was not found or amount doesn't match\\.\n\n"
@@ -659,7 +661,8 @@ async def cb_pay_razorpay(callback: types.CallbackQuery):
     except Exception as e:
         logger.warning(f"Failed to store razorpay link_id: {e}")
 
-    timeout_min = Config.PAYMENT_TIMEOUT // 60
+    dyn = await db.get_dynamic_config()
+    timeout_min = dyn["payment_timeout_seconds"] // 60
     title = escape_md(coupon["title"])
     amt = escape_md(format_currency(amount))
     oid = escape_md(order_id)

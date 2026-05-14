@@ -19,7 +19,6 @@ from bot.keyboards.admin_kb import (
     admin_panel_kb, admin_coupons_kb,
     admin_coupon_edit_kb, confirm_delete_kb,
     admin_giveaways_kb, admin_giveaway_view_kb,
-    admin_bot_settings_kb
 )
 from bot.keyboards.common import back_button, admin_cancel_button
 from bot.utils.helpers import format_currency, format_datetime, escape_md
@@ -70,6 +69,10 @@ class AdminStates(StatesGroup):
     # Ban message
     ban_message_text_input = State()
     ban_message_buttons_input = State()
+    # Admin management
+    add_admin_input = State()
+    # Dynamic config
+    dynamic_config_input = State()
 
 
 # ── Universal Cancel — inline ❌ button + /cancel fallback ──
@@ -308,8 +311,10 @@ async def msg_add_coupon_codes(message: types.Message, state: FSMContext):
     codes_added = 0
     if codes_text.lower() != "skip":
         codes = [c.strip() for c in codes_text.split("\n") if c.strip()]
-        for code in codes:
-            await db.add_coupon_code(coupon_id, code)
+        try:
+            await db.add_coupon_codes_bulk(coupon_id, codes)
+        except Exception as e:
+            logger.error(f"Bulk code insert failed: {e}")
         codes_added = len(codes)
         # Update stock to match actual codes
         if codes_added > 0:
@@ -488,8 +493,13 @@ async def msg_add_codes(message: types.Message, state: FSMContext):
     await state.clear()
 
     codes = [c.strip() for c in message.text.strip().split("\n") if c.strip()]
-    for code in codes:
-        await db.add_coupon_code(coupon_id, code)
+    try:
+        await db.add_coupon_codes_bulk(coupon_id, codes)
+    except Exception as e:
+        logger.error(f"Bulk code insert failed: {e}")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_coupon_edit:{coupon_id}")]])
+        await message.answer(f"❌ Error adding codes: {escape_md(str(e)[:100])}", parse_mode="MarkdownV2", reply_markup=kb)
+        return
 
     # Update stock to match available codes
     pool = await db.get_pool()
@@ -565,9 +575,14 @@ async def msg_upload_codes_file(message: types.Message, state: FSMContext):
         await message.answer("⚠️ No codes found in the file.", reply_markup=kb)
         return
 
-    # Add codes to database
-    for code in codes:
-        await db.add_coupon_code(coupon_id, code)
+    # Add codes to database (bulk insert)
+    try:
+        await db.add_coupon_codes_bulk(coupon_id, codes)
+    except Exception as e:
+        logger.error(f"Bulk file code insert failed: {e}")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_coupon_edit:{coupon_id}")]])
+        await message.answer(f"❌ Error adding codes from file: {escape_md(str(e)[:100])}", parse_mode="MarkdownV2", reply_markup=kb)
+        return
 
     # Update stock
     pool = await db.get_pool()
@@ -1845,19 +1860,38 @@ async def cb_admin_bot_settings(callback: types.CallbackQuery):
     settings = await db.get_bot_settings()
     force_channel = settings.get("force_channel") if settings else None
     
+    dyn = await db.get_dynamic_config()
+    
     status = "🟢 Active" if force_channel else "🔴 Disabled"
     chan = escape_md(force_channel) if force_channel else "None"
     
+    timeout_val = dyn["payment_timeout_seconds"]
+    min_recharge = dyn["bharatpe_min_recharge"]
+    poll_val = dyn["payment_poll_interval"]
+    
     text = (
-        f"⚙️ *Bot Settings*\n\n"
+        f"⚙️ *Bot Settings*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"📢 *Force Join Channel*\n"
         f"Status: {status}\n"
         f"Channel: `{chan}`\n\n"
-        f"Users must join this channel before using the bot\\."
+        f"━━━ *Dynamic Config* ━━━\n"
+        f"⏱️ Payment Timeout: *{timeout_val}s* \\({timeout_val // 60} min\\)\n"
+        f"💰 Min Recharge \\(BharatPe\\): *₹{min_recharge:.0f}*\n"
+        f"🔄 Expiry Poll Interval: *{poll_val}s*\n"
     )
     
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📢 Force Join Channel", callback_data="admin_toggle_force_join")],
+        [InlineKeyboardButton(text="⏱️ Payment Timeout", callback_data="admin_dynconf:payment_timeout_seconds"),
+         InlineKeyboardButton(text="💰 Min Recharge", callback_data="admin_dynconf:bharatpe_min_recharge")],
+        [InlineKeyboardButton(text="🔄 Poll Interval", callback_data="admin_dynconf:payment_poll_interval")],
+        [InlineKeyboardButton(text="👮 Manage Admins", callback_data="admin_manage_admins")],
+        [back_button("admin_panel")],
+    ])
+
     await callback.message.edit_text(
-        text, parse_mode="MarkdownV2", reply_markup=admin_bot_settings_kb(force_channel)
+        text, parse_mode="MarkdownV2", reply_markup=kb
     )
     await callback.answer()
 
@@ -1932,6 +1966,233 @@ async def msg_force_channel_input(message: types.Message, state: FSMContext):
     
     kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_bot_settings")]])
     await message.answer(result, parse_mode="MarkdownV2", reply_markup=kb)
+
+
+# ══════════════════════════════════════════════════════════
+# DYNAMIC CONFIG EDITOR
+# ══════════════════════════════════════════════════════════
+
+DYNCONF_LABELS = {
+    "payment_timeout_seconds": ("⏱️ Payment Timeout", "seconds", "How long to wait before expiring orders (in seconds). Example: 600 = 10 minutes"),
+    "bharatpe_min_recharge": ("💰 Min Recharge", "INR", "Minimum BharatPe payment amount in INR. Example: 10"),
+    "payment_poll_interval": ("🔄 Poll Interval", "seconds", "How often to check for expired orders (in seconds). Example: 30"),
+}
+
+@router.callback_query(F.data.startswith("admin_dynconf:"))
+@admin_only
+@error_handler
+async def cb_admin_dynconf(callback: types.CallbackQuery, state: FSMContext):
+    """Ask admin for new value of a dynamic config field."""
+    field = callback.data.split(":")[1]
+    if field not in DYNCONF_LABELS:
+        await callback.answer("Invalid setting.", show_alert=True)
+        return
+
+    label, unit, hint = DYNCONF_LABELS[field]
+    dyn = await db.get_dynamic_config()
+    current = dyn.get(field, "?")
+
+    await state.update_data(dynconf_field=field)
+    await callback.message.edit_text(
+        f"✏️ *Edit: {label}*\n\n"
+        f"Current value: `{escape_md(str(current))}` {escape_md(unit)}\n\n"
+        f"💡 {escape_md(hint)}\n\n"
+        f"Send the new value:",
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [back_button("admin_bot_settings"), admin_cancel_button()]
+        ]),
+    )
+    await state.set_state(AdminStates.dynamic_config_input)
+    await callback.answer()
+
+
+@router.message(AdminStates.dynamic_config_input)
+@error_handler
+async def msg_dynconf_input(message: types.Message, state: FSMContext):
+    """Process dynamic config value input."""
+    data = await state.get_data()
+    field = data.get("dynconf_field")
+    await state.clear()
+
+    if not field or field not in DYNCONF_LABELS:
+        await message.answer("❌ Invalid config field.")
+        return
+
+    raw = message.text.strip()
+    try:
+        if field == "bharatpe_min_recharge":
+            val = float(raw)
+        else:
+            val = int(raw)
+        if val <= 0:
+            raise ValueError("Must be positive")
+    except (ValueError, TypeError):
+        await message.answer("❌ Invalid number. Please enter a positive number.")
+        return
+
+    # Get old value for audit
+    dyn = await db.get_dynamic_config()
+    old_val = dyn.get(field, "?")
+
+    await db.update_bot_settings(**{field: val})
+
+    label = DYNCONF_LABELS[field][0]
+    await db.add_admin_log(
+        message.from_user.id, "config_change", "bot_settings", field,
+        f"Changed {label}: {old_val} → {val}"
+    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_bot_settings")]])
+    await message.answer(
+        f"✅ *{escape_md(label)}* updated\\!\n\n"
+        f"Old: `{escape_md(str(old_val))}`\n"
+        f"New: `{escape_md(str(val))}`",
+        parse_mode="MarkdownV2", reply_markup=kb,
+    )
+    logger.info(f"Admin {message.from_user.id} changed {field}: {old_val} → {val}")
+
+
+# ══════════════════════════════════════════════════════════
+# ADMIN MANAGEMENT
+# ══════════════════════════════════════════════════════════
+
+@router.callback_query(F.data == "admin_manage_admins")
+@admin_only
+@error_handler
+async def cb_admin_manage_admins(callback: types.CallbackQuery):
+    """Show admin list with add/remove options."""
+    from bot.config import Config
+
+    # Seed admins from .env
+    seed_ids = Config.ADMIN_IDS
+    # DB admins
+    db_admins = await db.get_all_admins()
+
+    lines = ["👮 *Admin Management*", "━━━━━━━━━━━━━━━━━━━━", ""]
+    lines.append("*Seed Admins* \\(from \\.env — cannot remove\\):")
+    for sid in seed_ids:
+        lines.append(f"  🔒 `{sid}`")
+
+    lines.append("")
+    if db_admins:
+        lines.append("*Dynamic Admins* \\(added via panel\\):")
+        for adm in db_admins:
+            tid = adm["telegram_id"]
+            added_by = adm["added_by"]
+            lines.append(f"  👤 `{tid}` — added by `{added_by}`")
+    else:
+        lines.append("_No dynamic admins added yet_")
+
+    text = "\n".join(lines)
+
+    buttons = [
+        [InlineKeyboardButton(text="➕ Add Admin", callback_data="admin_add_admin")],
+    ]
+    # Remove buttons for DB admins only
+    for adm in db_admins:
+        tid = adm["telegram_id"]
+        buttons.append([InlineKeyboardButton(
+            text=f"🗑️ Remove {tid}",
+            callback_data=f"admin_remove_admin:{tid}"
+        )])
+
+    buttons.append([back_button("admin_bot_settings")])
+
+    await callback.message.edit_text(
+        text, parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_add_admin")
+@admin_only
+@error_handler
+async def cb_admin_add_admin(callback: types.CallbackQuery, state: FSMContext):
+    """Ask for Telegram ID of new admin."""
+    await callback.message.edit_text(
+        "👮 *Add New Admin*\n\n"
+        "Send the *Telegram ID* of the user you want to add as admin\\.\n\n"
+        "💡 The user can find their ID using @userinfobot",
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [back_button("admin_manage_admins"), admin_cancel_button()]
+        ]),
+    )
+    await state.set_state(AdminStates.add_admin_input)
+    await callback.answer()
+
+
+@router.message(AdminStates.add_admin_input)
+@error_handler
+async def msg_add_admin_input(message: types.Message, state: FSMContext):
+    """Process new admin Telegram ID."""
+    await state.clear()
+    raw = message.text.strip()
+
+    if not raw.lstrip("-").isdigit():
+        await message.answer("❌ Please enter a valid Telegram ID (numbers only).")
+        return
+
+    new_admin_id = int(raw)
+    from bot.config import Config, refresh_admin_cache
+
+    if Config.is_admin(new_admin_id):
+        await message.answer("⚠️ This user is already an admin.")
+        return
+
+    success = await db.add_admin(new_admin_id, message.from_user.id)
+    if success:
+        # Refresh cache
+        db_ids = await db.get_db_admin_ids()
+        refresh_admin_cache(db_ids)
+
+        await db.add_admin_log(
+            message.from_user.id, "add_admin", "admin", str(new_admin_id),
+            f"Added {new_admin_id} as admin"
+        )
+        logger.info(f"Admin {message.from_user.id} added {new_admin_id} as admin")
+
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_manage_admins")]])
+        await message.answer(
+            f"✅ *Admin Added\\!*\n\nTelegram ID: `{new_admin_id}`",
+            parse_mode="MarkdownV2", reply_markup=kb,
+        )
+    else:
+        await message.answer("❌ Failed to add admin. They may already exist.")
+
+
+@router.callback_query(F.data.startswith("admin_remove_admin:"))
+@admin_only
+@error_handler
+async def cb_admin_remove_admin(callback: types.CallbackQuery):
+    """Remove a dynamic admin."""
+    tid = int(callback.data.split(":")[1])
+    from bot.config import Config, refresh_admin_cache
+
+    # Cannot remove seed admins
+    if Config.is_seed_admin(tid):
+        await callback.answer("🔒 Cannot remove seed admin (.env)", show_alert=True)
+        return
+
+    success = await db.remove_admin(tid)
+    if success:
+        # Refresh cache
+        db_ids = await db.get_db_admin_ids()
+        refresh_admin_cache(db_ids)
+
+        await db.add_admin_log(
+            callback.from_user.id, "remove_admin", "admin", str(tid),
+            f"Removed {tid} from admins"
+        )
+        logger.info(f"Admin {callback.from_user.id} removed {tid} from admins")
+        await callback.answer(f"✅ Removed admin {tid}", show_alert=True)
+    else:
+        await callback.answer("❌ Admin not found.", show_alert=True)
+
+    # Refresh the page
+    await cb_admin_manage_admins(callback)
 
 
 # ══════════════════════════════════════════════════════════
@@ -2049,6 +2310,11 @@ async def cb_admin_gw_toggle(callback: types.CallbackQuery):
 
     gw_name = field.replace("gateway_", "").replace("_enabled", "").title()
     status = "🟢 Enabled" if new_val else "🔴 Disabled"
+
+    await db.add_admin_log(
+        callback.from_user.id, "gateway_toggle", "payment", field,
+        f"{gw_name} gateway {'enabled' if new_val else 'disabled'}"
+    )
     await callback.answer(f"{gw_name}: {status}")
 
     # Refresh the payments page
@@ -2782,14 +3048,16 @@ async def cb_admin_disclaimer(callback: types.CallbackQuery):
     else:
         btn_preview = "\n📎 _No inline buttons_"
 
-    # Display mode
+    # Display mode — 3 options
     if disclaimer_mode == "button":
         mode_text = "🔘 *Button* — Shows '⚠️ Disclaimer' in user menu"
+    elif disclaimer_mode == "description":
+        mode_text = "📝 *Description* — Shows in product detail page"
     else:
-        mode_text = "📝 *Description* — Shows disclaimer in product details"
+        mode_text = "🚫 *Disabled* — Disclaimer is hidden from users"
 
     text = (
-        f"🆘 *Support & Disclaimer Settings*\n"
+        f"🆘 *Support \\& Disclaimer Settings*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"📝 *Current Text:*\n{preview}\n"
         f"{btn_preview}\n\n"
@@ -2797,11 +3065,13 @@ async def cb_admin_disclaimer(callback: types.CallbackQuery):
         f"{mode_text}\n"
     )
 
-    # Mode toggle button
-    if disclaimer_mode == "button":
-        mode_toggle = "📝 Switch to Description Mode"
-    else:
-        mode_toggle = "🔘 Switch to Button Mode"
+    # Cycle: button → description → disabled → button
+    NEXT_LABEL = {
+        "button": "📝 Switch → Description Mode",
+        "description": "🚫 Switch → Disabled",
+        "disabled": "🔘 Switch → Button Mode",
+    }
+    mode_toggle = NEXT_LABEL.get(disclaimer_mode, "🔘 Switch → Button Mode")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✏️ Edit Text", callback_data="admin_discl_edit_text")],
@@ -2818,16 +3088,24 @@ async def cb_admin_disclaimer(callback: types.CallbackQuery):
 @admin_only
 @error_handler
 async def cb_admin_discl_toggle_mode(callback: types.CallbackQuery):
-    """Toggle disclaimer display mode between button and description."""
+    """Cycle disclaimer mode: button → description → disabled → button."""
     settings = await db.get_bot_settings()
     current = settings.get("disclaimer_mode") or "button"
-    new_mode = "description" if current == "button" else "button"
+    NEXT_MODE = {"button": "description", "description": "disabled", "disabled": "button"}
+    new_mode = NEXT_MODE.get(current, "button")
     await db.update_bot_settings(disclaimer_mode=new_mode)
 
-    if new_mode == "button":
-        await callback.answer("🔘 Mode: Button — Disclaimer shows as menu button", show_alert=True)
-    else:
-        await callback.answer("📝 Mode: Description — Disclaimer shows in product details", show_alert=True)
+    await db.add_admin_log(
+        callback.from_user.id, "disclaimer_mode_change", "bot_settings", "disclaimer_mode",
+        f"Changed disclaimer mode: {current} → {new_mode}"
+    )
+
+    ALERTS = {
+        "button": "🔘 Mode: Button — Disclaimer shows as menu button",
+        "description": "📝 Mode: Description — Shows in product details",
+        "disabled": "🚫 Mode: Disabled — Disclaimer hidden from users",
+    }
+    await callback.answer(ALERTS.get(new_mode, "Mode updated"), show_alert=True)
 
     await cb_admin_disclaimer(callback)
 

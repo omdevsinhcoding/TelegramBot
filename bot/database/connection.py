@@ -370,6 +370,27 @@ async def init_db() -> asyncpg.Pool:
         except Exception:
             pass
 
+        # Dynamic config: payment timeout, min recharge, poll interval
+        try:
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS payment_timeout_seconds INTEGER DEFAULT 600;")
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS bharatpe_min_recharge NUMERIC(10,2) DEFAULT 10;")
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS payment_poll_interval INTEGER DEFAULT 30;")
+        except Exception:
+            pass
+
+        # Admins table for dynamic admin management
+        try:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS admins (
+                    id SERIAL PRIMARY KEY,
+                    telegram_id BIGINT UNIQUE NOT NULL,
+                    added_by BIGINT NOT NULL,
+                    added_at TIMESTAMPTZ DEFAULT NOW()
+                );
+            """)
+        except Exception:
+            pass
+
     logger.info("Database pool ready.")
     _last_health_check = time.monotonic()
     _db_ready.set()

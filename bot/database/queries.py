@@ -816,3 +816,78 @@ async def get_referrer_of(telegram_id: int):
             "SELECT * FROM users WHERE telegram_id = $1", row["referred_by"]
         )
     return None
+
+
+# ── DYNAMIC CONFIG QUERIES ──────────────────────────────
+
+async def get_dynamic_config() -> dict:
+    """Get dynamic settings from bot_settings (admin-managed).
+    
+    Returns dict with:
+        payment_timeout_seconds: int (default 600)
+        bharatpe_min_recharge: float (default 10)
+        payment_poll_interval: int (default 30)
+    """
+    settings = await get_bot_settings()
+    return {
+        "payment_timeout_seconds": int(settings.get("payment_timeout_seconds") or 600),
+        "bharatpe_min_recharge": float(settings.get("bharatpe_min_recharge") or 10),
+        "payment_poll_interval": int(settings.get("payment_poll_interval") or 30),
+    }
+
+
+# ── BULK COUPON CODE INSERT ─────────────────────────────
+
+async def add_coupon_codes_bulk(coupon_id: int, codes: list[str]):
+    """Insert multiple coupon codes in a single transaction.
+    
+    Much faster than inserting one-by-one. Prevents timeout errors
+    when admin pastes hundreds of codes.
+    """
+    if not codes:
+        return 0
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.executemany(
+                "INSERT INTO coupon_codes (coupon_id, code) VALUES ($1, $2)",
+                [(coupon_id, code) for code in codes]
+            )
+    return len(codes)
+
+
+# ── ADMIN MANAGEMENT QUERIES ────────────────────────────
+
+async def get_all_admins() -> list:
+    """Get all dynamically-added admins from DB."""
+    pool = await get_pool()
+    return await pool.fetch("SELECT * FROM admins ORDER BY added_at DESC")
+
+
+async def add_admin(telegram_id: int, added_by: int) -> bool:
+    """Add a new admin to the DB. Returns True if added, False if already exists."""
+    pool = await get_pool()
+    try:
+        await pool.execute(
+            "INSERT INTO admins (telegram_id, added_by) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+            telegram_id, added_by
+        )
+        return True
+    except Exception:
+        return False
+
+
+async def remove_admin(telegram_id: int) -> bool:
+    """Remove an admin from the DB. Returns True if removed."""
+    pool = await get_pool()
+    result = await pool.execute(
+        "DELETE FROM admins WHERE telegram_id = $1", telegram_id
+    )
+    return result != "DELETE 0"
+
+
+async def get_db_admin_ids() -> set[int]:
+    """Get set of all admin Telegram IDs from DB (for fast lookup)."""
+    pool = await get_pool()
+    rows = await pool.fetch("SELECT telegram_id FROM admins")
+    return {row["telegram_id"] for row in rows}
