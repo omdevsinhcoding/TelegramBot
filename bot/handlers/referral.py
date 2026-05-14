@@ -24,7 +24,7 @@ router = Router()
 @router.message(F.text == "🎁 Refer & Earn")
 @error_handler
 async def text_refer_earn(message: types.Message):
-    """Show the Refer & Earn page with milestone rewards."""
+    """Show the Refer & Earn page with rewards info."""
     settings = await db.get_referral_settings()
     if not settings or not settings["is_active"]:
         await message.answer("🎁 Referral program is currently inactive.")
@@ -41,7 +41,6 @@ async def text_refer_earn(message: types.Message):
 
     mode = settings["mode"]
     if mode == "code_reward":
-        # Show milestone-based rewards
         rewards = await db.get_referral_rewards()
         active_rewards = [r for r in rewards if r["is_active"]]
         if active_rewards:
@@ -66,7 +65,16 @@ async def text_refer_earn(message: types.Message):
                 f"2️⃣ Friends join the bot\n"
                 f"3️⃣ Earn free coupons\\!\n"
             )
-    else:
+    elif mode == "wallet_reward":
+        reward_amt = float(settings.get("reward_amount", 10.0) or 10.0)
+        how_it_works = (
+            f"✨ *How it works:*\n"
+            f"1️⃣ Share your link\n"
+            f"2️⃣ Friends join the bot\n"
+            f"3️⃣ Get 💵 *₹{escape_md(str(reward_amt))}* per referral\\!\n\n"
+            f"💰 Reward goes straight to your wallet\\!\n"
+        )
+    else:  # commission
         pct = settings["commission_percent"]
         how_it_works = (
             f"✨ *How it works:*\n"
@@ -106,7 +114,6 @@ async def text_refer_earn(message: types.Message):
         buttons.append([InlineKeyboardButton(text="🔗 Enter Referral Code", callback_data="ref_enter_code")])
 
     if mode == "code_reward":
-        # Check if user has claimable rewards
         claimable = await db.get_claimable_rewards(user_id, ref_count)
         if claimable:
             buttons.append([InlineKeyboardButton(text="🎁 Claim Rewards", callback_data="ref_claim_rewards")])
@@ -257,7 +264,7 @@ async def process_referral_on_purchase(user_id: int, order_amount: float):
     referrer_id = user["referred_by"]
     mode = settings["mode"]
 
-    if mode == "balance":
+    if mode == "commission":
         # Commission mode: give % of purchase to referrer
         pct = float(settings["commission_percent"])
         commission = round(order_amount * pct / 100, 2)

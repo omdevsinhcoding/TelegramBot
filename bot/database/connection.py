@@ -285,8 +285,9 @@ async def init_db() -> asyncpg.Pool:
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS referral_settings (
                     id                  SERIAL PRIMARY KEY,
-                    mode                VARCHAR(32) DEFAULT 'balance',
+                    mode                VARCHAR(32) DEFAULT 'commission',
                     commission_percent  NUMERIC(5,2) DEFAULT 10.0,
+                    reward_amount       NUMERIC(10,2) DEFAULT 10.0,
                     referrals_needed    INTEGER DEFAULT 3,
                     reward_code         TEXT DEFAULT '',
                     is_active           BOOLEAN DEFAULT TRUE,
@@ -307,7 +308,11 @@ async def init_db() -> asyncpg.Pool:
             # Insert default referral settings if none exist
             existing = await conn.fetchrow("SELECT id FROM referral_settings LIMIT 1")
             if not existing:
-                await conn.execute("INSERT INTO referral_settings (mode) VALUES ('balance')")
+                await conn.execute("INSERT INTO referral_settings (mode) VALUES ('commission')")
+
+            # Migration: add reward_amount column + rename 'balance' -> 'commission'
+            await conn.execute("ALTER TABLE referral_settings ADD COLUMN IF NOT EXISTS reward_amount NUMERIC(10,2) DEFAULT 10.0;")
+            await conn.execute("UPDATE referral_settings SET mode = 'commission' WHERE mode = 'balance';")
         except Exception:
             pass
 

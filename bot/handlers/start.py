@@ -35,8 +35,9 @@ async def cmd_start(message: types.Message):
                 if referrer and referrer["telegram_id"] != user.id:
                     success = await db.record_referral(referrer["telegram_id"], user.id)
                     if success:
-                        referrer_name = referrer.get("full_name") or str(referrer["telegram_id"])
-                        logger.info(f"Referral recorded: {referrer['telegram_id']} -> {user.id}")
+                        referrer_id = referrer["telegram_id"]
+                        referrer_name = referrer.get("full_name") or str(referrer_id)
+                        logger.info(f"Referral recorded: {referrer_id} -> {user.id}")
 
                         # Notify the REFERRED user
                         referral_msg = (
@@ -44,15 +45,59 @@ async def cmd_start(message: types.Message):
                             f"Start shopping to unlock referral rewards 🎁"
                         )
 
+                        # Check force channel — reward only after joining
+                        channel_joined = True
+                        try:
+                            settings = await db.get_bot_settings()
+                            force_raw = settings.get("force_channel") if settings else None
+                            if force_raw:
+                                channels = [ch.strip() for ch in force_raw.split(",") if ch.strip()]
+                                bot = message.bot
+                                for channel in channels:
+                                    try:
+                                        chat_id = int(channel) if channel.lstrip("-").isdigit() else channel
+                                        member = await bot.get_chat_member(chat_id=chat_id, user_id=user.id)
+                                        if member.status in ("left", "kicked"):
+                                            channel_joined = False
+                                            break
+                                    except Exception:
+                                        pass
+                        except Exception:
+                            pass
+
+                        # Get referral mode
+                        ref_settings = await db.get_referral_settings()
+                        mode = ref_settings["mode"] if ref_settings else "commission"
+
+                        # Grant wallet_reward immediately if channels joined
+                        reward_msg = ""
+                        if mode == "wallet_reward" and channel_joined and ref_settings:
+                            reward_amt = float(ref_settings.get("reward_amount", 10.0) or 10.0)
+                            await db.add_referral_earnings(referrer_id, reward_amt)
+                            reward_msg = f"\n💵 ₹{reward_amt} added to your wallet\\!"
+
                         # Notify the REFERRER
                         try:
                             ref_name = escape_md(user.first_name or "Someone")
-                            await message.bot.send_message(
-                                referrer["telegram_id"],
+                            notify_text = (
                                 f"🎉 *New Referral\\!*\n\n"
-                                f"👤 {ref_name} joined using your link\\!\n"
-                                f"Keep sharing to earn more rewards 💰",
-                                parse_mode="MarkdownV2",
+                                f"👤 {ref_name} joined using your link\\!"
+                            )
+                            if mode == "wallet_reward" and channel_joined:
+                                reward_amt = float(ref_settings.get("reward_amount", 10.0) or 10.0)
+                                notify_text += f"\n💵 *₹{escape_md(str(reward_amt))}* added to your wallet\\!"
+                            elif mode == "commission":
+                                pct = ref_settings.get("commission_percent", 10)
+                                notify_text += f"\n💰 You'll earn {escape_md(str(pct))}% on their purchases\\!"
+                            elif mode == "code_reward":
+                                notify_text += f"\n🎁 Keep referring to unlock free coupons\\!"
+                            elif mode == "wallet_reward" and not channel_joined:
+                                notify_text += f"\n⏳ Reward pending — user needs to join channels first\\."
+
+                            notify_text += f"\nKeep sharing to earn more rewards 💰"
+
+                            await message.bot.send_message(
+                                referrer_id, notify_text, parse_mode="MarkdownV2",
                             )
                         except Exception:
                             pass

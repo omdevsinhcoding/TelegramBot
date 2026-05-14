@@ -539,21 +539,42 @@ async def cb_referral_menu(callback: types.CallbackQuery):
         await callback.answer("🎁 Referral program is currently inactive.", show_alert=True)
         return
 
-    user = await db.get_user(callback.from_user.id)
+    user_id = callback.from_user.id
+    user = await db.get_user(user_id)
     ref_code = user.get("referral_code", "") if user else ""
-    ref_count = await db.get_referral_count(callback.from_user.id)
+    ref_count = await db.get_referral_count(user_id)
+    wallet = await db.get_user_wallet(user_id)
 
     bot_info = await callback.bot.get_me()
     ref_link = f"https://t.me/{bot_info.username}?start={ref_code}" if ref_code else "N/A"
 
+    mode = settings["mode"]
+    if mode == "wallet_reward":
+        reward_amt = float(settings.get("reward_amount", 10.0) or 10.0)
+        mode_info = f"💵 Earn *₹{escape_md(str(reward_amt))}* per referral\\!"
+    elif mode == "commission":
+        pct = settings.get("commission_percent", 10)
+        mode_info = f"💰 Earn *{escape_md(str(pct))}%* on referred purchases\\!"
+    else:
+        mode_info = f"🎁 Reach milestones to claim free coupons\\!"
+
     text = (
         f"🤝 *Refer \\& Earn*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"{mode_info}\n\n"
         f"👥 Your Referrals: *{ref_count}*\n"
+        f"💰 Wallet: *₹{escape_md(str(float(wallet)))}*\n"
         f"🔗 Your Link:\n`{escape_md(ref_link)}`\n\n"
         f"Share your link to earn rewards\\!"
     )
-    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
+
+    buttons = []
+    if mode == "code_reward":
+        claimable = await db.get_claimable_rewards(user_id, ref_count)
+        if claimable:
+            buttons.append([InlineKeyboardButton(text="🎁 Claim Rewards", callback_data="ref_claim_rewards")])
+    buttons.append([back_button("back_home")])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
     await callback.answer()
 

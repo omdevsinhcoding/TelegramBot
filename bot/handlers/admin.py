@@ -55,6 +55,7 @@ class AdminStates(StatesGroup):
     force_channel_input = State()
     # Referral
     ref_commission_input = State()
+    ref_reward_amount_input = State()
     ref_reward_count_input = State()  # for setting referrals_needed on a coupon reward
     # Payment settings
     payment_field_input = State()
@@ -1593,43 +1594,65 @@ async def cb_admin_referral_settings(callback: types.CallbackQuery):
 
     mode = settings["mode"]
     pct = settings["commission_percent"]
+    reward_amt = settings.get("reward_amount", 10.0) or 10.0
     active = "🟢 Active" if settings["is_active"] else "🔴 Disabled"
 
-    mode_label = "💰 Balance Commission" if mode == "balance" else "🎁 Code Reward"
+    # Mode labels
+    mode_labels = {
+        "code_reward": "🎁 Coupon Reward",
+        "commission": "💰 Purchase Commission",
+        "wallet_reward": "💵 Instant Wallet Reward",
+    }
+    current_label = mode_labels.get(mode, mode)
     pct_esc = escape_md(str(pct))
+    amt_esc = escape_md(f"₹{float(reward_amt):.1f}")
+
     text = (
         f"🤝 *Referral Settings*\n\n"
         f"Status: {active}\n"
-        f"Mode: {mode_label}\n\n"
+        f"Mode: {current_label}\n\n"
     )
-    if mode == "balance":
+
+    if mode == "commission":
         text += f"💰 Commission: {pct_esc}% per purchase\n"
+    elif mode == "wallet_reward":
+        text += f"💵 Reward: {amt_esc} per referral\n"
     else:
-        # Show configured reward coupons
         rewards = await db.get_referral_rewards()
         if rewards:
             text += "🎁 *Reward Coupons:*\n"
             for r in rewards:
-                status_icon = "🟢" if r["is_active"] else "🔴"
-                title_esc = escape_md(r["title"])
-                text += f"{status_icon} {title_esc} — {r['referrals_needed']} referrals\n"
+                si = "🟢" if r["is_active"] else "🔴"
+                text += f"{si} {escape_md(r['title'])} — {r['referrals_needed']} referrals\n"
         else:
             text += "⚠️ No reward coupons configured yet\n"
 
-    # Build keyboard
+    # Build keyboard — 3 mode selection buttons
     buttons = []
-    if mode == "balance":
+
+    # Mode selector row
+    for m_key, m_label in mode_labels.items():
+        check = "✅ " if m_key == mode else ""
+        buttons.append([InlineKeyboardButton(
+            text=f"{check}{m_label}",
+            callback_data=f"admin_ref_set_mode:{m_key}"
+        )])
+
+    # Mode-specific settings
+    if mode == "commission":
         buttons.append([InlineKeyboardButton(text="✏️ Edit Commission %", callback_data="admin_ref_edit_commission")])
-    else:
+    elif mode == "wallet_reward":
+        buttons.append([InlineKeyboardButton(text="✏️ Edit Reward Amount", callback_data="admin_ref_edit_reward_amount")])
+    elif mode == "code_reward":
         buttons.append([InlineKeyboardButton(text="➕ Add Reward Coupon", callback_data="admin_ref_add_reward")])
         rewards = await db.get_referral_rewards()
         for r in rewards:
-            status_icon = "🟢" if r["is_active"] else "🔴"
+            si = "🟢" if r["is_active"] else "🔴"
             buttons.append([InlineKeyboardButton(
-                text=f"{status_icon} {r['title'][:25]} ({r['referrals_needed']} refs)",
+                text=f"{si} {r['title'][:25]} ({r['referrals_needed']} refs)",
                 callback_data=f"admin_ref_reward_view:{r['id']}"
             )])
-    buttons.append([InlineKeyboardButton(text="🔄 Switch Mode", callback_data="admin_ref_toggle_mode")])
+
     toggle_text = "🔴 Disable Referrals" if settings["is_active"] else "🟢 Enable Referrals"
     buttons.append([InlineKeyboardButton(text=toggle_text, callback_data="admin_ref_toggle_active")])
     buttons.append([back_button("admin_panel")])
@@ -1639,14 +1662,20 @@ async def cb_admin_referral_settings(callback: types.CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data == "admin_ref_toggle_mode")
+@router.callback_query(F.data.startswith("admin_ref_set_mode:"))
 @admin_only
 @error_handler
-async def cb_ref_toggle_mode(callback: types.CallbackQuery):
-    settings = await db.get_referral_settings()
-    new_mode = "code_reward" if settings["mode"] == "balance" else "balance"
+async def cb_ref_set_mode(callback: types.CallbackQuery):
+    """Set referral mode from 3-button selector."""
+    new_mode = callback.data.split(":")[1]
+    valid_modes = ("code_reward", "commission", "wallet_reward")
+    if new_mode not in valid_modes:
+        await callback.answer("Invalid mode.", show_alert=True)
+        return
+
     await db.update_referral_settings(mode=new_mode)
-    await callback.answer(f"Mode switched to {new_mode}!", show_alert=True)
+    mode_names = {"code_reward": "🎁 Coupon Reward", "commission": "💰 Purchase Commission", "wallet_reward": "💵 Instant Wallet Reward"}
+    await callback.answer(f"Mode set to {mode_names[new_mode]}!", show_alert=True)
     await cb_admin_referral_settings(callback)
 
 
@@ -1690,6 +1719,40 @@ async def msg_ref_commission_input(message: types.Message, state: FSMContext):
         await message.answer(f"\u2705 Commission updated to {val}%", reply_markup=kb)
     except ValueError:
         await message.answer("\u26a0\ufe0f Please enter a valid percentage between 0 and 100.")
+
+
+@router.callback_query(F.data == "admin_ref_edit_reward_amount")
+@admin_only
+@error_handler
+async def cb_ref_edit_reward_amount(callback: types.CallbackQuery, state: FSMContext):
+    settings = await db.get_referral_settings()
+    current = settings.get("reward_amount", 10.0) or 10.0
+    await callback.message.edit_text(
+        f"💵 *Edit Wallet Reward Amount*\n\n"
+        f"Current: ₹{escape_md(str(float(current)))}\n\n"
+        f"Enter new reward amount \\(e\\.g\\. 10 or 25\\.5\\):",
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [back_button("admin_referral_settings"), admin_cancel_button()]
+        ]),
+    )
+    await state.set_state(AdminStates.ref_reward_amount_input)
+    await callback.answer()
+
+
+@router.message(AdminStates.ref_reward_amount_input)
+@error_handler
+async def msg_ref_reward_amount_input(message: types.Message, state: FSMContext):
+    try:
+        val = float(message.text.strip())
+        if val <= 0 or val > 100000:
+            raise ValueError
+        await db.update_referral_settings(reward_amount=val)
+        await state.clear()
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_referral_settings")]])
+        await message.answer(f"✅ Reward amount updated to ₹{val}", reply_markup=kb)
+    except ValueError:
+        await message.answer("⚠️ Please enter a valid amount (e.g. 10 or 25.5).")
 
 
 # ── Reward Coupon Management (Code Reward Mode) ──────────
