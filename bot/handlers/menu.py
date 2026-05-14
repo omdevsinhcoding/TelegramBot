@@ -127,27 +127,14 @@ async def text_my_orders(message: types.Message):
     ]
 
     buttons = []
-    pool = await db.get_pool()
 
     for i, o in enumerate(orders):
         num = total_orders - i
         oid = o["order_id"]
 
-        coupon_row = await pool.fetchrow("SELECT title FROM coupons WHERE id = $1", o["coupon_id"])
-        coupon_title = coupon_row["title"] if coupon_row else "Unknown"
-
-        code_count = await pool.fetchval(
-            "SELECT COUNT(*) FROM coupon_codes WHERE order_id = $1 AND is_sold = TRUE", oid
-        ) or 0
-
-        # Also check free_coupon_codes for giveaway orders
-        free_code_count = await pool.fetchval(
-            "SELECT COUNT(*) FROM free_coupon_codes WHERE claimed_by = $1 AND code IN "
-            "(SELECT cc.code FROM coupon_codes cc WHERE cc.order_id = $2)",
-            message.from_user.id, oid
-        ) or 0
-
-        total_code_count = code_count
+        # Pre-joined from query — zero extra DB calls!
+        coupon_title = o.get("coupon_title") or "Unknown"
+        code_count = o.get("code_count", 0) or 0
 
         amt = f"₹{float(o['amount']):.1f}"
         qty = o.get("quantity", 1) or 1
@@ -165,6 +152,8 @@ async def text_my_orders(message: types.Message):
             source_badge = "🏆 *Referral Reward*"
         elif source == "giveaway":
             source_badge = "🎁 *Giveaway Prize*"
+        elif source == "free_coupon":
+            source_badge = "🆓 *Free Coupon*"
         else:
             source_badge = "🛍️ *Purchase*"
 
@@ -177,12 +166,12 @@ async def text_my_orders(message: types.Message):
         else:
             lines.append(f"📦 Qty: {qty} • 🆓 FREE")
         lines.append(f"🆔 `{oid_esc}`")
-        if total_code_count > 0:
-            lines.append(f"🔑 {total_code_count} code\\(s\\) \\— tap to view")
+        if code_count > 0:
+            lines.append(f"🔑 {code_count} code\\(s\\) \\— tap to view")
         else:
             lines.append(f"📋 Status: {escape_md(o['status'])}")
 
-        if o["status"] in ("delivered", "paid") and total_code_count > 0:
+        if o["status"] in ("delivered", "paid") and code_count > 0:
             buttons.append([
                 InlineKeyboardButton(
                     text=f"🔑 #{num} View Codes",
@@ -641,19 +630,17 @@ async def cb_back_home(callback: types.CallbackQuery):
     )
 
     inline_rows = [
+        [InlineKeyboardButton(text="🤝 Refer & Earn", callback_data="referral_menu")],
         [
-            InlineKeyboardButton(text="🛍️ Stock Status", callback_data="browse_coupons"),
             InlineKeyboardButton(text="🛒 Buy Now", callback_data="browse_coupons"),
+            InlineKeyboardButton(text="📁 My Orders", callback_data="my_orders"),
         ],
         [
-            InlineKeyboardButton(text="📁 My Orders", callback_data="my_orders"),
             InlineKeyboardButton(text="🆘 Support", callback_data="show_support"),
         ],
     ]
-    bottom_row = [InlineKeyboardButton(text="🤝 Refer & Earn", callback_data="referral_menu")]
     if ch_inline:
-        bottom_row.append(InlineKeyboardButton(text="📢 Join Channels", callback_data="show_channels"))
-    inline_rows.append(bottom_row)
+        inline_rows[-1].append(InlineKeyboardButton(text="📢 Join Channels", callback_data="show_channels"))
 
     inline_kb = InlineKeyboardMarkup(inline_keyboard=inline_rows)
 

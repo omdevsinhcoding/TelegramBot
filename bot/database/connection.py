@@ -435,6 +435,16 @@ async def init_db() -> asyncpg.Pool:
         except Exception:
             pass
 
+        # Performance indexes
+        try:
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_orders_user_status ON orders(user_id, status);
+                CREATE INDEX IF NOT EXISTS idx_orders_coupon_status ON orders(coupon_id, status);
+                CREATE INDEX IF NOT EXISTS idx_coupon_codes_order ON coupon_codes(order_id) WHERE is_sold = TRUE;
+            """)
+        except Exception:
+            pass
+
     logger.info("Database pool ready.")
     _last_health_check = time.monotonic()
     _db_ready.set()

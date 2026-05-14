@@ -1113,26 +1113,18 @@ async def cb_my_orders(callback: types.CallbackQuery):
     ]
 
     buttons = []
-    pool = await db.get_pool()
 
     for i, o in enumerate(orders):
-        # Order number calculation (overall #)
         num = total_orders - offset - i
         oid = o["order_id"]
 
-        # Get coupon title
-        coupon_row = await pool.fetchrow("SELECT title FROM coupons WHERE id = $1", o["coupon_id"])
-        coupon_title = coupon_row["title"] if coupon_row else "Unknown"
-
-        # Get code count for this order
-        code_count = await pool.fetchval(
-            "SELECT COUNT(*) FROM coupon_codes WHERE order_id = $1 AND is_sold = TRUE", oid
-        ) or 0
+        # Pre-joined from query — no extra DB calls!
+        coupon_title = o.get("coupon_title") or "Unknown"
+        code_count = o.get("code_count", 0) or 0
 
         amt = f"₹{float(o['amount']):.1f}"
         qty = o.get("quantity", 1) or 1
 
-        # Format date
         created = o["created_at"]
         date_str = created.strftime("%Y-%m-%d %H:%M:%S") if created else ""
 
@@ -1147,6 +1139,8 @@ async def cb_my_orders(callback: types.CallbackQuery):
             source_badge = "🏆 *Referral Reward*"
         elif source == "giveaway":
             source_badge = "🎁 *Giveaway Prize*"
+        elif source == "free_coupon":
+            source_badge = "🆓 *Free Coupon*"
         else:
             source_badge = "🛍️ *Purchase*"
 
@@ -1164,7 +1158,7 @@ async def cb_my_orders(callback: types.CallbackQuery):
         else:
             lines.append(f"📋 Status: {escape_md(o['status'])}")
 
-        # Add View Codes button for delivered/paid orders
+        # View Codes button
         if o["status"] in ("delivered", "paid") and code_count > 0:
             buttons.append([
                 InlineKeyboardButton(

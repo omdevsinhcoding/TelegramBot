@@ -104,21 +104,19 @@ async def cmd_start(message: types.Message):
         f"{referral_msg}"
     )
 
-    # Inline buttons that fly in
+    # Inline buttons — each has UNIQUE callback_data
     inline_rows = [
+        [InlineKeyboardButton(text="🤝 Refer & Earn", callback_data="referral_menu")],
         [
-            InlineKeyboardButton(text="🛍️ Stock Status", callback_data="browse_coupons"),
             InlineKeyboardButton(text="🛒 Buy Now", callback_data="browse_coupons"),
+            InlineKeyboardButton(text="📁 My Orders", callback_data="my_orders"),
         ],
         [
-            InlineKeyboardButton(text="📁 My Orders", callback_data="my_orders"),
             InlineKeyboardButton(text="🆘 Support", callback_data="show_support"),
         ],
     ]
-    bottom_row = [InlineKeyboardButton(text="🤝 Refer & Earn", callback_data="referral_menu")]
     if ch_inline:
-        bottom_row.append(InlineKeyboardButton(text="📢 Join Channels", callback_data="show_channels"))
-    inline_rows.append(bottom_row)
+        inline_rows[-1].append(InlineKeyboardButton(text="📢 Join Channels", callback_data="show_channels"))
 
     inline_kb = InlineKeyboardMarkup(inline_keyboard=inline_rows)
 

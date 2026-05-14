@@ -310,16 +310,22 @@ async def get_pending_orders():
     )
 
 async def get_user_orders(telegram_id: int, limit: int = 10, offset: int = 0, exclude_cancelled: bool = False):
+    """Fetch user orders with coupon title + code count in ONE query (no N+1)."""
     pool = await get_pool()
-    if exclude_cancelled:
-        return await pool.fetch(
-            "SELECT * FROM orders WHERE user_id = $1 AND status NOT IN ('cancelled', 'expired') ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-            telegram_id, limit, offset
-        )
-    return await pool.fetch(
-        "SELECT * FROM orders WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-        telegram_id, limit, offset
-    )
+    cancel_filter = "AND o.status NOT IN ('cancelled', 'expired')" if exclude_cancelled else ""
+    return await pool.fetch(f"""
+        SELECT o.*, c.title as coupon_title,
+               COALESCE(cc.code_count, 0) as code_count
+        FROM orders o
+        LEFT JOIN coupons c ON c.id = o.coupon_id
+        LEFT JOIN (
+            SELECT order_id, COUNT(*) as code_count 
+            FROM coupon_codes WHERE is_sold = TRUE
+            GROUP BY order_id
+        ) cc ON cc.order_id = o.order_id
+        WHERE o.user_id = $1 {cancel_filter}
+        ORDER BY o.created_at DESC LIMIT $2 OFFSET $3
+    """, telegram_id, limit, offset)
 
 async def get_user_orders_count(telegram_id: int, exclude_cancelled: bool = False) -> int:
     pool = await get_pool()
