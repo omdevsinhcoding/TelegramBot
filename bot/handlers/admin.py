@@ -63,9 +63,11 @@ class AdminStates(StatesGroup):
     user_search_input = State()
     user_change_referrer = State()
     user_wallet_edit = State()
-    # Disclaimer
+    # Disclaimer (support text + support buttons)
     disclaimer_text_input = State()
     disclaimer_buttons_input = State()
+    # Disclaimer content (separate from support)
+    disclaimer_content_input = State()
     # Ban message
     ban_message_text_input = State()
     ban_message_buttons_input = State()
@@ -3015,25 +3017,23 @@ async def cb_admin_analytics(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# ── Support Settings ──────────────────────────────────────
+# ── Support Settings (support text + inline buttons) ──────
 
-@router.callback_query(F.data == "admin_disclaimer")
+@router.callback_query(F.data == "admin_support_settings")
 @admin_only
 @error_handler
-async def cb_admin_disclaimer(callback: types.CallbackQuery):
-    """Show current support info and management options."""
+async def cb_admin_support_settings(callback: types.CallbackQuery):
+    """Show support info management — text + inline buttons."""
     import json
     settings = await db.get_bot_settings()
     current_text = settings.get("disclaimer_text") or ""
     buttons_json = settings.get("disclaimer_buttons") or "[]"
-    disclaimer_mode = settings.get("disclaimer_mode") or "button"
 
     try:
         buttons_list = json.loads(buttons_json)
     except Exception:
         buttons_list = []
 
-    # Preview
     if current_text:
         preview = escape_md(current_text[:200])
         if len(current_text) > 200:
@@ -3048,24 +3048,155 @@ async def cb_admin_disclaimer(callback: types.CallbackQuery):
     else:
         btn_preview = "\n📎 _No inline buttons_"
 
-    # Display mode — 3 options
-    if disclaimer_mode == "button":
-        mode_text = "🔘 *Button* — Shows '⚠️ Disclaimer' in user menu"
-    elif disclaimer_mode == "description":
-        mode_text = "📝 *Description* — Shows in product detail page"
+    text = (
+        f"🆘 *Support Settings*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📝 *Support Text:*\n{preview}\n"
+        f"{btn_preview}\n\n"
+        f"💡 _This is what users see when they click '🆘 Support'_"
+    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Edit Text", callback_data="admin_support_edit_text")],
+        [InlineKeyboardButton(text="📎 Edit Buttons", callback_data="admin_support_edit_btns")],
+        [InlineKeyboardButton(text="🗑️ Reset to Default", callback_data="admin_support_reset")],
+        [back_button("admin_panel")],
+    ])
+    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_support_edit_text")
+@admin_only
+@error_handler
+async def cb_admin_support_edit_text(callback: types.CallbackQuery, state: FSMContext):
+    await state.set_state(AdminStates.disclaimer_text_input)
+    await callback.message.edit_text(
+        "✏️ *Edit Support Text*\n\n"
+        "Send the new support text \\(e\\.g\\. username, contact info\\)\\.\n"
+        "Use plain text \\— formatting will be applied automatically\\.",
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [back_button("admin_support_settings"), admin_cancel_button()]
+        ]),
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.disclaimer_text_input)
+@error_handler
+async def msg_support_text(message: types.Message, state: FSMContext):
+    text = message.text.strip() if message.text else ""
+    await state.clear()
+    if not text:
+        await message.answer("⚠️ Text cannot be empty.")
+        return
+    await db.update_bot_settings(disclaimer_text=text)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_support_settings")]])
+    await message.answer("✅ Support text updated\\!", parse_mode="MarkdownV2", reply_markup=kb)
+    logger.info(f"Admin {message.from_user.id} updated support text")
+
+
+@router.callback_query(F.data == "admin_support_edit_btns")
+@admin_only
+@error_handler
+async def cb_admin_support_edit_btns(callback: types.CallbackQuery, state: FSMContext):
+    await state.set_state(AdminStates.disclaimer_buttons_input)
+    await callback.message.edit_text(
+        "📎 *Edit Support Buttons*\n\n"
+        "Send inline buttons, *one per line* in this format:\n\n"
+        "`Button Text \\| https://example\\.com`\n\n"
+        "Example:\n"
+        "`📺 Watch Video \\| https://t\\.me/channel/123`\n"
+        "`💬 Support \\| https://t\\.me/supportbot`\n\n"
+        "Send *clear* to remove all buttons\\.",
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [back_button("admin_support_settings"), admin_cancel_button()]
+        ]),
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.disclaimer_buttons_input)
+@error_handler
+async def msg_support_buttons(message: types.Message, state: FSMContext):
+    import json
+    text = message.text.strip() if message.text else ""
+    await state.clear()
+
+    if text.lower() == "clear":
+        await db.update_bot_settings(disclaimer_buttons="[]")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_support_settings")]])
+        await message.answer("✅ All support buttons removed\\!", parse_mode="MarkdownV2", reply_markup=kb)
+        return
+
+    buttons = []
+    for line in text.split("\n"):
+        line = line.strip()
+        if "|" not in line:
+            continue
+        parts = line.split("|", 1)
+        label = parts[0].strip()
+        url = parts[1].strip()
+        if label and url:
+            buttons.append({"text": label, "url": url})
+
+    if not buttons:
+        await message.answer("⚠️ No valid buttons found. Use format: `Label | URL`", parse_mode="MarkdownV2")
+        return
+
+    await db.update_bot_settings(disclaimer_buttons=json.dumps(buttons))
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_support_settings")]])
+    await message.answer(
+        f"✅ Saved *{len(buttons)}* inline button\\(s\\)\\!",
+        parse_mode="MarkdownV2", reply_markup=kb,
+    )
+    logger.info(f"Admin {message.from_user.id} updated support buttons: {len(buttons)}")
+
+
+@router.callback_query(F.data == "admin_support_reset")
+@admin_only
+@error_handler
+async def cb_admin_support_reset(callback: types.CallbackQuery):
+    await db.update_bot_settings(disclaimer_text="", disclaimer_buttons="[]")
+    await callback.answer("✅ Support info reset to default!", show_alert=True)
+    await cb_admin_support_settings(callback)
+
+
+# ── Disclaimer Settings (separate from Support) ──────────
+
+@router.callback_query(F.data == "admin_disclaimer_settings")
+@admin_only
+@error_handler
+async def cb_admin_disclaimer_settings(callback: types.CallbackQuery):
+    """Manage disclaimer text + display mode (button/description/disabled)."""
+    settings = await db.get_bot_settings()
+    disclaimer_content = settings.get("disclaimer_content") or ""
+    disclaimer_mode = settings.get("disclaimer_mode") or "button"
+
+    if disclaimer_content:
+        preview = escape_md(disclaimer_content[:200])
+        if len(disclaimer_content) > 200:
+            preview += "\\.\\.\\."
     else:
-        mode_text = "🚫 *Disabled* — Disclaimer is hidden from users"
+        preview = "_No disclaimer text set yet_"
+
+    if disclaimer_mode == "button":
+        mode_text = "🔘 *Button* — Dedicated '⚠️ Disclaimer' button in user menu"
+    elif disclaimer_mode == "description":
+        mode_text = "📝 *Description* — Shows with product details when purchasing"
+    else:
+        mode_text = "🚫 *Disabled* — Disclaimer hidden from users"
 
     text = (
-        f"🆘 *Support \\& Disclaimer Settings*\n"
+        f"⚠️ *Disclaimer Settings*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"📝 *Current Text:*\n{preview}\n"
-        f"{btn_preview}\n\n"
+        f"📝 *Disclaimer Text:*\n{preview}\n\n"
         f"━━━ *Display Mode* ━━━\n"
         f"{mode_text}\n"
     )
 
-    # Cycle: button → description → disabled → button
     NEXT_LABEL = {
         "button": "📝 Switch → Description Mode",
         "description": "🚫 Switch → Disabled",
@@ -3074,10 +3205,9 @@ async def cb_admin_disclaimer(callback: types.CallbackQuery):
     mode_toggle = NEXT_LABEL.get(disclaimer_mode, "🔘 Switch → Button Mode")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Edit Text", callback_data="admin_discl_edit_text")],
-        [InlineKeyboardButton(text="📎 Edit Buttons", callback_data="admin_discl_edit_btns")],
+        [InlineKeyboardButton(text="✏️ Edit Disclaimer Text", callback_data="admin_discl_edit_content")],
         [InlineKeyboardButton(text=mode_toggle, callback_data="admin_discl_toggle_mode")],
-        [InlineKeyboardButton(text="🗑️ Reset to Default", callback_data="admin_discl_reset")],
+        [InlineKeyboardButton(text="🗑️ Clear Disclaimer", callback_data="admin_discl_clear")],
         [back_button("admin_panel")],
     ])
     await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
@@ -3106,108 +3236,47 @@ async def cb_admin_discl_toggle_mode(callback: types.CallbackQuery):
         "disabled": "🚫 Mode: Disabled — Disclaimer hidden from users",
     }
     await callback.answer(ALERTS.get(new_mode, "Mode updated"), show_alert=True)
+    await cb_admin_disclaimer_settings(callback)
 
-    await cb_admin_disclaimer(callback)
 
-
-@router.callback_query(F.data == "admin_discl_edit_text")
+@router.callback_query(F.data == "admin_discl_edit_content")
 @admin_only
 @error_handler
-async def cb_admin_discl_edit_text(callback: types.CallbackQuery, state: FSMContext):
-    await state.set_state(AdminStates.disclaimer_text_input)
+async def cb_admin_discl_edit_content(callback: types.CallbackQuery, state: FSMContext):
+    await state.set_state(AdminStates.disclaimer_content_input)
     await callback.message.edit_text(
-        "✏️ *Edit Support Info*\n\n"
-        "Send the new support text \\(e\\.g\\. username, contact info\\)\\.\n"
+        "✏️ *Edit Disclaimer Text*\n\n"
+        "Send the disclaimer text you want to show users\\.\n"
         "Use plain text \\— formatting will be applied automatically\\.",
         parse_mode="MarkdownV2",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[admin_cancel_button()]]),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [back_button("admin_disclaimer_settings"), admin_cancel_button()]
+        ]),
     )
     await callback.answer()
 
 
-@router.message(AdminStates.disclaimer_text_input)
+@router.message(AdminStates.disclaimer_content_input)
 @error_handler
-async def msg_disclaimer_text(message: types.Message, state: FSMContext):
-
+async def msg_disclaimer_content(message: types.Message, state: FSMContext):
     text = message.text.strip() if message.text else ""
     await state.clear()
-
     if not text:
         await message.answer("⚠️ Text cannot be empty.")
         return
-
-    await db.update_bot_settings(disclaimer_text=text)
-    await message.answer(
-        "✅ Support info updated\\!",
-        parse_mode="MarkdownV2",
-    )
-    logger.info(f"Admin {message.from_user.id} updated disclaimer text")
+    await db.update_bot_settings(disclaimer_content=text)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_disclaimer_settings")]])
+    await message.answer("✅ Disclaimer text updated\\!", parse_mode="MarkdownV2", reply_markup=kb)
+    logger.info(f"Admin {message.from_user.id} updated disclaimer content")
 
 
-@router.callback_query(F.data == "admin_discl_edit_btns")
+@router.callback_query(F.data == "admin_discl_clear")
 @admin_only
 @error_handler
-async def cb_admin_discl_edit_btns(callback: types.CallbackQuery, state: FSMContext):
-    await state.set_state(AdminStates.disclaimer_buttons_input)
-    await callback.message.edit_text(
-        "📎 *Edit Support Buttons*\n\n"
-        "Send inline buttons, *one per line* in this format:\n\n"
-        "`Button Text \\| https://example\\.com`\n\n"
-        "Example:\n"
-        "`📺 Watch Video \\| https://t\\.me/channel/123`\n"
-        "`💬 Support \\| https://t\\.me/supportbot`\n\n"
-        "Send *clear* to remove all buttons\\.",
-        parse_mode="MarkdownV2",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[admin_cancel_button()]]),
-    )
-    await callback.answer()
-
-
-@router.message(AdminStates.disclaimer_buttons_input)
-@error_handler
-async def msg_disclaimer_buttons(message: types.Message, state: FSMContext):
-    import json
-
-
-    text = message.text.strip() if message.text else ""
-    await state.clear()
-
-    if text.lower() == "clear":
-        await db.update_bot_settings(disclaimer_buttons="[]")
-        await message.answer("✅ All support buttons removed\\!", parse_mode="MarkdownV2")
-        return
-
-    # Parse buttons
-    buttons = []
-    for line in text.split("\n"):
-        line = line.strip()
-        if "|" not in line:
-            continue
-        parts = line.split("|", 1)
-        label = parts[0].strip()
-        url = parts[1].strip()
-        if label and url:
-            buttons.append({"text": label, "url": url})
-
-    if not buttons:
-        await message.answer("⚠️ No valid buttons found. Use format: `Label | URL`", parse_mode="MarkdownV2")
-        return
-
-    await db.update_bot_settings(disclaimer_buttons=json.dumps(buttons))
-    await message.answer(
-        f"✅ Saved *{len(buttons)}* inline button\\(s\\)\\!",
-        parse_mode="MarkdownV2",
-    )
-    logger.info(f"Admin {message.from_user.id} updated disclaimer buttons: {len(buttons)}")
-
-
-@router.callback_query(F.data == "admin_discl_reset")
-@admin_only
-@error_handler
-async def cb_admin_discl_reset(callback: types.CallbackQuery):
-    await db.update_bot_settings(disclaimer_text="", disclaimer_buttons="[]")
-    await callback.answer("✅ Disclaimer reset to default!", show_alert=True)
-    await cb_admin_disclaimer(callback)
+async def cb_admin_discl_clear(callback: types.CallbackQuery):
+    await db.update_bot_settings(disclaimer_content="")
+    await callback.answer("✅ Disclaimer text cleared!", show_alert=True)
+    await cb_admin_disclaimer_settings(callback)
 
 
 # ── Ban Message Management ───────────────────────────────

@@ -83,7 +83,7 @@ async def cb_coupon_detail(callback: types.CallbackQuery):
     try:
         settings = await db.get_bot_settings()
         disclaimer_mode = settings.get("disclaimer_mode") or "button"
-        disclaimer_text = settings.get("disclaimer_text") or ""
+        disclaimer_text = settings.get("disclaimer_content") or ""
     except Exception:
         disclaimer_mode = "button"
         disclaimer_text = ""

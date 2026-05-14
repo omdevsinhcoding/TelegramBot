@@ -391,6 +391,12 @@ async def init_db() -> asyncpg.Pool:
         except Exception:
             pass
 
+        # Separate disclaimer content (disclaimer_text is for Support info)
+        try:
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS disclaimer_content TEXT DEFAULT '';")
+        except Exception:
+            pass
+
     logger.info("Database pool ready.")
     _last_health_check = time.monotonic()
     _db_ready.set()

@@ -402,7 +402,7 @@ async def text_disclaimer(message: types.Message):
     from bot.database import queries as db
 
     settings = await db.get_bot_settings()
-    disclaimer_text = settings.get("disclaimer_text") or ""
+    disclaimer_text = settings.get("disclaimer_content") or ""
 
     if disclaimer_text:
         text = (
