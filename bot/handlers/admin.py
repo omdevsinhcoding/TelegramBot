@@ -1658,7 +1658,10 @@ async def cb_admin_referral_settings(callback: types.CallbackQuery):
     buttons.append([back_button("admin_panel")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    try:
+        await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    except Exception:
+        pass
     await callback.answer()
 
 
@@ -1671,6 +1674,12 @@ async def cb_ref_set_mode(callback: types.CallbackQuery):
     valid_modes = ("code_reward", "commission", "wallet_reward")
     if new_mode not in valid_modes:
         await callback.answer("Invalid mode.", show_alert=True)
+        return
+
+    # Skip if already on this mode
+    settings = await db.get_referral_settings()
+    if settings and settings["mode"] == new_mode:
+        await callback.answer("Already on this mode.", show_alert=True)
         return
 
     await db.update_referral_settings(mode=new_mode)
