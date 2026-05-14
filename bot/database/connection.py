@@ -421,6 +421,20 @@ async def init_db() -> asyncpg.Pool:
         except Exception:
             pass
 
+        # Waitlist for users wanting reserved coupons
+        try:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS coupon_waitlist (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    coupon_id INTEGER NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE(user_id, coupon_id)
+                );
+            """)
+        except Exception:
+            pass
+
     logger.info("Database pool ready.")
     _last_health_check = time.monotonic()
     _db_ready.set()

@@ -61,7 +61,7 @@ async def expire_orders_loop(bot: Bot):
             # Expire them
             if expiring:
                 try:
-                    await expire_orders()
+                    await expire_orders(bot)
                 except Exception as e:
                     logger.error(f"Error expiring orders: {e}")
 

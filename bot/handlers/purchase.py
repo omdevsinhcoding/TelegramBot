@@ -79,6 +79,40 @@ class BharatPeStates(StatesGroup):
 class CustomQtyStates(StatesGroup):
     waiting_qty = State()
 
+# ── Stock Check Helper (reservation-aware) ───────────────
+
+async def _check_stock_or_reserved(coupon_id: int, qty: int, user_id: int, callback_or_message) -> bool:
+    """Check if stock is available. If reserved by another user, show wait message.
+    
+    Returns True if stock is OK (proceed), False if blocked (stop).
+    """
+    res = await db.get_reservation_info(coupon_id)
+    
+    if res["stock"] >= qty:
+        return True  # Stock available, proceed
+    
+    # Stock not enough — check if it's reserved by someone else
+    if res["reserved_qty"] > 0 and res["wait_minutes"] > 0:
+        # Coupon is reserved by another user
+        await db.add_to_waitlist(user_id, coupon_id)
+        msg = (
+            f"⏳ This coupon is currently reserved by another buyer.\n\n"
+            f"🔔 You've been added to the waitlist!\n"
+            f"📢 We'll notify you when it becomes available.\n\n"
+            f"⏰ Expected availability: ~{res['wait_minutes']} minute(s)"
+        )
+    else:
+        msg = f"❌ Not enough stock! Only {res['stock']} available."
+    
+    if hasattr(callback_or_message, 'answer') and hasattr(callback_or_message, 'data'):
+        # It's a CallbackQuery
+        await callback_or_message.answer(msg, show_alert=True)
+    else:
+        # It's a Message
+        await callback_or_message.answer(msg)
+    
+    return False
+
 
 # ── Quantity Selection → Gateway ─────────────────────────
 
@@ -94,8 +128,7 @@ async def cb_buy_qty(callback: types.CallbackQuery):
     if not coupon:
         await callback.answer("Coupon not found.", show_alert=True)
         return
-    if coupon["stock"] < qty:
-        await callback.answer(f"Not enough stock! Only {coupon['stock']} left.", show_alert=True)
+    if not await _check_stock_or_reserved(coupon_id, qty, callback.from_user.id, callback):
         return
 
     total = float(coupon["discounted_price"]) * qty
@@ -166,8 +199,7 @@ async def msg_custom_qty(message: types.Message, state: FSMContext):
     if not coupon:
         await message.answer("Coupon not found.")
         return
-    if coupon["stock"] < qty:
-        await message.answer(f"⚠️ Not enough stock! Only {coupon['stock']} available.")
+    if not await _check_stock_or_reserved(coupon_id, qty, message.from_user.id, message):
         return
 
     total = float(coupon["discounted_price"]) * qty
@@ -199,8 +231,7 @@ async def cb_buy_coupon(callback: types.CallbackQuery):
     if not coupon:
         await callback.answer("Coupon not found.", show_alert=True)
         return
-    if coupon["stock"] <= 0:
-        await callback.answer("Sorry, this coupon is out of stock!", show_alert=True)
+    if not await _check_stock_or_reserved(coupon_id, 1, callback.from_user.id, callback):
         return
 
     total = float(coupon["discounted_price"])
@@ -238,8 +269,7 @@ async def cb_pay_wallet(callback: types.CallbackQuery):
     if not coupon:
         await callback.answer("Coupon not found.", show_alert=True)
         return
-    if coupon["stock"] < qty:
-        await callback.answer(f"Not enough stock! Only {coupon['stock']} left.", show_alert=True)
+    if not await _check_stock_or_reserved(coupon_id, qty, callback.from_user.id, callback):
         return
 
     user_id = callback.from_user.id
@@ -273,8 +303,11 @@ async def cb_pay_wallet(callback: types.CallbackQuery):
     except OutOfStockError:
         # Refund wallet — stock was claimed by another user
         await db.update_wallet_balance(user_id, old_balance)
+        res = await db.get_reservation_info(coupon_id)
+        await db.add_to_waitlist(user_id, coupon_id)
+        wait = f" Check back in ~{res['wait_minutes']} min." if res['wait_minutes'] else ""
         await callback.answer(
-            "⚠️ Sorry! This coupon was just purchased by someone else. Your wallet has been refunded.",
+            f"⚠️ Reserved by another buyer! Wallet refunded.{wait} 🔔 We'll notify you!",
             show_alert=True,
         )
         return
@@ -332,8 +365,7 @@ async def cb_pay_paytm(callback: types.CallbackQuery):
     if not coupon:
         await callback.answer("Coupon not found.", show_alert=True)
         return
-    if coupon["stock"] < qty:
-        await callback.answer(f"Not enough stock! Only {coupon['stock']} left.", show_alert=True)
+    if not await _check_stock_or_reserved(coupon_id, qty, callback.from_user.id, callback):
         return
 
     user_id = callback.from_user.id
@@ -343,8 +375,11 @@ async def cb_pay_paytm(callback: types.CallbackQuery):
     try:
         order_info = await create_purchase_order(user_id, coupon_id, amount, "paytm", qty)
     except OutOfStockError:
+        res = await db.get_reservation_info(coupon_id)
+        await db.add_to_waitlist(callback.from_user.id, coupon_id)
+        wait = f" Check back in ~{res['wait_minutes']} min." if res['wait_minutes'] else ""
         await callback.answer(
-            "⚠️ Sorry! This coupon was just purchased by someone else. Please try again.",
+            f"⚠️ Reserved by another buyer!{wait} 🔔 We'll notify you when available!",
             show_alert=True,
         )
         return
@@ -407,8 +442,7 @@ async def cb_pay_bharatpe(callback: types.CallbackQuery, state: FSMContext):
     if not coupon:
         await callback.answer("Coupon not found.", show_alert=True)
         return
-    if coupon["stock"] < qty:
-        await callback.answer(f"Not enough stock! Only {coupon['stock']} left.", show_alert=True)
+    if not await _check_stock_or_reserved(coupon_id, qty, callback.from_user.id, callback):
         return
 
     user_id = callback.from_user.id
@@ -418,8 +452,11 @@ async def cb_pay_bharatpe(callback: types.CallbackQuery, state: FSMContext):
     try:
         order_info = await create_purchase_order(user_id, coupon_id, amount, "bharatpe", qty)
     except OutOfStockError:
+        res = await db.get_reservation_info(coupon_id)
+        await db.add_to_waitlist(callback.from_user.id, coupon_id)
+        wait = f" Check back in ~{res['wait_minutes']} min." if res['wait_minutes'] else ""
         await callback.answer(
-            "⚠️ Sorry! This coupon was just purchased by someone else. Please try again.",
+            f"⚠️ Reserved by another buyer!{wait} 🔔 We'll notify you when available!",
             show_alert=True,
         )
         return
@@ -646,8 +683,7 @@ async def cb_pay_razorpay(callback: types.CallbackQuery):
         await callback.answer("Coupon not found.", show_alert=True)
         return
 
-    if coupon["stock"] < qty:
-        await callback.answer("Not enough stock!", show_alert=True)
+    if not await _check_stock_or_reserved(coupon_id, qty, callback.from_user.id, callback):
         return
 
     user_id = callback.from_user.id
@@ -657,8 +693,11 @@ async def cb_pay_razorpay(callback: types.CallbackQuery):
     try:
         order_info = await create_purchase_order(user_id, coupon_id, amount, "razorpay", qty)
     except OutOfStockError:
+        res = await db.get_reservation_info(coupon_id)
+        await db.add_to_waitlist(callback.from_user.id, coupon_id)
+        wait = f" Check back in ~{res['wait_minutes']} min." if res['wait_minutes'] else ""
         await callback.answer(
-            "⚠️ Sorry! This coupon was just purchased by someone else. Please try again.",
+            f"⚠️ Reserved by another buyer!{wait} 🔔 We'll notify you when available!",
             show_alert=True,
         )
         return
@@ -995,7 +1034,7 @@ async def cb_cancel_order(callback: types.CallbackQuery, state: FSMContext):
                 logger.error(f"Error checking payment before cancel: {e}")
 
     # No payment received — safe to cancel
-    success = await cancel_order(order_id)
+    success = await cancel_order(order_id, bot=callback.bot)
 
     # Clear BharatPe FSM state if active
     await state.clear()

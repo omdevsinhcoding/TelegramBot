@@ -186,6 +186,79 @@ async def confirm_reservation(coupon_id: int, qty: int = 1) -> bool:
     return result == "UPDATE 1"
 
 
+async def get_reservation_info(coupon_id: int) -> dict:
+    """Get stock + reservation details for a coupon.
+    
+    Returns dict with: stock, reserved_qty, earliest_expiry, wait_minutes.
+    """
+    pool = await get_pool()
+    coupon = await pool.fetchrow(
+        "SELECT stock, COALESCE(reserved_qty, 0) as reserved_qty FROM coupons WHERE id = $1",
+        coupon_id
+    )
+    if not coupon:
+        return {"stock": 0, "reserved_qty": 0, "earliest_expiry": None, "wait_minutes": 0}
+    
+    # Find when the earliest pending order for this coupon expires
+    earliest = await pool.fetchrow("""
+        SELECT expires_at FROM orders 
+        WHERE coupon_id = $1 AND status = 'pending' 
+        ORDER BY expires_at ASC LIMIT 1
+    """, coupon_id)
+    
+    import datetime
+    wait_minutes = 0
+    earliest_expiry = None
+    if earliest and earliest["expires_at"]:
+        earliest_expiry = earliest["expires_at"]
+        now = datetime.datetime.now(datetime.timezone.utc)
+        diff = (earliest_expiry - now).total_seconds()
+        wait_minutes = max(1, int(diff / 60) + 1)
+    
+    return {
+        "stock": coupon["stock"],
+        "reserved_qty": coupon["reserved_qty"],
+        "earliest_expiry": earliest_expiry,
+        "wait_minutes": wait_minutes,
+    }
+
+
+# ── WAITLIST ─────────────────────────────────────────────
+
+async def add_to_waitlist(user_id: int, coupon_id: int):
+    """Add user to waitlist for a coupon. Ignores if already waiting."""
+    pool = await get_pool()
+    await pool.execute("""
+        INSERT INTO coupon_waitlist (user_id, coupon_id)
+        VALUES ($1, $2) ON CONFLICT (user_id, coupon_id) DO NOTHING
+    """, user_id, coupon_id)
+
+
+async def get_waitlist_users(coupon_id: int) -> list:
+    """Get all users waiting for a coupon."""
+    pool = await get_pool()
+    rows = await pool.fetch(
+        "SELECT user_id FROM coupon_waitlist WHERE coupon_id = $1 ORDER BY created_at ASC",
+        coupon_id
+    )
+    return [r["user_id"] for r in rows]
+
+
+async def remove_from_waitlist(user_id: int, coupon_id: int):
+    """Remove user from waitlist (after notification or purchase)."""
+    pool = await get_pool()
+    await pool.execute(
+        "DELETE FROM coupon_waitlist WHERE user_id = $1 AND coupon_id = $2",
+        user_id, coupon_id
+    )
+
+
+async def clear_waitlist(coupon_id: int):
+    """Clear entire waitlist for a coupon."""
+    pool = await get_pool()
+    await pool.execute("DELETE FROM coupon_waitlist WHERE coupon_id = $1", coupon_id)
+
+
 # ── ORDER QUERIES ─────────────────────────────────────────
 
 async def create_order(order_id: str, user_id: int, coupon_id: int,

@@ -112,26 +112,92 @@ async def complete_order(order_id: str, txn_ref: str, user_id: int) -> bool:
     return True
 
 
-async def cancel_order(order_id: str) -> bool:
-    """Cancel a pending order and RELEASE reserved stock back to pool."""
+async def cancel_order(order_id: str, bot=None) -> bool:
+    """Cancel a pending order and RELEASE reserved stock back to pool.
+    
+    Args:
+        bot: aiogram Bot instance for sending waitlist notifications.
+    """
     order = await db.get_order(order_id)
     if not order or order["status"] != "pending":
         return False
 
     qty = order.get("quantity", 1) or 1
+    coupon_id = order["coupon_id"]
 
     # ── Release reserved stock ──
-    await db.release_reservation(order["coupon_id"], qty)
+    await db.release_reservation(coupon_id, qty)
 
     await db.update_order_status(order_id, "cancelled")
     logger.info(f"Order cancelled + stock released: {order_id} (qty={qty})")
+
+    # ── Notify waitlisted users ──
+    await _notify_waitlist(coupon_id, bot)
     return True
 
 
-async def expire_orders():
-    """Expire stale pending orders (also releases reservations via DB query)."""
+async def expire_orders(bot=None):
+    """Expire stale pending orders (also releases reservations via DB query).
+    
+    After expiring, notify waitlisted users that coupons are available.
+    """
+    # Get coupon IDs that are about to expire (before the expire query runs)
+    pool = await db.get_pool()
+    expiring = await pool.fetch("""
+        SELECT DISTINCT coupon_id FROM orders
+        WHERE status = 'pending' AND expires_at < NOW()
+    """)
+    
     result = await db.expire_stale_orders()
     logger.info(f"Expired stale orders: {result}")
+    
+    # Notify waitlisted users for each affected coupon
+    for row in expiring:
+        await _notify_waitlist(row["coupon_id"], bot)
+
+
+async def _notify_waitlist(coupon_id: int, bot=None):
+    """Send notification to waitlisted users that a coupon is now available."""
+    if not bot:
+        return
+    
+    try:
+        from bot.services.coupon_service import get_coupon_detail
+        coupon = await get_coupon_detail(coupon_id)
+        if not coupon or coupon["stock"] <= 0:
+            return  # Still no stock available
+        
+        waitlist = await db.get_waitlist_users(coupon_id)
+        if not waitlist:
+            return
+        
+        from bot.utils.helpers import escape_md
+        title = escape_md(coupon["title"])
+        stock = coupon["stock"]
+        
+        text = (
+            f"🔔 *Coupon Available\\!*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🛍️ *{title}* is now available\\!\n"
+            f"📦 Stock: *{stock}* left\n\n"
+            f"⚡ *Grab it fast before someone else does\\!*"
+        )
+        
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🛒 Buy Now", callback_data=f"coupon_detail:{coupon_id}")],
+        ])
+        
+        for user_id in waitlist:
+            try:
+                await bot.send_message(user_id, text, parse_mode="MarkdownV2", reply_markup=kb)
+                await db.remove_from_waitlist(user_id, coupon_id)
+                logger.info(f"Waitlist notification sent: user={user_id}, coupon={coupon_id}")
+            except Exception as e:
+                logger.warning(f"Failed to notify waitlist user {user_id}: {e}")
+                await db.remove_from_waitlist(user_id, coupon_id)
+    except Exception as e:
+        logger.error(f"Waitlist notification failed for coupon {coupon_id}: {e}")
 
 
 async def get_user_order_history(user_id: int, limit: int = 5, offset: int = 0) -> list:
