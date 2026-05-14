@@ -107,16 +107,18 @@ async def text_refer_earn(message: types.Message):
     )
 
     buttons = []
-    
+
+    # 🎁 Claim Rewards — FIRST PRIORITY (top)
+    if mode == "code_reward":
+        claimable = await db.get_claimable_rewards(user_id, ref_count)
+        if claimable:
+            buttons.append([InlineKeyboardButton(text="🎁 Claim Rewards", callback_data="ref_claim_rewards")])
+
     # Allow manual entry if no referrer
     referrer = await db.get_referrer_of(user_id)
     if not referrer:
         buttons.append([InlineKeyboardButton(text="🔗 Enter Referral Code", callback_data="ref_enter_code")])
 
-    if mode == "code_reward":
-        claimable = await db.get_claimable_rewards(user_id, ref_count)
-        if claimable:
-            buttons.append([InlineKeyboardButton(text="🎁 Claim Rewards", callback_data="ref_claim_rewards")])
     buttons.append([InlineKeyboardButton(text="📋 My Referral History", callback_data="ref_history")])
     buttons.append([InlineKeyboardButton(text="◀️ Back", callback_data="back_home")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)

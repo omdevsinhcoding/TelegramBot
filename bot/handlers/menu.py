@@ -651,17 +651,19 @@ async def cb_back_home(callback: types.CallbackQuery):
     )
 
     inline_rows = [
-        [InlineKeyboardButton(text="🤝 Refer & Earn", callback_data="referral_menu")],
         [
+            InlineKeyboardButton(text="🛍️ Stock Status", callback_data="stock_status"),
             InlineKeyboardButton(text="🛒 Buy Now", callback_data="browse_coupons"),
-            InlineKeyboardButton(text="📁 My Orders", callback_data="my_orders"),
         ],
         [
+            InlineKeyboardButton(text="📁 My Orders", callback_data="my_orders"),
             InlineKeyboardButton(text="🆘 Support", callback_data="show_support"),
         ],
     ]
+    bottom_row = [InlineKeyboardButton(text="🤝 Refer & Earn", callback_data="referral_menu")]
     if ch_inline:
-        inline_rows[-1].append(InlineKeyboardButton(text="📢 Join Channels", callback_data="show_channels"))
+        bottom_row.append(InlineKeyboardButton(text="📢 Join Channels", callback_data="show_channels"))
+    inline_rows.append(bottom_row)
 
     inline_kb = InlineKeyboardMarkup(inline_keyboard=inline_rows)
 
@@ -730,6 +732,30 @@ async def cb_coupon_page(callback: types.CallbackQuery):
         parse_mode="MarkdownV2",
         reply_markup=coupons_list_kb(coupons, page),
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "stock_status")
+@error_handler
+async def cb_stock_status(callback: types.CallbackQuery):
+    """Show stock status from inline button."""
+    from bot.services.coupon_service import list_active_coupons
+    from bot.keyboards.coupon_kb import stock_status_kb
+
+    coupons = await list_active_coupons()
+    if not coupons:
+        text = "📊 *STOCK STATUS*\n\n━━━━━━━━━━━━━━━━━━━━\n\nNo products available\\."
+    else:
+        text = _build_stock_status_text(coupons)
+
+    try:
+        await callback.message.edit_text(
+            text, parse_mode="MarkdownV2", reply_markup=stock_status_kb()
+        )
+    except Exception:
+        await callback.message.answer(
+            text, parse_mode="MarkdownV2", reply_markup=stock_status_kb()
+        )
     await callback.answer()
 
 
