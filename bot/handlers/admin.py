@@ -617,7 +617,7 @@ async def cb_admin_orders(callback: types.CallbackQuery):
 @admin_only
 @error_handler
 async def cb_admin_order_user(callback: types.CallbackQuery):
-    """Show all orders for a specific user."""
+    """Show all orders for a specific user (from orders panel)."""
     user_id = int(callback.data.split(":")[1])
     orders = await db.get_user_all_orders(user_id, 20)
     user = await db.get_user(user_id)
@@ -628,34 +628,76 @@ async def cb_admin_order_user(callback: types.CallbackQuery):
         "expired": "⏰", "cancelled": "❌", "refunded": "🔄"
     }
 
+    # Calculate stats
+    total = len(orders) if orders else 0
+    paid_count = sum(1 for o in orders if o["status"] in ("paid", "delivered")) if orders else 0
+    total_spent = sum(float(o["amount"]) for o in orders if o["status"] in ("paid", "delivered")) if orders else 0
+
     lines = [
-        f"📦 *Orders for* {user_name}\n"
-        f"👤 ID: `{user_id}`\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📦 *Orders for* {user_name}",
+        f"👤 ID: `{user_id}`",
+        f"━━━━━━━━━━━━━━━━━━━━",
+        f"📊 Total: *{total}* \\| ✅ Paid: *{paid_count}* \\| 💰 {escape_md(format_currency(total_spent))}",
+        f"━━━━━━━━━━━━━━━━━━━━",
     ]
+
+    buttons = []
+    pool = await db.get_pool()
 
     if not orders:
         lines.append("_No orders found\\._")
     else:
-        for o in orders:
+        for i, o in enumerate(orders[:15]):
             emoji = status_emoji.get(o["status"], "❓")
             oid = escape_md(o["order_id"])
             title = escape_md(o.get("coupon_title") or "Unknown")
             amt = escape_md(format_currency(float(o["amount"])))
             qty = o.get("quantity") or 1
             st = escape_md(o["status"])
+            created = o.get("created_at")
+            date_str = escape_md(str(created)[:16]) if created else "N/A"
+
+            # Source badge
+            source = o.get("source", "purchase") or "purchase"
+            source_label = ""
+            if source == "referral_reward":
+                source_label = "🏆 "
+            elif source == "giveaway":
+                source_label = "🎁 "
+
+            # Code count
+            code_count = await pool.fetchval(
+                "SELECT COUNT(*) FROM coupon_codes WHERE order_id = $1 AND is_sold = TRUE", o["order_id"]
+            ) or 0
+            code_info = f"🔑 {code_count} code\\(s\\)" if code_count > 0 else ""
+
             lines.append(
-                f"{emoji} `{oid}`\n"
-                f"   🏷️ {title} x{qty}\n"
-                f"   💰 {amt} \\| 📋 {st}"
+                f"\n{emoji} *\\#{i+1}* {source_label}{title}\n"
+                f"   📅 {date_str}\n"
+                f"   💰 {amt} x{qty} \\| 📋 {st}\n"
+                f"   🆔 `{oid}`"
             )
+            if code_info:
+                lines.append(f"   {code_info}")
+
+            # Per-order buttons
+            btn_row = []
+            if code_count > 0:
+                btn_row.append(InlineKeyboardButton(
+                    text=f"🔑 #{i+1} Codes",
+                    callback_data=f"admin_view_order_codes:{o['order_id']}"
+                ))
+            btn_row.append(InlineKeyboardButton(
+                text=f"📋 #{i+1} Detail",
+                callback_data=f"admin_order_detail:{o['order_id']}"
+            ))
+            if btn_row:
+                buttons.append(btn_row)
 
     text = "\n".join(lines)
 
-    buttons = [
-        [InlineKeyboardButton(text="👤 View User Profile", callback_data=f"admin_user_inspect:{user_id}")],
-        [back_button("admin_orders")],
-    ]
+    buttons.append([InlineKeyboardButton(text="👤 View User Profile", callback_data=f"admin_user_inspect:{user_id}")])
+    buttons.append([back_button("admin_orders")])
 
     await callback.message.edit_text(
         text, parse_mode="MarkdownV2",
@@ -709,22 +751,65 @@ async def cb_admin_order_detail(callback: types.CallbackQuery):
     uid = order["user_id"]
     uname = escape_md(order.get("full_name") or "Unknown")
 
+    # Extra details
+    created = order.get("created_at")
+    date_str = escape_md(str(created)[:19]) if created else "N/A"
+    paid_at = order.get("paid_at")
+    paid_str = escape_md(str(paid_at)[:19]) if paid_at else "N/A"
+
+    # Source badge
+    source = order.get("source", "purchase") or "purchase"
+    if source == "referral_reward":
+        source_badge = "🏆 Referral Reward"
+    elif source == "giveaway":
+        source_badge = "🎁 Giveaway"
+    else:
+        source_badge = "🛍️ Purchase"
+
+    # Get gateway info
+    pool = await db.get_pool()
+    txn_row = await pool.fetchrow(
+        "SELECT gateway, utr FROM transactions WHERE order_id = $1 ORDER BY created_at DESC LIMIT 1",
+        order_id
+    )
+    gateway = escape_md((txn_row["gateway"] if txn_row else "N/A") or "N/A")
+    utr = escape_md((txn_row["utr"] if txn_row else "") or "")
+
+    # Get code count
+    code_count = await pool.fetchval(
+        "SELECT COUNT(*) FROM coupon_codes WHERE order_id = $1 AND is_sold = TRUE", order_id
+    ) or 0
+
+    utr_line = f"🔢 UTR: `{utr}`\n" if utr else ""
+
     text = (
         f"📋 *Order Details*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"🆔 Order: `{oid}`\n"
-        f"{emoji} Status: *{st}*\n\n"
+        f"{emoji} Status: *{st}*\n"
+        f"📌 Source: *{source_badge}*\n\n"
         f"🏷️ Item: *{title}*\n"
         f"📦 Qty: *{qty}*\n"
         f"💰 Amount: *{amt}*\n\n"
-        f"👤 User: *{uname}* \\(`{uid}`\\)\n"
+        f"━━━ *Payment* ━━━\n"
+        f"💳 Gateway: *{gateway}*\n"
+        f"{utr_line}"
+        f"📅 Created: {date_str}\n"
+        f"✅ Paid At: {paid_str}\n\n"
+        f"━━━ *User* ━━━\n"
+        f"👤 Name: *{uname}*\n"
+        f"🆔 ID: `{uid}`\n"
+        f"🔑 Codes: *{code_count}*\n"
     )
 
-    buttons = [
-        [InlineKeyboardButton(text="👤 View User", callback_data=f"admin_user_inspect:{uid}"),
-         InlineKeyboardButton(text="📦 User Orders", callback_data=f"admin_order_user:{uid}")],
-        [back_button("admin_orders")],
-    ]
+    buttons = []
+    if code_count > 0:
+        buttons.append([InlineKeyboardButton(text="🔑 View Codes", callback_data=f"admin_view_order_codes:{order_id}")])
+    buttons.append([
+        InlineKeyboardButton(text="👤 View User", callback_data=f"admin_user_inspect:{uid}"),
+        InlineKeyboardButton(text="📦 User Orders", callback_data=f"admin_user_orders:{uid}")
+    ])
+    buttons.append([back_button("admin_orders")])
 
     await callback.message.edit_text(
         text, parse_mode="MarkdownV2",
@@ -2176,27 +2261,153 @@ async def cb_admin_user_inspect(callback: types.CallbackQuery):
 async def cb_admin_user_orders(callback: types.CallbackQuery):
     user_id = int(callback.data.split(":")[1])
     orders = await db.get_user_orders(user_id)
+    user = await db.get_user(user_id)
+
+    user_name = escape_md((user["full_name"] if user else "Unknown") or "Unknown")
 
     if not orders:
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_user_inspect:{user_id}")]])
         await callback.message.edit_text(
-            f"📦 *No orders found for user* `{user_id}`",
+            f"📦 *Orders for* {user_name}\n"
+            f"👤 ID: `{user_id}`\n\n"
+            f"_No orders found\\._",
             parse_mode="MarkdownV2", reply_markup=kb
         )
         await callback.answer()
         return
 
-    lines = [f"📦 *Orders for user* `{user_id}`\n"]
-    for o in orders[:15]:
-        status_icon = {"paid": "✅", "delivered": "✅", "pending": "🟡", "expired": "⏰", "cancelled": "❌"}.get(o["status"], "❓")
-        amt = format_currency(float(o["amount"]))
-        date = str(o.get("created_at", ""))[:10]
-        oid = o["order_id"][:12]
-        lines.append(f"{status_icon} `{escape_md(oid)}` — {escape_md(amt)} — {escape_md(date)}")
+    status_emoji = {
+        "pending": "🟡", "paid": "🟢", "delivered": "✅",
+        "expired": "⏰", "cancelled": "❌", "refunded": "🔄"
+    }
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_user_inspect:{user_id}")]])
+    # Calculate stats
+    total = len(orders)
+    paid_count = sum(1 for o in orders if o["status"] in ("paid", "delivered"))
+    total_spent = sum(float(o["amount"]) for o in orders if o["status"] in ("paid", "delivered"))
+
+    lines = [
+        f"📦 *Orders for* {user_name}",
+        f"👤 ID: `{user_id}`",
+        f"━━━━━━━━━━━━━━━━━━━━",
+        f"📊 Total: *{total}* \\| ✅ Paid: *{paid_count}* \\| 💰 {escape_md(format_currency(total_spent))}",
+        f"━━━━━━━━━━━━━━━━━━━━",
+    ]
+
+    buttons = []
+    pool = await db.get_pool()
+
+    for i, o in enumerate(orders[:15]):
+        emoji = status_emoji.get(o["status"], "❓")
+        oid = o["order_id"]
+        oid_esc = escape_md(oid)
+
+        # Get coupon title
+        coupon_row = await pool.fetchrow("SELECT title FROM coupons WHERE id = $1", o["coupon_id"])
+        coupon_title = coupon_row["title"] if coupon_row else "Unknown"
+        title_esc = escape_md(coupon_title)
+
+        amt = escape_md(format_currency(float(o["amount"])))
+        qty = o.get("quantity") or 1
+        st = escape_md(o["status"])
+        created = o.get("created_at")
+        date_str = escape_md(str(created)[:16]) if created else "N/A"
+
+        # Source badge
+        source = o.get("source", "purchase") or "purchase"
+        source_label = ""
+        if source == "referral_reward":
+            source_label = "🏆 "
+        elif source == "giveaway":
+            source_label = "🎁 "
+
+        # Get code count
+        code_count = await pool.fetchval(
+            "SELECT COUNT(*) FROM coupon_codes WHERE order_id = $1 AND is_sold = TRUE", oid
+        ) or 0
+
+        code_info = f"🔑 {code_count} code\\(s\\)" if code_count > 0 else ""
+
+        lines.append(
+            f"\n{emoji} *\\#{i+1}* {source_label}{title_esc}\n"
+            f"   📅 {date_str}\n"
+            f"   💰 {amt} x{qty} \\| 📋 {st}\n"
+            f"   🆔 `{oid_esc}`"
+        )
+        if code_info:
+            lines.append(f"   {code_info}")
+
+        # Add per-order buttons for paid/delivered orders
+        btn_row = []
+        if code_count > 0:
+            btn_row.append(InlineKeyboardButton(
+                text=f"🔑 #{i+1} Codes",
+                callback_data=f"admin_view_order_codes:{oid}"
+            ))
+        btn_row.append(InlineKeyboardButton(
+            text=f"📋 #{i+1} Detail",
+            callback_data=f"admin_order_detail:{oid}"
+        ))
+        if btn_row:
+            buttons.append(btn_row)
+
+    if total > 15:
+        lines.append(f"\n_\\.\\.\\.showing 15 of {total} orders_")
+
+    text = "\n".join(lines)
+
+    buttons.append([InlineKeyboardButton(text="👤 Back to Profile", callback_data=f"admin_user_inspect:{user_id}")])
+    buttons.append([back_button("admin_users")])
+
     await callback.message.edit_text(
-        "\n".join(lines), parse_mode="MarkdownV2", reply_markup=kb
+        text, parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_view_order_codes:"))
+@admin_only
+@error_handler
+async def cb_admin_view_order_codes(callback: types.CallbackQuery):
+    """Admin views coupon codes for a specific order."""
+    order_id = callback.data.split(":", 1)[1]
+    pool = await db.get_pool()
+
+    codes = await pool.fetch(
+        "SELECT code FROM coupon_codes WHERE order_id = $1 AND is_sold = TRUE", order_id
+    )
+
+    if not codes:
+        await callback.answer("No codes found for this order.", show_alert=True)
+        return
+
+    order = await db.get_order(order_id)
+    user_id = order["user_id"] if order else 0
+
+    oid_esc = escape_md(order_id)
+    lines = [
+        f"🔑 *Codes for Order*",
+        f"🆔 `{oid_esc}`",
+        f"━━━━━━━━━━━━━━━━━━━━",
+    ]
+    for i, c in enumerate(codes, 1):
+        code_esc = escape_md(c["code"])
+        lines.append(f"{i}\\. `{code_esc}`")
+
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
+    lines.append(f"\n📦 Total: *{len(codes)}* code\\(s\\)")
+
+    buttons = [
+        [InlineKeyboardButton(text="📋 Order Detail", callback_data=f"admin_order_detail:{order_id}")],
+    ]
+    if user_id:
+        buttons.append([InlineKeyboardButton(text="👤 User Orders", callback_data=f"admin_user_orders:{user_id}")])
+    buttons.append([back_button("admin_orders")])
+
+    await callback.message.edit_text(
+        "\n".join(lines), parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
     )
     await callback.answer()
 
@@ -2373,8 +2584,9 @@ async def msg_admin_wallet_edit(message: types.Message, state: FSMContext):
 
     await db.update_wallet_balance(user_id, new_balance)
     try:
+        txn_type = "admin_credit" if delta >= 0 else "admin_debit"
         await db.add_wallet_transaction(
-            user_id, delta, "admin_adjust",
+            user_id, delta, txn_type,
             bal_before=current, bal_after=new_balance,
             description=f"Admin adjustment by {message.from_user.id}",
         )

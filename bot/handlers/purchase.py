@@ -921,21 +921,34 @@ async def cb_my_orders(callback: types.CallbackQuery):
         amt_esc = escape_md(amt)
         date_esc = escape_md(date_str)
 
+        # Source badge
+        source = o.get("source", "purchase") or "purchase"
+        if source == "referral_reward":
+            source_badge = "🏆 *Referral Reward*"
+        elif source == "giveaway":
+            source_badge = "🎁 *Giveaway Prize*"
+        else:
+            source_badge = "🛍️ *Purchase*"
+
         lines.append(f"\n━━━━ \\#*{num}* ━━━━")
+        lines.append(f"{source_badge}")
         lines.append(f"🏷️ {title_esc}")
         lines.append(f"🕐 {date_esc}")
-        lines.append(f"🛍️ Qty: {qty} • 💰 {amt_esc}")
+        if source == "purchase":
+            lines.append(f"📦 Qty: {qty} • 💰 {amt_esc}")
+        else:
+            lines.append(f"📦 Qty: {qty} • 🆓 FREE")
         lines.append(f"🆔 `{oid_esc}`")
         if code_count > 0:
-            lines.append(f"📦 {code_count} coupon\\(s\\) \\- tap to view")
+            lines.append(f"🔑 {code_count} code\\(s\\) \\— tap to view")
         else:
-            lines.append(f"📦 Status: {escape_md(o['status'])}")
+            lines.append(f"📋 Status: {escape_md(o['status'])}")
 
         # Add View Codes button for delivered/paid orders
         if o["status"] in ("delivered", "paid") and code_count > 0:
             buttons.append([
                 InlineKeyboardButton(
-                    text=f"📋 #{num} View Codes",
+                    text=f"🔑 #{num} View Codes",
                     callback_data=f"view_codes:{oid}"
                 )
             ])

@@ -343,6 +343,12 @@ async def init_db() -> asyncpg.Pool:
         except Exception:
             pass
 
+        # Orders: add source column to distinguish purchase / referral_reward / giveaway
+        try:
+            await conn.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS source VARCHAR(32) DEFAULT 'purchase';")
+        except Exception:
+            pass
+
     logger.info("Database pool ready.")
     _last_health_check = time.monotonic()
     _db_ready.set()

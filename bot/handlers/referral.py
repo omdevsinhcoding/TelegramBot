@@ -176,19 +176,41 @@ async def cb_ref_claim(callback: types.CallbackQuery):
         await callback.answer("Could not claim. Already claimed or out of stock.", show_alert=True)
         return
 
+    # Create a reward order so it appears in Order History
+    from bot.utils.helpers import generate_order_id
+    order_id = generate_order_id()
+    try:
+        await db.create_reward_order(order_id, user_id, reward["coupon_id"], "referral_reward")
+        # Link the coupon code to this order
+        pool = await db.get_pool()
+        await pool.execute(
+            "UPDATE coupon_codes SET order_id = $1 WHERE coupon_id = $2 AND code = $3 AND sold_to = $4",
+            order_id, reward["coupon_id"], code, user_id
+        )
+    except Exception as e:
+        from bot.utils.logger import logger
+        logger.warning(f"Failed to create reward order (non-critical): {e}")
+
     title_esc = escape_md(reward["title"])
     code_esc = escape_md(code)
+    oid_esc = escape_md(order_id) if order_id else ""
     kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
 
     await callback.message.edit_text(
-        f"🎉 *Congratulations\\!*\n\n"
-        f"You claimed: *{title_esc}*\n\n"
-        f"🔑 Your coupon code:\n"
+        f"🎊✨ *CONGRATULATIONS\\!* ✨🎊\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🏆 *REFERRAL REWARD CLAIMED\\!*\n\n"
+        f"🎁 Reward: *{title_esc}*\n"
+        f"🔑 Your Code:\n"
         f"`{code_esc}`\n\n"
-        f"_Save this code\\!_",
+        f"📦 Order ID: `{oid_esc}`\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"💡 _This reward is saved in your_\n"
+        f"_📦 Order History — view anytime\\!_\n\n"
+        f"🤝 _Keep referring to unlock more rewards\\!_ 🚀",
         parse_mode="MarkdownV2", reply_markup=kb
     )
-    await callback.answer("Reward claimed! 🎉")
+    await callback.answer("🎉 Reward claimed!")
 
 
 @router.callback_query(F.data == "ref_history")

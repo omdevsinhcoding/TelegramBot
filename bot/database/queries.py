@@ -149,6 +149,20 @@ async def create_order(order_id: str, user_id: int, coupon_id: int,
     """, order_id, user_id, coupon_id, amount, quantity, timeout_sec)
 
 
+async def create_reward_order(order_id: str, user_id: int, coupon_id: int,
+                               source: str, quantity: int = 1):
+    """Create a zero-amount order for referral rewards / giveaway claims.
+    
+    Args:
+        source: 'referral_reward' or 'giveaway'
+    """
+    pool = await get_pool()
+    await pool.execute("""
+        INSERT INTO orders (order_id, user_id, coupon_id, amount, quantity, status, source, paid_at, expires_at)
+        VALUES ($1, $2, $3, 0, $4, 'delivered', $5, NOW(), NOW() + interval '1 year')
+    """, order_id, user_id, coupon_id, quantity, source)
+
+
 async def get_order(order_id: str):
     pool = await get_pool()
     return await pool.fetchrow("SELECT * FROM orders WHERE order_id = $1", order_id)

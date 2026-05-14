@@ -141,6 +141,15 @@ async def text_my_orders(message: types.Message):
             "SELECT COUNT(*) FROM coupon_codes WHERE order_id = $1 AND is_sold = TRUE", oid
         ) or 0
 
+        # Also check free_coupon_codes for giveaway orders
+        free_code_count = await pool.fetchval(
+            "SELECT COUNT(*) FROM free_coupon_codes WHERE claimed_by = $1 AND code IN "
+            "(SELECT cc.code FROM coupon_codes cc WHERE cc.order_id = $2)",
+            message.from_user.id, oid
+        ) or 0
+
+        total_code_count = code_count
+
         amt = f"₹{float(o['amount']):.1f}"
         qty = o.get("quantity", 1) or 1
         created = o["created_at"]
@@ -151,20 +160,33 @@ async def text_my_orders(message: types.Message):
         amt_esc = escape_md(amt)
         date_esc = escape_md(date_str)
 
+        # Source badge
+        source = o.get("source", "purchase") or "purchase"
+        if source == "referral_reward":
+            source_badge = "🏆 *Referral Reward*"
+        elif source == "giveaway":
+            source_badge = "🎁 *Giveaway Prize*"
+        else:
+            source_badge = "🛍️ *Purchase*"
+
         lines.append(f"\n━━━━ \\#*{num}* ━━━━")
+        lines.append(f"{source_badge}")
         lines.append(f"🏷️ {title_esc}")
         lines.append(f"🕐 {date_esc}")
-        lines.append(f"🛍️ Qty: {qty} • 💰 {amt_esc}")
-        lines.append(f"🆔 `{oid_esc}`")
-        if code_count > 0:
-            lines.append(f"📦 {code_count} coupon\\(s\\) \\- tap to view")
+        if source == "purchase":
+            lines.append(f"📦 Qty: {qty} • 💰 {amt_esc}")
         else:
-            lines.append(f"📦 Status: {escape_md(o['status'])}")
+            lines.append(f"📦 Qty: {qty} • 🆓 FREE")
+        lines.append(f"🆔 `{oid_esc}`")
+        if total_code_count > 0:
+            lines.append(f"🔑 {total_code_count} code\\(s\\) \\— tap to view")
+        else:
+            lines.append(f"📋 Status: {escape_md(o['status'])}")
 
-        if o["status"] in ("delivered", "paid") and code_count > 0:
+        if o["status"] in ("delivered", "paid") and total_code_count > 0:
             buttons.append([
                 InlineKeyboardButton(
-                    text=f"📋 #{num} View Codes",
+                    text=f"🔑 #{num} View Codes",
                     callback_data=f"view_codes:{oid}"
                 )
             ])
@@ -667,26 +689,66 @@ async def cb_claim_free_coupon(callback: types.CallbackQuery):
     codes = await db.claim_free_coupon(fc_id, user_id)
     if codes:
         title = escape_md(fc["title"])
-        codes_text = "\n".join(f"`{escape_md(c)}`" for c in codes)
+        codes_text = "\n".join(f"   `{escape_md(c)}`" for c in codes)
 
         unclaimed = fc.get("unclaimed_codes", 0) - len(codes)
         remaining = ""
         if unclaimed > 0:
-            remaining = f"\n📊 {unclaimed} codes remaining"
+            remaining = f"\n📊 _{unclaimed} codes remaining_"
+
+        # Create a giveaway order so it appears in Order History
+        from bot.utils.helpers import generate_order_id
+        order_id = generate_order_id()
+        oid_esc = ""
+        try:
+            # Use coupon_id=0 placeholder for free coupons (they use free_coupon_codes table)
+            # We need a valid coupon_id for FK — try to find one, else skip
+            pool = await db.get_pool()
+            # Use a dummy coupon_id — create a lightweight order
+            await pool.execute("""
+                INSERT INTO orders (order_id, user_id, coupon_id, amount, quantity, status, source, paid_at, expires_at)
+                VALUES ($1, $2, (SELECT id FROM coupons LIMIT 1), 0, $3, 'delivered', 'giveaway', NOW(), NOW() + interval '1 year')
+            """, order_id, user_id, len(codes))
+
+            # Link codes: store them in coupon_codes for this order so View Codes works
+            for c in codes:
+                try:
+                    await pool.execute(
+                        "INSERT INTO coupon_codes (coupon_id, code, is_sold, sold_to, order_id, sold_at) "
+                        "VALUES ((SELECT id FROM coupons LIMIT 1), $1, TRUE, $2, $3, NOW())",
+                        c, user_id, order_id
+                    )
+                except Exception:
+                    pass
+
+            oid_esc = escape_md(order_id)
+        except Exception as e:
+            from bot.utils.logger import logger
+            logger.warning(f"Failed to create giveaway order (non-critical): {e}")
+
+        order_line = ""
+        if oid_esc:
+            order_line = f"📦 Order ID: `{oid_esc}`\n\n"
 
         text = (
-            f"🎉 *Congratulations\\!*\n\n"
-            f"You claimed: *{title}*\n\n"
-            f"🔑 Your coupon code\\(s\\):\n{codes_text}\n"
+            f"🎊🎉 *YOU WON\\!* 🎉🎊\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🎁 *GIVEAWAY REWARD\\!*\n\n"
+            f"🏷️ Prize: *{title}*\n\n"
+            f"🔑 *Your Code\\(s\\):*\n{codes_text}\n"
             f"{remaining}\n\n"
-            f"_Save these codes\\!_"
+            f"{order_line}"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"💡 _Saved to your 📦 Order History\\!_\n"
+            f"_View your codes anytime from My Orders\\._\n\n"
+            f"🌟 _Share with friends for more wins\\!_ 🚀"
         )
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [back_button("free_coupons_list")],
         ])
         await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
-        await callback.answer("Coupon claimed! 🎉")
+        await callback.answer("🎉 You won! Check your codes!")
     else:
         await callback.answer(
             "Could not claim coupon. It may have ended or you already claimed it.",
