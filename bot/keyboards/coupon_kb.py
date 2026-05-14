@@ -185,9 +185,15 @@ def payment_pending_kb(order_id: str) -> InlineKeyboardMarkup:
     ])
 
 
-def gateway_selection_kb(coupon_id: int, qty: int = 1, wallet_balance: float = 0.0, total: float = 0.0) -> InlineKeyboardMarkup:
-    """Show payment gateway options with reward wallet."""
+def gateway_selection_kb(coupon_id: int, qty: int = 1, wallet_balance: float = 0.0, total: float = 0.0,
+                          payment_settings: dict | None = None) -> InlineKeyboardMarkup:
+    """Show payment gateway options — only enabled gateways.
+    
+    Args:
+        payment_settings: dict from db.get_payment_settings() with gateway_*_enabled flags
+    """
     buttons = []
+    ps = payment_settings or {}
 
     # Reward Wallet button — always visible (shows balance)
     wallet_label = f"💰 Reward Wallet: ₹{wallet_balance:.1f}"
@@ -204,8 +210,24 @@ def gateway_selection_kb(coupon_id: int, qty: int = 1, wallet_balance: float = 0
             callback_data="wallet_insufficient"
         )])
 
-    buttons.append([InlineKeyboardButton(text="✅ Pay via Paytm", callback_data=f"pay_gateway:paytm:{coupon_id}:{qty}")])
-    buttons.append([InlineKeyboardButton(text="🏦 Pay via BharatPe", callback_data=f"pay_gateway:bharatpe:{coupon_id}:{qty}")])
+    # Only show enabled gateways
+    has_gateway = False
+
+    if ps.get("gateway_paytm_enabled", True):
+        buttons.append([InlineKeyboardButton(text="✅ Pay via Paytm", callback_data=f"pay_gateway:paytm:{coupon_id}:{qty}")])
+        has_gateway = True
+
+    if ps.get("gateway_bharatpe_enabled", True):
+        buttons.append([InlineKeyboardButton(text="🏦 Pay via BharatPe", callback_data=f"pay_gateway:bharatpe:{coupon_id}:{qty}")])
+        has_gateway = True
+
+    if ps.get("gateway_razorpay_enabled", False):
+        buttons.append([InlineKeyboardButton(text="💳 Pay via Razorpay", callback_data=f"pay_gateway:razorpay:{coupon_id}:{qty}")])
+        has_gateway = True
+
+    if not has_gateway:
+        buttons.append([InlineKeyboardButton(text="⚠️ No payment options available", callback_data="noop")])
+
     buttons.append([InlineKeyboardButton(text="❌ Cancel", callback_data="browse_coupons")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 

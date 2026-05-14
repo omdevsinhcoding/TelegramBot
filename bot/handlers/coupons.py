@@ -62,15 +62,39 @@ async def cb_coupon_detail(callback: types.CallbackQuery):
     sale_price = escape_md(f"₹{coupon['discounted_price']:.1f}")
     stock = escape_md(str(coupon["stock"]))
 
+    # Get product description if any
+    desc = coupon.get("description") or ""
+    desc_block = ""
+    if desc:
+        desc_block = f"│ 📝 {escape_md(desc)}\n"
+
     text = (
         f"┌─────────────────────────┐\n"
         f"│ 🛍️ *{title}*\n"
         f"├─────────────────────────┤\n"
         f"│ 💎 Price: *{sale_price}* / unit\n"
         f"│ 📦 Stock: *{stock}* available\n"
-        f"└─────────────────────────┘\n\n"
-        f"🔢 *Select Quantity:*"
+        f"{desc_block}"
+        f"└─────────────────────────┘\n"
     )
+
+    # Check disclaimer mode — if 'description', append disclaimer to product detail
+    from bot.database import queries as db
+    try:
+        settings = await db.get_bot_settings()
+        disclaimer_mode = settings.get("disclaimer_mode") or "button"
+        disclaimer_text = settings.get("disclaimer_text") or ""
+    except Exception:
+        disclaimer_mode = "button"
+        disclaimer_text = ""
+
+    if disclaimer_mode == "description" and disclaimer_text:
+        text += (
+            f"\n⚠️ *Disclaimer:*\n"
+            f"_{escape_md(disclaimer_text[:300])}_\n"
+        )
+
+    text += f"\n🔢 *Select Quantity:*"
 
     in_stock = coupon["stock"] > 0
     await callback.message.edit_text(

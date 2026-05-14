@@ -10,13 +10,17 @@ from aiogram.types import (
 from bot.config import Config
 
 
-def main_menu_kb(user_id: int) -> ReplyKeyboardMarkup:
+def main_menu_kb(user_id: int, disclaimer_mode: str = "button") -> ReplyKeyboardMarkup:
     """Build a persistent Reply keyboard (static buttons at bottom of chat).
+
+    Args:
+        disclaimer_mode: 'button' shows ⚠️ Disclaimer button, 'description' hides it.
 
     Layout:
       [ 🛍️ Buy Vouchers ] [ 📦 My Orders  ]
       [ 📊 View Stock   ] [ 🎟️ Recover Coupon ]
-      [ 🎁 Refer & Earn ] [ ⚠️ Disclaimer   ]
+      [ 🎁 Refer & Earn ] [ 🆘 Support    ]
+      [ ⚠️ Disclaimer   ]  (only in button mode)
       [       👑 Admin Panel (admin only)  ]
     """
     buttons = [
@@ -33,6 +37,18 @@ def main_menu_kb(user_id: int) -> ReplyKeyboardMarkup:
             KeyboardButton(text="🆘 Support"),
         ],
     ]
+
+    # Show dedicated disclaimer button only in button mode
+    if disclaimer_mode == "button":
+        buttons.append([
+            KeyboardButton(text="⚠️ Disclaimer"),
+            KeyboardButton(text="📢 Our Channels"),
+        ])
+    else:
+        buttons.append([
+            KeyboardButton(text="📢 Our Channels"),
+        ])
+
     if Config.is_admin(user_id):
         buttons.append([
             KeyboardButton(text="👑 Admin Panel"),

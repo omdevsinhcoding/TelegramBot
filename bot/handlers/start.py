@@ -61,7 +61,6 @@ async def cmd_start(message: types.Message):
 
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     from bot.database import queries as db
-    from bot.config import Config
 
     first = escape_md(user.first_name or "there")
 
@@ -71,7 +70,20 @@ async def cmd_start(message: types.Message):
     except Exception:
         total_stock = 0
 
-    support_user = escape_md(Config.SUPPORT_USERNAME or "@support")
+    # Get support info from DB (admin-managed)
+    try:
+        settings = await db.get_bot_settings()
+        support_text = settings.get("disclaimer_text") or ""
+        disclaimer_mode = settings.get("disclaimer_mode") or "button"
+    except Exception:
+        support_text = ""
+        disclaimer_mode = "button"
+
+    support_line = ""
+    if support_text:
+        # Show first line of support text as summary
+        first_line = support_text.split("\n")[0][:60]
+        support_line = f"🆘 Support: _{escape_md(first_line)}_\n"
 
     welcome = (
         f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -82,7 +94,7 @@ async def cmd_start(message: types.Message):
         f"✅ Verified Vouchers\n"
         f"⚡ Auto Payment Verification\n"
         f"📦 Available Stock: *{total_stock}* coupons\n"
-        f"🆘 Support: _{support_user}_\n"
+        f"{support_line}"
         f"━━━━━━━━━━━━━━━━━━"
         f"{referral_msg}"
     )
@@ -114,7 +126,7 @@ async def cmd_start(message: types.Message):
     await message.answer(
         "📋 *Quick Menu:*",
         parse_mode="MarkdownV2",
-        reply_markup=main_menu_kb(user.id),
+        reply_markup=main_menu_kb(user.id, disclaimer_mode),
     )
 
 

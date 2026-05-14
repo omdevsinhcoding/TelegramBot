@@ -183,6 +183,29 @@ async def cb_admin_coupon_edit(callback: types.CallbackQuery):
 @admin_only
 @error_handler
 async def cb_add_coupon_start(callback: types.CallbackQuery, state: FSMContext):
+    # Check if at least one payment gateway is enabled
+    ps = await db.get_payment_settings()
+    has_gateway = (
+        ps.get("gateway_paytm_enabled", False) or
+        ps.get("gateway_bharatpe_enabled", False) or
+        ps.get("gateway_razorpay_enabled", False)
+    )
+    if not has_gateway:
+        await callback.message.edit_text(
+            "⚠️ *Cannot Add Coupon*\n\n"
+            "No payment gateway is currently enabled\\.\n\n"
+            "Please go to *💳 Payments* and enable at least one "
+            "payment gateway \\(Paytm, BharatPe, or Razorpay\\) "
+            "before adding coupons\\.",
+            parse_mode="MarkdownV2",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="💳 Go to Payments", callback_data="admin_payments")],
+                [back_button("admin_coupons")],
+            ]),
+        )
+        await callback.answer("⚠️ No gateway enabled!", show_alert=True)
+        return
+
     await callback.message.edit_text(
         "📝 *Step 1/6* — Enter the *coupon title*:",
         parse_mode="MarkdownV2",
@@ -1919,7 +1942,7 @@ async def msg_force_channel_input(message: types.Message, state: FSMContext):
 @admin_only
 @error_handler
 async def cb_admin_payments(callback: types.CallbackQuery):
-    """Show current payment gateway configuration."""
+    """Show current payment gateway configuration with enable/disable toggles."""
     ps = await db.get_payment_settings()
 
     paytm_mid = escape_md(ps["paytm_mid"] or "Not Set")
@@ -1930,8 +1953,25 @@ async def cb_admin_payments(callback: types.CallbackQuery):
     bp_qr = "✅ Uploaded" if ps["bharatpe_qr_path"] else "❌ Not Set"
     payee = escape_md(ps["upi_payee_name"] or "Not Set")
 
+    # Gateway toggles
+    paytm_on = ps.get("gateway_paytm_enabled", True)
+    bp_on = ps.get("gateway_bharatpe_enabled", True)
+    rp_on = ps.get("gateway_razorpay_enabled", False)
+
+    paytm_status = "🟢 ON" if paytm_on else "🔴 OFF"
+    bp_status = "🟢 ON" if bp_on else "🔴 OFF"
+    rp_status = "🟢 ON" if rp_on else "🔴 OFF"
+
+    rp_key = escape_md(ps.get("razorpay_key_id") or "Not Set")
+    rp_secret = escape_md("•••••" if ps.get("razorpay_key_secret") else "Not Set")
+
     text = (
-        f"💳 *Payment Settings*\n\n"
+        f"💳 *Payment Settings*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"*Gateway Status:*\n"
+        f"  ✅ Paytm: *{paytm_status}*\n"
+        f"  🏦 BharatPe: *{bp_status}*\n"
+        f"  💳 Razorpay: *{rp_status}*\n\n"
         f"━━━ *Paytm* ━━━\n"
         f"🏢 MID: `{paytm_mid}`\n"
         f"📱 UPI ID: `{paytm_upi}`\n\n"
@@ -1940,17 +1980,35 @@ async def cb_admin_payments(callback: types.CallbackQuery):
         f"🔑 Token: `{bp_token}`\n"
         f"📱 UPI ID: `{bp_upi}`\n"
         f"📷 QR Image: {bp_qr}\n\n"
+        f"━━━ *Razorpay* ━━━\n"
+        f"🔑 Key ID: `{rp_key}`\n"
+        f"🔐 Secret: `{rp_secret}`\n\n"
         f"━━━ *General* ━━━\n"
         f"👤 Payee Name: `{payee}`\n"
     )
 
+    # Toggle buttons
+    paytm_toggle = "🔴 Disable Paytm" if paytm_on else "🟢 Enable Paytm"
+    bp_toggle = "🔴 Disable BharatPe" if bp_on else "🟢 Enable BharatPe"
+    rp_toggle = "🔴 Disable Razorpay" if rp_on else "🟢 Enable Razorpay"
+
     buttons = [
+        # Gateway toggles
+        [InlineKeyboardButton(text=paytm_toggle, callback_data="admin_gw_toggle:gateway_paytm_enabled"),
+         InlineKeyboardButton(text=bp_toggle, callback_data="admin_gw_toggle:gateway_bharatpe_enabled")],
+        [InlineKeyboardButton(text=rp_toggle, callback_data="admin_gw_toggle:gateway_razorpay_enabled")],
+        # Paytm settings
         [InlineKeyboardButton(text="🏢 Paytm MID", callback_data="admin_pay_edit:paytm_mid"),
          InlineKeyboardButton(text="📱 Paytm UPI", callback_data="admin_pay_edit:paytm_upi_id")],
+        # BharatPe settings
         [InlineKeyboardButton(text="🏢 BP Merchant", callback_data="admin_pay_edit:bharatpe_merchant_id"),
          InlineKeyboardButton(text="🔑 BP Token", callback_data="admin_pay_edit:bharatpe_token")],
         [InlineKeyboardButton(text="📱 BP UPI ID", callback_data="admin_pay_edit:bharatpe_upi_id")],
         [InlineKeyboardButton(text="📷 Upload BP QR Image", callback_data="admin_pay_upload_qr")],
+        # Razorpay settings
+        [InlineKeyboardButton(text="🔑 Razorpay Key ID", callback_data="admin_pay_edit:razorpay_key_id"),
+         InlineKeyboardButton(text="🔐 Razorpay Secret", callback_data="admin_pay_edit:razorpay_key_secret")],
+        # General
         [InlineKeyboardButton(text="👤 Payee Name", callback_data="admin_pay_edit:upi_payee_name")],
         [back_button("admin_panel")],
     ]
@@ -1967,7 +2025,34 @@ PAYMENT_FIELD_LABELS = {
     "bharatpe_token": "BharatPe Token",
     "bharatpe_upi_id": "BharatPe UPI ID",
     "upi_payee_name": "UPI Payee Name",
+    "razorpay_key_id": "Razorpay Key ID",
+    "razorpay_key_secret": "Razorpay Key Secret",
 }
+
+
+@router.callback_query(F.data.startswith("admin_gw_toggle:"))
+@admin_only
+@error_handler
+async def cb_admin_gw_toggle(callback: types.CallbackQuery):
+    """Toggle a payment gateway on/off."""
+    field = callback.data.split(":")[1]
+    allowed = ("gateway_paytm_enabled", "gateway_bharatpe_enabled", "gateway_razorpay_enabled")
+    if field not in allowed:
+        await callback.answer("Invalid gateway.", show_alert=True)
+        return
+
+    settings = await db.get_bot_settings()
+    current = settings.get(field, False)
+    new_val = not current
+
+    await db.update_bot_settings(**{field: new_val})
+
+    gw_name = field.replace("gateway_", "").replace("_enabled", "").title()
+    status = "🟢 Enabled" if new_val else "🔴 Disabled"
+    await callback.answer(f"{gw_name}: {status}")
+
+    # Refresh the payments page
+    await cb_admin_payments(callback)
 
 
 @router.callback_query(F.data.startswith("admin_pay_edit:"))
@@ -2675,6 +2760,7 @@ async def cb_admin_disclaimer(callback: types.CallbackQuery):
     settings = await db.get_bot_settings()
     current_text = settings.get("disclaimer_text") or ""
     buttons_json = settings.get("disclaimer_buttons") or "[]"
+    disclaimer_mode = settings.get("disclaimer_mode") or "button"
 
     try:
         buttons_list = json.loads(buttons_json)
@@ -2696,21 +2782,54 @@ async def cb_admin_disclaimer(callback: types.CallbackQuery):
     else:
         btn_preview = "\n📎 _No inline buttons_"
 
+    # Display mode
+    if disclaimer_mode == "button":
+        mode_text = "🔘 *Button* — Shows '⚠️ Disclaimer' in user menu"
+    else:
+        mode_text = "📝 *Description* — Shows disclaimer in product details"
+
     text = (
-        f"🆘 *Support Settings*\n"
+        f"🆘 *Support & Disclaimer Settings*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"📝 *Current Text:*\n{preview}\n"
-        f"{btn_preview}\n"
+        f"{btn_preview}\n\n"
+        f"━━━ *Display Mode* ━━━\n"
+        f"{mode_text}\n"
     )
+
+    # Mode toggle button
+    if disclaimer_mode == "button":
+        mode_toggle = "📝 Switch to Description Mode"
+    else:
+        mode_toggle = "🔘 Switch to Button Mode"
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✏️ Edit Text", callback_data="admin_discl_edit_text")],
         [InlineKeyboardButton(text="📎 Edit Buttons", callback_data="admin_discl_edit_btns")],
+        [InlineKeyboardButton(text=mode_toggle, callback_data="admin_discl_toggle_mode")],
         [InlineKeyboardButton(text="🗑️ Reset to Default", callback_data="admin_discl_reset")],
         [back_button("admin_panel")],
     ])
     await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
     await callback.answer()
+
+
+@router.callback_query(F.data == "admin_discl_toggle_mode")
+@admin_only
+@error_handler
+async def cb_admin_discl_toggle_mode(callback: types.CallbackQuery):
+    """Toggle disclaimer display mode between button and description."""
+    settings = await db.get_bot_settings()
+    current = settings.get("disclaimer_mode") or "button"
+    new_mode = "description" if current == "button" else "button"
+    await db.update_bot_settings(disclaimer_mode=new_mode)
+
+    if new_mode == "button":
+        await callback.answer("🔘 Mode: Button — Disclaimer shows as menu button", show_alert=True)
+    else:
+        await callback.answer("📝 Mode: Description — Disclaimer shows in product details", show_alert=True)
+
+    await cb_admin_disclaimer(callback)
 
 
 @router.callback_query(F.data == "admin_discl_edit_text")

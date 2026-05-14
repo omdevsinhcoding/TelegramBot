@@ -152,18 +152,13 @@
 #    BOT_TOKEN=7123456789:AAF-xxxxxxxxxxxxxxxxxxxxxxxxxxx
 #    ADMIN_IDS=1234567890
 #    DATABASE_URL=postgresql://dreamxbot:YOURPASSWORD@postgresql-dreamxbot.alwaysdata.net:5432/dreamxbot_coupon_bot
-#    PAYTM_MERCHANT_ID=YOUR_PAYTM_MID
-#    PAYTM_UPI_ID=YOUR_PAYTM_UPI_VPA
-#    PAYTM_QR_CODE=YOUR_PAYTM_QR_CODE
-#    BHARATPE_MERCHANT_ID=YOUR_BHARATPE_MID
-#    BHARATPE_TOKEN=YOUR_BHARATPE_TOKEN
 #    PAYMENT_TIMEOUT_SECONDS=600
-#    PAYMENT_POLL_INTERVAL=2
-#    UPI_PAYEE_NAME=Paytm Merchant
-#    BOT_USERNAME=DreamXCouponBot
-#    SUPPORT_USERNAME=YourTelegramUsername
+#    BHARATPE_MIN_RECHARGE=10
 #    LOG_LEVEL=INFO
 #    LOG_FILE=bot.log
+#
+#    NOTE: Payment credentials (Paytm, BharatPe, Razorpay) and
+#    support info are managed from the Admin Panel — NOT in .env!
 #
 #
 # --- 6E: Save and exit ---
@@ -178,12 +173,6 @@
 #    1234567890                → Your Telegram ID (Step 2)
 #    dreamxbot                 → Your AlwaysData account name
 #    YOURPASSWORD              → Your AlwaysData password
-#    YOUR_PAYTM_MID            → Paytm Merchant ID
-#    YOUR_PAYTM_UPI_VPA        → Paytm UPI ID (like paytmqr...@paytm)
-#    YOUR_PAYTM_QR_CODE        → Paytm QR code value
-#    YOUR_BHARATPE_MID         → BharatPe Merchant ID
-#    YOUR_BHARATPE_TOKEN       → BharatPe API token
-#    DreamXCouponBot           → Your bot username (without @)
 
 
 # ============================================================

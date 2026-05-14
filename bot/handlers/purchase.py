@@ -103,6 +103,7 @@ async def cb_buy_qty(callback: types.CallbackQuery):
     title = escape_md(coupon["title"])
     amt = escape_md(format_currency(total))
     wallet = await db.get_wallet_balance(callback.from_user.id)
+    ps = await db.get_payment_settings()
 
     from bot.keyboards.coupon_kb import gateway_selection_kb
     text = (
@@ -114,7 +115,7 @@ async def cb_buy_qty(callback: types.CallbackQuery):
     )
     await callback.message.edit_text(
         text, parse_mode="MarkdownV2",
-        reply_markup=gateway_selection_kb(coupon_id, qty, wallet_balance=wallet, total=total),
+        reply_markup=gateway_selection_kb(coupon_id, qty, wallet_balance=wallet, total=total, payment_settings=ps),
     )
     await callback.answer()
 
@@ -174,6 +175,7 @@ async def msg_custom_qty(message: types.Message, state: FSMContext):
     title = escape_md(coupon["title"])
     amt = escape_md(format_currency(total))
     wallet = await db.get_wallet_balance(message.from_user.id)
+    ps = await db.get_payment_settings()
 
     from bot.keyboards.coupon_kb import gateway_selection_kb
     text = (
@@ -185,7 +187,7 @@ async def msg_custom_qty(message: types.Message, state: FSMContext):
     )
     await message.answer(
         text, parse_mode="MarkdownV2",
-        reply_markup=gateway_selection_kb(coupon_id, qty, wallet_balance=wallet, total=total),
+        reply_markup=gateway_selection_kb(coupon_id, qty, wallet_balance=wallet, total=total, payment_settings=ps),
     )
 
 
@@ -204,6 +206,7 @@ async def cb_buy_coupon(callback: types.CallbackQuery):
 
     total = float(coupon["discounted_price"])
     wallet = await db.get_wallet_balance(callback.from_user.id)
+    ps = await db.get_payment_settings()
     from bot.keyboards.coupon_kb import gateway_selection_kb
     title = escape_md(coupon["title"])
     amt = escape_md(format_currency(total))
@@ -215,7 +218,7 @@ async def cb_buy_coupon(callback: types.CallbackQuery):
     )
     await callback.message.edit_text(
         text, parse_mode="MarkdownV2",
-        reply_markup=gateway_selection_kb(coupon_id, wallet_balance=wallet, total=total),
+        reply_markup=gateway_selection_kb(coupon_id, wallet_balance=wallet, total=total, payment_settings=ps),
     )
     await callback.answer()
 
@@ -599,6 +602,150 @@ async def msg_bharatpe_utr(message: types.Message, state: FSMContext):
             parse_mode="MarkdownV2",
         )
         # DON'T clear state — let user retry with correct UTR
+
+
+# ══════════════════════════════════════════════════════════════
+# RAZORPAY GATEWAY — Payment Link
+# ══════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("pay_gateway:razorpay:"))
+@error_handler
+async def cb_pay_razorpay(callback: types.CallbackQuery):
+    """User selected Razorpay — create payment link and show to user."""
+    parts = callback.data.split(":")
+    coupon_id = int(parts[2])
+    qty = int(parts[3]) if len(parts) > 3 else 1
+
+    coupon = await get_coupon_detail(coupon_id)
+    if not coupon:
+        await callback.answer("Coupon not found.", show_alert=True)
+        return
+
+    if coupon["stock"] < qty:
+        await callback.answer("Not enough stock!", show_alert=True)
+        return
+
+    user_id = callback.from_user.id
+    amount = float(coupon["discounted_price"]) * qty
+
+    # Create order with Razorpay gateway
+    order_info = await create_purchase_order(user_id, coupon_id, amount, "razorpay", qty)
+    order_id = order_info["order_id"]
+
+    # Create Razorpay payment link
+    from bot.payments.razorpay import create_payment_link
+    result = await create_payment_link(amount, order_id, f"Purchase: {coupon['title']}")
+
+    if "error" in result:
+        await callback.answer(f"❌ Error: {result['error'][:100]}", show_alert=True)
+        return
+
+    link_url = result["short_url"]
+    link_id = result["link_id"]
+
+    # Store link_id for status checking
+    try:
+        pool = await db.get_pool()
+        await pool.execute(
+            "UPDATE orders SET qr_message_id = 0 WHERE order_id = $1",
+            order_id
+        )
+        # Store razorpay link_id in a way we can retrieve it
+        await pool.execute(
+            "INSERT INTO transactions (order_id, gateway, utr, amount, status) "
+            "VALUES ($1, 'razorpay', $2, $3, 'pending')",
+            order_id, link_id, amount
+        )
+    except Exception as e:
+        logger.warning(f"Failed to store razorpay link_id: {e}")
+
+    timeout_min = Config.PAYMENT_TIMEOUT // 60
+    title = escape_md(coupon["title"])
+    amt = escape_md(format_currency(amount))
+    oid = escape_md(order_id)
+
+    text = (
+        f"💳 *Payment Required — Razorpay*\n\n"
+        f"🏷️ {title}\n"
+        f"💰 Amount: *{amt}*\n"
+        f"🧾 Order: `{oid}`\n\n"
+        f"📱 *Steps:*\n"
+        f"1️⃣ Click the payment button below\n"
+        f"2️⃣ Complete payment on Razorpay page\n"
+        f"3️⃣ Come back and click 'Check Payment'\n\n"
+        f"⏰ Expires in {timeout_min} minutes\n\n"
+        f"_After payment, click Check Payment below\\._"
+    )
+
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💳 Pay Now", url=link_url)],
+        [InlineKeyboardButton(text="🔄 Check Payment", callback_data=f"check_razorpay:{order_id}:{link_id}")],
+        [InlineKeyboardButton(text="❌ Cancel Order", callback_data=f"cancel_order:{order_id}")],
+    ])
+
+    await callback.message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
+    await callback.answer()
+
+    logger.info(f"Razorpay link sent for user {user_id}, order={order_id}, link={link_id}")
+
+
+@router.callback_query(F.data.startswith("check_razorpay:"))
+@error_handler
+async def cb_check_razorpay(callback: types.CallbackQuery):
+    """Check Razorpay payment link status."""
+    parts = callback.data.split(":")
+    order_id = parts[1]
+    link_id = parts[2] if len(parts) > 2 else ""
+
+    if not link_id:
+        await callback.answer("❌ Payment link not found.", show_alert=True)
+        return
+
+    order = await db.get_order(order_id)
+    if not order or order["status"] not in ("pending",):
+        await callback.answer("This order is no longer pending.", show_alert=True)
+        return
+
+    from bot.payments.razorpay import check_payment_link_status
+    result = await check_payment_link_status(link_id)
+
+    if result.get("status") == "paid":
+        payment_id = result.get("payment_id", "")
+        amount = float(order["amount"])
+        coupon_id = order["coupon_id"]
+
+        # Record transaction
+        try:
+            pool = await db.get_pool()
+            await pool.execute(
+                "UPDATE transactions SET status = 'success', utr = $1 WHERE order_id = $2 AND gateway = 'razorpay'",
+                payment_id or link_id, order_id
+            )
+        except Exception:
+            pass
+
+        # Complete the order
+        success = await complete_order(order_id, coupon_id, callback.from_user.id, "razorpay", utr=payment_id)
+
+        if success:
+            text = await _build_success_message(order_id, coupon_id, amount, payment_id or link_id)
+            kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
+            await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+            logger.info(f"Razorpay VERIFIED: order={order_id}, payment_id={payment_id}")
+        else:
+            await callback.answer("❌ Order completion failed. Contact support.", show_alert=True)
+
+    elif result.get("status") in ("created",):
+        await callback.answer("⏳ Payment not received yet. Please complete the payment first.", show_alert=True)
+    elif result.get("status") in ("cancelled", "expired"):
+        await callback.answer("❌ Payment link expired or cancelled.", show_alert=True)
+    else:
+        await callback.answer("⏳ Still processing. Try again in a moment.", show_alert=True)
 
 
 # ══════════════════════════════════════════════════════════════

@@ -716,6 +716,13 @@ async def get_payment_settings():
         "bharatpe_upi_id": settings.get("bharatpe_upi_id") or "",
         "bharatpe_qr_path": settings.get("bharatpe_qr_path") or "",
         "upi_payee_name": settings.get("upi_payee_name") or "",
+        # Gateway visibility toggles
+        "gateway_paytm_enabled": settings.get("gateway_paytm_enabled", True),
+        "gateway_bharatpe_enabled": settings.get("gateway_bharatpe_enabled", True),
+        "gateway_razorpay_enabled": settings.get("gateway_razorpay_enabled", False),
+        # Razorpay credentials
+        "razorpay_key_id": settings.get("razorpay_key_id") or "",
+        "razorpay_key_secret": settings.get("razorpay_key_secret") or "",
     }
 
 

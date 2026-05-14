@@ -349,6 +349,27 @@ async def init_db() -> asyncpg.Pool:
         except Exception:
             pass
 
+        # Bot settings: add disclaimer_mode (button / description)
+        try:
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS disclaimer_mode VARCHAR(16) DEFAULT 'button';")
+        except Exception:
+            pass
+
+        # Gateway enable/disable toggles (in bot_settings)
+        try:
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS gateway_paytm_enabled BOOLEAN DEFAULT TRUE;")
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS gateway_bharatpe_enabled BOOLEAN DEFAULT TRUE;")
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS gateway_razorpay_enabled BOOLEAN DEFAULT FALSE;")
+        except Exception:
+            pass
+
+        # Razorpay credentials (in bot_settings)
+        try:
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS razorpay_key_id TEXT DEFAULT '';")
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS razorpay_key_secret TEXT DEFAULT '';")
+        except Exception:
+            pass
+
     logger.info("Database pool ready.")
     _last_health_check = time.monotonic()
     _db_ready.set()

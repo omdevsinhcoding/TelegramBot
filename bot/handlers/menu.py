@@ -395,14 +395,44 @@ async def text_support(message: types.Message):
     await message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
 
 
+@router.message(F.text == "⚠️ Disclaimer")
+@error_handler
+async def text_disclaimer(message: types.Message):
+    """Show disclaimer text — shown when disclaimer_mode is 'button'."""
+    from bot.database import queries as db
+
+    settings = await db.get_bot_settings()
+    disclaimer_text = settings.get("disclaimer_text") or ""
+
+    if disclaimer_text:
+        text = (
+            f"⚠️ *Disclaimer*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"_{escape_md(disclaimer_text)}_"
+        )
+    else:
+        text = (
+            "⚠️ *Disclaimer*\n\n"
+            "_No disclaimer has been set by the admin\\._"
+        )
+
+    await message.answer(text, parse_mode="MarkdownV2")
+
+
 @router.message(F.text == "📢 Our Channels")
 @error_handler
 async def text_channels(message: types.Message):
     """Show channel links."""
-    support = Config.SUPPORT_USERNAME
+    from bot.database import queries as db
+    try:
+        settings = await db.get_bot_settings()
+        support_text = settings.get("disclaimer_text") or ""
+    except Exception:
+        support_text = ""
     support_line = ""
-    if support:
-        support_line = f"\n💬 Support: @{escape_md(support)}"
+    if support_text:
+        first_line = support_text.split("\n")[0][:60]
+        support_line = f"\n💬 Support: _{escape_md(first_line)}_"
     text = (
         f"📢 *Our Channels*\n\n"
         f"Stay updated with latest deals \\& offers\\!{support_line}\n\n"
@@ -459,10 +489,16 @@ async def cb_show_support(callback: types.CallbackQuery):
 @error_handler
 async def cb_show_channels(callback: types.CallbackQuery):
     """Show channels info from inline button."""
-    support = Config.SUPPORT_USERNAME
+    from bot.database import queries as db
+    try:
+        settings = await db.get_bot_settings()
+        support_text = settings.get("disclaimer_text") or ""
+    except Exception:
+        support_text = ""
     support_line = ""
-    if support:
-        support_line = f"\n💬 Support: @{escape_md(support)}"
+    if support_text:
+        first_line = support_text.split("\n")[0][:60]
+        support_line = f"\n💬 Support: _{escape_md(first_line)}_"
     text = (
         f"📢 *Our Channels*\n\n"
         f"Stay updated with latest deals \\& offers\\!{support_line}\n\n"
@@ -537,24 +573,80 @@ async def text_admin_panel(message: types.Message):
 @router.callback_query(F.data == "back_home")
 @error_handler
 async def cb_back_home(callback: types.CallbackQuery):
-    """Back to home — just delete the inline message, DON'T resend welcome.
-    The persistent reply keyboard is already there at the bottom."""
+    """Back to home — re-send welcome message + persistent reply keyboard.
+    This ensures the floating buttons always reappear."""
+    from bot.database import queries as db
+
     try:
         await callback.message.delete()
     except Exception:
         pass
+
+    user = callback.from_user
+    first = escape_md(user.first_name or "there")
+
+    try:
+        total_stock = await db.get_total_stock()
+    except Exception:
+        total_stock = 0
+
+    # Get support info from DB
+    try:
+        settings = await db.get_bot_settings()
+        support_text = settings.get("disclaimer_text") or ""
+        disclaimer_mode = settings.get("disclaimer_mode") or "button"
+    except Exception:
+        support_text = ""
+        disclaimer_mode = "button"
+
+    support_line = ""
+    if support_text:
+        first_line = support_text.split("\n")[0][:60]
+        support_line = f"🆘 Support: _{escape_md(first_line)}_\n"
+
+    welcome = (
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"👋 *WELCOME, {first}\\!*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🚀 *Instant Delivery System*\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"✅ Verified Vouchers\n"
+        f"⚡ Auto Payment Verification\n"
+        f"📦 Available Stock: *{total_stock}* coupons\n"
+        f"{support_line}"
+        f"━━━━━━━━━━━━━━━━━━"
+    )
+
+    inline_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🛍️ Stock Status", callback_data="browse_coupons"),
+            InlineKeyboardButton(text="🛒 Buy Now", callback_data="browse_coupons"),
+        ],
+        [
+            InlineKeyboardButton(text="📁 My Orders", callback_data="my_orders"),
+            InlineKeyboardButton(text="🆘 Support", callback_data="show_support"),
+        ],
+        [
+            InlineKeyboardButton(text="🤝 Refer & Earn", callback_data="referral_menu"),
+            InlineKeyboardButton(text="📢 Join Channels", callback_data="show_channels"),
+        ],
+    ])
+
+    await callback.message.answer(
+        welcome, parse_mode="MarkdownV2", reply_markup=inline_kb,
+    )
+    await callback.message.answer(
+        "📋 *Quick Menu:*", parse_mode="MarkdownV2",
+        reply_markup=main_menu_kb(user.id, disclaimer_mode),
+    )
     await callback.answer()
 
 
 @router.callback_query(F.data == "main_menu")
 @error_handler
 async def cb_main_menu(callback: types.CallbackQuery):
-    """Legacy main_menu callback — redirect to back_home behavior."""
-    try:
-        await callback.message.delete()
-    except Exception:
-        pass
-    await callback.answer()
+    """Legacy main_menu callback — same as back_home."""
+    await cb_back_home(callback)
 
 
 @router.callback_query(F.data.startswith("buy_page:"))

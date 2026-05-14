@@ -34,9 +34,6 @@ class Config:
     PAYMENT_TIMEOUT: int = int(os.getenv("PAYMENT_TIMEOUT_SECONDS", "600"))
     BHARATPE_MIN_RECHARGE: float = float(os.getenv("BHARATPE_MIN_RECHARGE", "10"))
 
-    # ── Bot Meta ──────────────────────────────────────────
-    SUPPORT_USERNAME: str = os.getenv("SUPPORT_USERNAME", "")
-
     # ── Logging ───────────────────────────────────────────
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     LOG_FILE: str = os.getenv("LOG_FILE", "bot.log")
