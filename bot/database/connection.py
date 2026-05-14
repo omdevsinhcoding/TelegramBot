@@ -397,6 +397,12 @@ async def init_db() -> asyncpg.Pool:
         except Exception:
             pass
 
+        # Channel links for "Our Channels" user button
+        try:
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS channels_list TEXT DEFAULT '[]';")
+        except Exception:
+            pass
+
     logger.info("Database pool ready.")
     _last_health_check = time.monotonic()
     _db_ready.set()

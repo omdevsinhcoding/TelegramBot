@@ -75,6 +75,8 @@ class AdminStates(StatesGroup):
     add_admin_input = State()
     # Dynamic config
     dynamic_config_input = State()
+    # Channels management
+    channels_input = State()
 
 
 # ── Universal Cancel — inline ❌ button + /cancel fallback ──
@@ -3277,6 +3279,122 @@ async def cb_admin_discl_clear(callback: types.CallbackQuery):
     await db.update_bot_settings(disclaimer_content="")
     await callback.answer("✅ Disclaimer text cleared!", show_alert=True)
     await cb_admin_disclaimer_settings(callback)
+
+
+# ── Channels Management ──────────────────────────────────
+
+@router.callback_query(F.data == "admin_channels_settings")
+@admin_only
+@error_handler
+async def cb_admin_channels_settings(callback: types.CallbackQuery):
+    """Manage channel links shown in '📢 Our Channels'."""
+    import json
+    settings = await db.get_bot_settings()
+    channels_json = settings.get("channels_list") or "[]"
+
+    try:
+        channels = json.loads(channels_json)
+    except Exception:
+        channels = []
+
+    if channels:
+        ch_lines = []
+        for i, ch in enumerate(channels, 1):
+            name = escape_md(ch.get("name", "Channel"))
+            url = escape_md(ch.get("url", ""))
+            ch_lines.append(f"  {i}\\. {name} → {url}")
+        ch_preview = "\n".join(ch_lines)
+    else:
+        ch_preview = "_No channels configured yet_"
+
+    text = (
+        f"📢 *Channels Management*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📋 *Current Channels:*\n{ch_preview}\n\n"
+        f"💡 _These links show when users click '📢 Our Channels'_"
+    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Edit Channels", callback_data="admin_channels_edit")],
+        [InlineKeyboardButton(text="🗑️ Clear All", callback_data="admin_channels_clear")],
+        [back_button("admin_panel")],
+    ])
+    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_channels_edit")
+@admin_only
+@error_handler
+async def cb_admin_channels_edit(callback: types.CallbackQuery, state: FSMContext):
+    await state.set_state(AdminStates.channels_input)
+    await callback.message.edit_text(
+        "📢 *Edit Channel Links*\n\n"
+        "Send channels, *one per line* in this format:\n\n"
+        "`Channel Name \\| https://t\\.me/channel`\n\n"
+        "Example:\n"
+        "`📢 Main Channel \\| https://t\\.me/dreamxdeals`\n"
+        "`🎁 Offers Channel \\| https://t\\.me/dreamxoffers`\n"
+        "`💬 Discussion Group \\| https://t\\.me/dreamxchat`\n\n"
+        "Send *clear* to remove all channels\\.",
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [back_button("admin_channels_settings"), admin_cancel_button()]
+        ]),
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.channels_input)
+@error_handler
+async def msg_channels_input(message: types.Message, state: FSMContext):
+    import json
+    text = message.text.strip() if message.text else ""
+    await state.clear()
+
+    if text.lower() == "clear":
+        await db.update_bot_settings(channels_list="[]")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_channels_settings")]])
+        await message.answer("✅ All channels removed\\!", parse_mode="MarkdownV2", reply_markup=kb)
+        return
+
+    channels = []
+    for line in text.split("\n"):
+        line = line.strip()
+        if "|" not in line:
+            continue
+        parts = line.split("|", 1)
+        name = parts[0].strip()
+        url = parts[1].strip()
+        if name and url:
+            channels.append({"name": name, "url": url})
+
+    if not channels:
+        await message.answer("⚠️ No valid channels found\\. Use format: `Name \\| URL`", parse_mode="MarkdownV2")
+        return
+
+    await db.update_bot_settings(channels_list=json.dumps(channels))
+
+    await db.add_admin_log(
+        message.from_user.id, "channels_update", "bot_settings", "channels_list",
+        f"Updated channels list: {len(channels)} channels"
+    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_channels_settings")]])
+    await message.answer(
+        f"✅ Saved *{len(channels)}* channel\\(s\\)\\!",
+        parse_mode="MarkdownV2", reply_markup=kb,
+    )
+    logger.info(f"Admin {message.from_user.id} updated channels: {len(channels)}")
+
+
+@router.callback_query(F.data == "admin_channels_clear")
+@admin_only
+@error_handler
+async def cb_admin_channels_clear(callback: types.CallbackQuery):
+    await db.update_bot_settings(channels_list="[]")
+    await callback.answer("✅ All channels cleared!", show_alert=True)
+    await cb_admin_channels_settings(callback)
 
 
 # ── Ban Message Management ───────────────────────────────

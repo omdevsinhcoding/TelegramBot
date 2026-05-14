@@ -422,23 +422,43 @@ async def text_disclaimer(message: types.Message):
 @router.message(F.text == "📢 Our Channels")
 @error_handler
 async def text_channels(message: types.Message):
-    """Show channel links."""
+    """Show channel links — dynamic from admin panel."""
+    import json
     from bot.database import queries as db
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
     try:
         settings = await db.get_bot_settings()
-        support_text = settings.get("disclaimer_text") or ""
+        channels_json = settings.get("channels_list") or "[]"
     except Exception:
-        support_text = ""
-    support_line = ""
-    if support_text:
-        first_line = support_text.split("\n")[0][:60]
-        support_line = f"\n💬 Support: _{escape_md(first_line)}_"
+        channels_json = "[]"
+
+    try:
+        channels = json.loads(channels_json)
+    except Exception:
+        channels = []
+
     text = (
-        f"📢 *Our Channels*\n\n"
-        f"Stay updated with latest deals \\& offers\\!{support_line}\n\n"
-        f"Follow us for exclusive discounts 🔥"
+        "📢 *Our Channels*\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "🔔 Stay updated with latest deals\\!\n"
+        "📌 Follow us for exclusive offers\n\n"
     )
-    await message.answer(text, parse_mode="MarkdownV2")
+
+    if channels:
+        text += "👇 *Join our channels below:*"
+        buttons = []
+        for ch in channels:
+            name = ch.get("name", "Channel")
+            url = ch.get("url", "")
+            if url:
+                buttons.append([InlineKeyboardButton(text=f"📢 {name}", url=url)])
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
+    else:
+        text += "_No channels configured yet\\._"
+        kb = None
+
+    await message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
 
 
 # ── Inline button callbacks (from /start welcome) ────────
@@ -489,22 +509,40 @@ async def cb_show_support(callback: types.CallbackQuery):
 @error_handler
 async def cb_show_channels(callback: types.CallbackQuery):
     """Show channels info from inline button."""
+    import json
     from bot.database import queries as db
+
     try:
         settings = await db.get_bot_settings()
-        support_text = settings.get("disclaimer_text") or ""
+        channels_json = settings.get("channels_list") or "[]"
     except Exception:
-        support_text = ""
-    support_line = ""
-    if support_text:
-        first_line = support_text.split("\n")[0][:60]
-        support_line = f"\n💬 Support: _{escape_md(first_line)}_"
+        channels_json = "[]"
+
+    try:
+        channels = json.loads(channels_json)
+    except Exception:
+        channels = []
+
     text = (
-        f"📢 *Our Channels*\n\n"
-        f"Stay updated with latest deals \\& offers\\!{support_line}\n\n"
-        f"Follow us for exclusive discounts 🔥"
+        "📢 *Our Channels*\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "🔔 Stay updated with latest deals\\!\n"
+        "📌 Follow us for exclusive offers\n\n"
     )
-    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
+
+    buttons = []
+    if channels:
+        text += "👇 *Join our channels below:*"
+        for ch in channels:
+            name = ch.get("name", "Channel")
+            url = ch.get("url", "")
+            if url:
+                buttons.append([InlineKeyboardButton(text=f"📢 {name}", url=url)])
+    else:
+        text += "_No channels configured yet\\._"
+
+    buttons.append([back_button("back_home")])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
     await callback.answer()
 
