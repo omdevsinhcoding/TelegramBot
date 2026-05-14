@@ -128,12 +128,60 @@ async def delete_coupon(coupon_id: int):
     pool = await get_pool()
     await pool.execute("DELETE FROM coupons WHERE id = $1", coupon_id)
 
-
 async def reduce_stock(coupon_id: int) -> bool:
+    """Legacy: reduce stock by 1. Use reserve_stock() for new flow."""
     pool = await get_pool()
     result = await pool.execute(
         "UPDATE coupons SET stock = stock - 1, updated_at = NOW() WHERE id = $1 AND stock > 0",
         coupon_id
+    )
+    return result == "UPDATE 1"
+
+
+# ── RESERVATION SYSTEM ───────────────────────────────────
+
+async def reserve_stock(coupon_id: int, qty: int = 1) -> bool:
+    """Atomically reserve stock: decrement stock, increment reserved_qty.
+    
+    Returns True if reservation succeeded, False if not enough stock.
+    This is race-condition safe — the WHERE clause ensures atomicity.
+    """
+    pool = await get_pool()
+    result = await pool.execute(
+        """UPDATE coupons 
+           SET stock = stock - $2, reserved_qty = COALESCE(reserved_qty, 0) + $2, updated_at = NOW()
+           WHERE id = $1 AND stock >= $2""",
+        coupon_id, qty
+    )
+    return result == "UPDATE 1"
+
+
+async def release_reservation(coupon_id: int, qty: int = 1) -> bool:
+    """Release reserved stock back to available (on cancel/expire).
+    
+    Returns stock to pool: stock += qty, reserved_qty -= qty.
+    """
+    pool = await get_pool()
+    result = await pool.execute(
+        """UPDATE coupons 
+           SET stock = stock + $2, reserved_qty = GREATEST(COALESCE(reserved_qty, 0) - $2, 0), updated_at = NOW()
+           WHERE id = $1""",
+        coupon_id, qty
+    )
+    return result == "UPDATE 1"
+
+
+async def confirm_reservation(coupon_id: int, qty: int = 1) -> bool:
+    """Confirm reservation on payment success.
+    
+    Stock was already decremented during reservation, just clear reserved_qty.
+    """
+    pool = await get_pool()
+    result = await pool.execute(
+        """UPDATE coupons 
+           SET reserved_qty = GREATEST(COALESCE(reserved_qty, 0) - $2, 0), updated_at = NOW()
+           WHERE id = $1""",
+        coupon_id, qty
     )
     return result == "UPDATE 1"
 
@@ -267,11 +315,29 @@ async def get_order_by_id_admin(order_id: str):
 
 
 async def expire_stale_orders():
+    """Expire pending orders past their timeout AND release reserved stock."""
     pool = await get_pool()
-    return await pool.execute("""
+    # First, get the orders that will expire so we can release their stock
+    expiring = await pool.fetch("""
+        SELECT coupon_id, COALESCE(quantity, 1) as qty FROM orders
+        WHERE status = 'pending' AND expires_at < NOW()
+    """)
+    
+    # Release reserved stock for each expiring order
+    for row in expiring:
+        await pool.execute(
+            """UPDATE coupons 
+               SET stock = stock + $2, reserved_qty = GREATEST(COALESCE(reserved_qty, 0) - $2, 0), updated_at = NOW()
+               WHERE id = $1""",
+            row["coupon_id"], row["qty"]
+        )
+    
+    # Now mark them expired
+    result = await pool.execute("""
         UPDATE orders SET status = 'expired', updated_at = NOW()
         WHERE status = 'pending' AND expires_at < NOW()
     """)
+    return result
 
 
 # ── TRANSACTION QUERIES ──────────────────────────────────

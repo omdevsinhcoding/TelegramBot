@@ -415,6 +415,12 @@ async def init_db() -> asyncpg.Pool:
         except Exception:
             pass
 
+        # Coupon reservation system — track reserved stock
+        try:
+            await conn.execute("ALTER TABLE coupons ADD COLUMN IF NOT EXISTS reserved_qty INTEGER DEFAULT 0;")
+        except Exception:
+            pass
+
     logger.info("Database pool ready.")
     _last_health_check = time.monotonic()
     _db_ready.set()

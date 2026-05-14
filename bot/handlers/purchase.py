@@ -22,7 +22,7 @@ from aiogram.fsm.state import StatesGroup, State
 from bot.services.coupon_service import get_coupon_detail
 from bot.services.order_service import (
     create_purchase_order, cancel_order, get_delivered_code,
-    get_all_delivered_codes, complete_order,
+    get_all_delivered_codes, complete_order, OutOfStockError,
 )
 from bot.payments.upi import generate_upi_intent_url, create_qr_buffer
 from bot.payments.verifier import check_upi_status, verify_payment, verify_bharatpe_utr
@@ -267,8 +267,17 @@ async def cb_pay_wallet(callback: types.CallbackQuery):
     except Exception as e:
         logger.warning(f"Wallet transaction log failed (non-critical): {e}")
 
-    # Create order
-    order_info = await create_purchase_order(user_id, coupon_id, amount, "wallet", qty)
+    # Create order (with stock reservation)
+    try:
+        order_info = await create_purchase_order(user_id, coupon_id, amount, "wallet", qty)
+    except OutOfStockError:
+        # Refund wallet — stock was claimed by another user
+        await db.update_wallet_balance(user_id, old_balance)
+        await callback.answer(
+            "⚠️ Sorry! This coupon was just purchased by someone else. Your wallet has been refunded.",
+            show_alert=True,
+        )
+        return
     order_id = order_info["order_id"]
     txn_ref = order_info["txn_ref"]
 
@@ -330,8 +339,15 @@ async def cb_pay_paytm(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     amount = float(coupon["discounted_price"]) * qty
 
-    # Create order with Paytm gateway
-    order_info = await create_purchase_order(user_id, coupon_id, amount, "paytm", qty)
+    # Create order with Paytm gateway (reserves stock atomically)
+    try:
+        order_info = await create_purchase_order(user_id, coupon_id, amount, "paytm", qty)
+    except OutOfStockError:
+        await callback.answer(
+            "⚠️ Sorry! This coupon was just purchased by someone else. Please try again.",
+            show_alert=True,
+        )
+        return
     order_id = order_info["order_id"]
     txn_ref = order_info["txn_ref"]
 
@@ -398,8 +414,15 @@ async def cb_pay_bharatpe(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     amount = float(coupon["discounted_price"]) * qty
 
-    # Create order with BharatPe gateway
-    order_info = await create_purchase_order(user_id, coupon_id, amount, "bharatpe", qty)
+    # Create order with BharatPe gateway (reserves stock atomically)
+    try:
+        order_info = await create_purchase_order(user_id, coupon_id, amount, "bharatpe", qty)
+    except OutOfStockError:
+        await callback.answer(
+            "⚠️ Sorry! This coupon was just purchased by someone else. Please try again.",
+            show_alert=True,
+        )
+        return
     order_id = order_info["order_id"]
 
     dyn = await db.get_dynamic_config()
@@ -630,8 +653,15 @@ async def cb_pay_razorpay(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     amount = float(coupon["discounted_price"]) * qty
 
-    # Create order with Razorpay gateway
-    order_info = await create_purchase_order(user_id, coupon_id, amount, "razorpay", qty)
+    # Create order with Razorpay gateway (reserves stock atomically)
+    try:
+        order_info = await create_purchase_order(user_id, coupon_id, amount, "razorpay", qty)
+    except OutOfStockError:
+        await callback.answer(
+            "⚠️ Sorry! This coupon was just purchased by someone else. Please try again.",
+            show_alert=True,
+        )
+        return
     order_id = order_info["order_id"]
 
     # Create Razorpay payment link
