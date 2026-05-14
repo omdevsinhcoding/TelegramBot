@@ -403,6 +403,12 @@ async def init_db() -> asyncpg.Pool:
         except Exception:
             pass
 
+        # Toggle for channels button visibility
+        try:
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS channels_button_enabled BOOLEAN DEFAULT TRUE;")
+        except Exception:
+            pass
+
     logger.info("Database pool ready.")
     _last_health_check = time.monotonic()
     _db_ready.set()

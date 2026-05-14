@@ -3291,6 +3291,9 @@ async def cb_admin_channels_settings(callback: types.CallbackQuery):
     import json
     settings = await db.get_bot_settings()
     channels_json = settings.get("channels_list") or "[]"
+    btn_enabled = settings.get("channels_button_enabled")
+    if btn_enabled is None:
+        btn_enabled = True
 
     try:
         channels = json.loads(channels_json)
@@ -3307,15 +3310,21 @@ async def cb_admin_channels_settings(callback: types.CallbackQuery):
     else:
         ch_preview = "_No channels configured yet_"
 
+    visibility = "🟢 *Visible*" if btn_enabled else "🔴 *Hidden*"
+
     text = (
         f"📢 *Channels Management*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"📋 *Current Channels:*\n{ch_preview}\n\n"
-        f"💡 _These links show when users click '📢 Our Channels'_"
+        f"👁️ Button Visibility: {visibility}\n\n"
+        f"💡 _Controls both static keyboard \\& inline welcome buttons_"
     )
+
+    toggle_text = "🔴 Hide Button" if btn_enabled else "🟢 Show Button"
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✏️ Edit Channels", callback_data="admin_channels_edit")],
+        [InlineKeyboardButton(text=toggle_text, callback_data="admin_channels_toggle")],
         [InlineKeyboardButton(text="🗑️ Clear All", callback_data="admin_channels_clear")],
         [back_button("admin_panel")],
     ])
@@ -3394,6 +3403,29 @@ async def msg_channels_input(message: types.Message, state: FSMContext):
 async def cb_admin_channels_clear(callback: types.CallbackQuery):
     await db.update_bot_settings(channels_list="[]")
     await callback.answer("✅ All channels cleared!", show_alert=True)
+    await cb_admin_channels_settings(callback)
+
+
+@router.callback_query(F.data == "admin_channels_toggle")
+@admin_only
+@error_handler
+async def cb_admin_channels_toggle(callback: types.CallbackQuery):
+    """Toggle channels button visibility in user keyboard & inline buttons."""
+    settings = await db.get_bot_settings()
+    current = settings.get("channels_button_enabled")
+    if current is None:
+        current = True
+    new_val = not current
+
+    await db.update_bot_settings(channels_button_enabled=new_val)
+
+    await db.add_admin_log(
+        callback.from_user.id, "channels_toggle", "bot_settings", "channels_button_enabled",
+        f"Channels button {'enabled' if new_val else 'disabled'}"
+    )
+
+    status = "🟢 Visible" if new_val else "🔴 Hidden"
+    await callback.answer(f"📢 Channels button: {status}", show_alert=True)
     await cb_admin_channels_settings(callback)
 
 

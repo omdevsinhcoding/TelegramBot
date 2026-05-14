@@ -10,17 +10,18 @@ from aiogram.types import (
 from bot.config import Config
 
 
-def main_menu_kb(user_id: int, disclaimer_mode: str = "button") -> ReplyKeyboardMarkup:
+def main_menu_kb(user_id: int, disclaimer_mode: str = "button", channels_enabled: bool = True) -> ReplyKeyboardMarkup:
     """Build a persistent Reply keyboard (static buttons at bottom of chat).
 
     Args:
-        disclaimer_mode: 'button' shows ⚠️ Disclaimer button, 'description' hides it.
+        disclaimer_mode: 'button' shows ⚠️ Disclaimer button, others hide it.
+        channels_enabled: if False, hides 📢 Our Channels button.
 
     Layout:
       [ 🛍️ Buy Vouchers ] [ 📦 My Orders  ]
       [ 📊 View Stock   ] [ 🎟️ Recover Coupon ]
       [ 🎁 Refer & Earn ] [ 🆘 Support    ]
-      [ ⚠️ Disclaimer   ]  (only in button mode)
+      [ ⚠️ Disclaimer   ] [ 📢 Our Channels ] (conditional)
       [       👑 Admin Panel (admin only)  ]
     """
     buttons = [
@@ -38,16 +39,14 @@ def main_menu_kb(user_id: int, disclaimer_mode: str = "button") -> ReplyKeyboard
         ],
     ]
 
-    # Show dedicated disclaimer button only in button mode
+    # Build the conditional row
+    row = []
     if disclaimer_mode == "button":
-        buttons.append([
-            KeyboardButton(text="⚠️ Disclaimer"),
-            KeyboardButton(text="📢 Our Channels"),
-        ])
-    else:
-        buttons.append([
-            KeyboardButton(text="📢 Our Channels"),
-        ])
+        row.append(KeyboardButton(text="⚠️ Disclaimer"))
+    if channels_enabled:
+        row.append(KeyboardButton(text="📢 Our Channels"))
+    if row:
+        buttons.append(row)
 
     if Config.is_admin(user_id):
         buttons.append([

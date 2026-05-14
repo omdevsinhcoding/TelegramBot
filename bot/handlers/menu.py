@@ -633,9 +633,13 @@ async def cb_back_home(callback: types.CallbackQuery):
         settings = await db.get_bot_settings()
         support_text = settings.get("disclaimer_text") or ""
         disclaimer_mode = settings.get("disclaimer_mode") or "button"
+        channels_enabled = settings.get("channels_button_enabled")
+        if channels_enabled is None:
+            channels_enabled = True
     except Exception:
         support_text = ""
         disclaimer_mode = "button"
+        channels_enabled = True
 
     support_line = ""
     if support_text:
@@ -655,7 +659,7 @@ async def cb_back_home(callback: types.CallbackQuery):
         f"━━━━━━━━━━━━━━━━━━"
     )
 
-    inline_kb = InlineKeyboardMarkup(inline_keyboard=[
+    inline_rows = [
         [
             InlineKeyboardButton(text="🛍️ Stock Status", callback_data="browse_coupons"),
             InlineKeyboardButton(text="🛒 Buy Now", callback_data="browse_coupons"),
@@ -664,18 +668,20 @@ async def cb_back_home(callback: types.CallbackQuery):
             InlineKeyboardButton(text="📁 My Orders", callback_data="my_orders"),
             InlineKeyboardButton(text="🆘 Support", callback_data="show_support"),
         ],
-        [
-            InlineKeyboardButton(text="🤝 Refer & Earn", callback_data="referral_menu"),
-            InlineKeyboardButton(text="📢 Join Channels", callback_data="show_channels"),
-        ],
-    ])
+    ]
+    bottom_row = [InlineKeyboardButton(text="🤝 Refer & Earn", callback_data="referral_menu")]
+    if channels_enabled:
+        bottom_row.append(InlineKeyboardButton(text="📢 Join Channels", callback_data="show_channels"))
+    inline_rows.append(bottom_row)
+
+    inline_kb = InlineKeyboardMarkup(inline_keyboard=inline_rows)
 
     await callback.message.answer(
         welcome, parse_mode="MarkdownV2", reply_markup=inline_kb,
     )
     await callback.message.answer(
         "📋 *Quick Menu:*", parse_mode="MarkdownV2",
-        reply_markup=main_menu_kb(user.id, disclaimer_mode),
+        reply_markup=main_menu_kb(user.id, disclaimer_mode, channels_enabled),
     )
     await callback.answer()
 
