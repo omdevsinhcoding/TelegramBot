@@ -187,38 +187,31 @@ async def confirm_reservation(coupon_id: int, qty: int = 1) -> bool:
 
 
 async def get_reservation_info(coupon_id: int) -> dict:
-    """Get stock + reservation details for a coupon.
+    """Get stock + reservation details in a SINGLE query.
     
-    Returns dict with: stock, reserved_qty, earliest_expiry, wait_minutes.
+    Returns dict with: stock, reserved_qty, wait_minutes.
     """
     pool = await get_pool()
-    coupon = await pool.fetchrow(
-        "SELECT stock, COALESCE(reserved_qty, 0) as reserved_qty FROM coupons WHERE id = $1",
-        coupon_id
-    )
-    if not coupon:
-        return {"stock": 0, "reserved_qty": 0, "earliest_expiry": None, "wait_minutes": 0}
-    
-    # Find when the earliest pending order for this coupon expires
-    earliest = await pool.fetchrow("""
-        SELECT expires_at FROM orders 
-        WHERE coupon_id = $1 AND status = 'pending' 
-        ORDER BY expires_at ASC LIMIT 1
+    row = await pool.fetchrow("""
+        SELECT c.stock, COALESCE(c.reserved_qty, 0) as reserved_qty,
+               (SELECT MIN(expires_at) FROM orders 
+                WHERE coupon_id = $1 AND status = 'pending') as earliest_expiry
+        FROM coupons c WHERE c.id = $1
     """, coupon_id)
     
-    import datetime
+    if not row:
+        return {"stock": 0, "reserved_qty": 0, "wait_minutes": 0}
+    
     wait_minutes = 0
-    earliest_expiry = None
-    if earliest and earliest["expires_at"]:
-        earliest_expiry = earliest["expires_at"]
+    if row["earliest_expiry"]:
+        import datetime
         now = datetime.datetime.now(datetime.timezone.utc)
-        diff = (earliest_expiry - now).total_seconds()
+        diff = (row["earliest_expiry"] - now).total_seconds()
         wait_minutes = max(1, int(diff / 60) + 1)
     
     return {
-        "stock": coupon["stock"],
-        "reserved_qty": coupon["reserved_qty"],
-        "earliest_expiry": earliest_expiry,
+        "stock": row["stock"],
+        "reserved_qty": row["reserved_qty"],
         "wait_minutes": wait_minutes,
     }
 
@@ -388,24 +381,28 @@ async def get_order_by_id_admin(order_id: str):
 
 
 async def expire_stale_orders():
-    """Expire pending orders past their timeout AND release reserved stock."""
+    """Expire pending orders past their timeout AND release reserved stock.
+    
+    Uses batch SQL — no N+1 queries.
+    """
     pool = await get_pool()
-    # First, get the orders that will expire so we can release their stock
-    expiring = await pool.fetch("""
-        SELECT coupon_id, COALESCE(quantity, 1) as qty FROM orders
-        WHERE status = 'pending' AND expires_at < NOW()
+    
+    # Batch release: aggregate qty per coupon, then release all at once
+    await pool.execute("""
+        UPDATE coupons SET 
+            stock = stock + sub.total_qty,
+            reserved_qty = GREATEST(COALESCE(reserved_qty, 0) - sub.total_qty, 0),
+            updated_at = NOW()
+        FROM (
+            SELECT coupon_id, SUM(COALESCE(quantity, 1)) as total_qty 
+            FROM orders 
+            WHERE status = 'pending' AND expires_at < NOW()
+            GROUP BY coupon_id
+        ) sub
+        WHERE coupons.id = sub.coupon_id
     """)
     
-    # Release reserved stock for each expiring order
-    for row in expiring:
-        await pool.execute(
-            """UPDATE coupons 
-               SET stock = stock + $2, reserved_qty = GREATEST(COALESCE(reserved_qty, 0) - $2, 0), updated_at = NOW()
-               WHERE id = $1""",
-            row["coupon_id"], row["qty"]
-        )
-    
-    # Now mark them expired
+    # Mark expired
     result = await pool.execute("""
         UPDATE orders SET status = 'expired', updated_at = NOW()
         WHERE status = 'pending' AND expires_at < NOW()

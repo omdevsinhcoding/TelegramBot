@@ -8,6 +8,7 @@ from aiogram.filters import CommandStart, Command
 
 from bot.services.user_service import register_user
 from bot.keyboards.main_menu import main_menu_kb
+from bot.database import queries as db
 from bot.utils.helpers import escape_md
 from bot.utils.decorators import error_handler
 from bot.utils.logger import logger
@@ -30,7 +31,6 @@ async def cmd_start(message: types.Message):
         if len(args) > 1:
             ref_code = args[1].strip()
             if ref_code.startswith("ERROROO"):
-                from bot.database import queries as db
                 referrer = await db.get_user_by_referral_code(ref_code)
                 if referrer and referrer["telegram_id"] != user.id:
                     success = await db.record_referral(referrer["telegram_id"], user.id)
@@ -60,7 +60,6 @@ async def cmd_start(message: types.Message):
         logger.warning(f"Referral processing error (non-critical): {e}")
 
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-    from bot.database import queries as db
 
     first = escape_md(user.first_name or "there")
 

@@ -10,6 +10,7 @@ from aiogram.fsm.state import StatesGroup, State
 
 from bot.keyboards.main_menu import main_menu_kb, main_menu_inline_kb
 from bot.keyboards.common import back_button
+from bot.database import queries as db
 from bot.utils.helpers import escape_md
 from bot.utils.decorators import error_handler
 from bot.config import Config
@@ -76,7 +77,6 @@ async def text_buy_vouchers(message: types.Message):
     """Route 'Buy Vouchers' button press — show categorized buying menu."""
     from bot.services.coupon_service import list_active_coupons
     from bot.keyboards.coupon_kb import buying_menu_kb
-    from bot.database import queries as db
 
     coupons = await list_active_coupons()
     free_coupons = await db.get_active_free_coupons()
@@ -108,7 +108,6 @@ async def text_my_orders(message: types.Message):
     """Route 'My Orders' button press — show paginated order history."""
     from bot.services.order_service import get_user_order_history, get_user_order_history_count
     from bot.utils.helpers import format_currency
-    from bot.database import queries as db
 
     total_orders = await get_user_order_history_count(message.from_user.id)
     orders = await get_user_order_history(message.from_user.id, 5, 0)
@@ -287,7 +286,6 @@ async def msg_recover_by_order_id(message: types.Message, state: FSMContext):
         return
 
     order_id = message.text.strip()
-    from bot.database import queries as db
 
     # Look up the order
     order = await db.get_order(order_id)
@@ -353,7 +351,6 @@ async def msg_recover_by_order_id(message: types.Message, state: FSMContext):
 async def text_support(message: types.Message):
     """Show support info — dynamic from admin panel."""
     import json
-    from bot.database import queries as db
 
     settings = await db.get_bot_settings()
     custom_text = settings.get("disclaimer_text") or ""
@@ -399,7 +396,6 @@ async def text_support(message: types.Message):
 @error_handler
 async def text_disclaimer(message: types.Message):
     """Show disclaimer text — shown when disclaimer_mode is 'button'."""
-    from bot.database import queries as db
 
     settings = await db.get_bot_settings()
     disclaimer_text = settings.get("disclaimer_content") or ""
@@ -424,7 +420,6 @@ async def text_disclaimer(message: types.Message):
 async def text_channels(message: types.Message):
     """Show channel links — dynamic from admin panel."""
     import json
-    from bot.database import queries as db
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
     try:
@@ -468,7 +463,6 @@ async def text_channels(message: types.Message):
 async def cb_show_support(callback: types.CallbackQuery):
     """Show support info from inline button."""
     import json
-    from bot.database import queries as db
 
     settings = await db.get_bot_settings()
     custom_text = settings.get("disclaimer_text") or ""
@@ -510,7 +504,6 @@ async def cb_show_support(callback: types.CallbackQuery):
 async def cb_show_channels(callback: types.CallbackQuery):
     """Show channels info from inline button."""
     import json
-    from bot.database import queries as db
 
     try:
         settings = await db.get_bot_settings()
@@ -551,7 +544,6 @@ async def cb_show_channels(callback: types.CallbackQuery):
 @error_handler
 async def cb_referral_menu(callback: types.CallbackQuery):
     """Show referral info from inline button."""
-    from bot.database import queries as db
     settings = await db.get_referral_settings()
 
     if not settings or not settings.get("is_active"):
@@ -585,7 +577,6 @@ async def text_admin_panel(message: types.Message):
         await message.answer("⛔ Access denied. Admins only.")
         return
 
-    from bot.database import queries as db
     from bot.keyboards.admin_kb import admin_panel_kb
     from bot.utils.helpers import format_currency
 
@@ -611,14 +602,7 @@ async def text_admin_panel(message: types.Message):
 @router.callback_query(F.data == "back_home")
 @error_handler
 async def cb_back_home(callback: types.CallbackQuery):
-    """Back to home — re-send welcome message + persistent reply keyboard.
-    This ensures the floating buttons always reappear."""
-    from bot.database import queries as db
-
-    try:
-        await callback.message.delete()
-    except Exception:
-        pass
+    """Back to home — edit current message with welcome + inline buttons."""
 
     user = callback.from_user
     first = escape_md(user.first_name or "there")
@@ -628,19 +612,14 @@ async def cb_back_home(callback: types.CallbackQuery):
     except Exception:
         total_stock = 0
 
-    # Get support info from DB
+    # Get settings
     try:
         settings = await db.get_bot_settings()
         support_text = settings.get("disclaimer_text") or ""
-        disclaimer_mode = settings.get("disclaimer_mode") or "button"
-        ch_static = settings.get("channels_static_enabled")
         ch_inline = settings.get("channels_inline_enabled")
-        if ch_static is None: ch_static = True
         if ch_inline is None: ch_inline = True
     except Exception:
         support_text = ""
-        disclaimer_mode = "button"
-        ch_static = True
         ch_inline = True
 
     support_line = ""
@@ -678,13 +657,15 @@ async def cb_back_home(callback: types.CallbackQuery):
 
     inline_kb = InlineKeyboardMarkup(inline_keyboard=inline_rows)
 
-    await callback.message.answer(
-        welcome, parse_mode="MarkdownV2", reply_markup=inline_kb,
-    )
-    await callback.message.answer(
-        "📋 *Quick Menu:*", parse_mode="MarkdownV2",
-        reply_markup=main_menu_kb(user.id, disclaimer_mode, ch_static),
-    )
+    try:
+        await callback.message.edit_text(welcome, parse_mode="MarkdownV2", reply_markup=inline_kb)
+    except Exception:
+        # If can't edit (e.g., photo message), delete and send new
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        await callback.message.answer(welcome, parse_mode="MarkdownV2", reply_markup=inline_kb)
     await callback.answer()
 
 
@@ -702,7 +683,6 @@ async def cb_buy_page(callback: types.CallbackQuery):
     page = int(callback.data.split(":")[1])
     from bot.services.coupon_service import list_active_coupons
     from bot.keyboards.coupon_kb import buying_menu_kb
-    from bot.database import queries as db
 
     coupons = await list_active_coupons()
     free_coupons = await db.get_active_free_coupons()
@@ -773,7 +753,6 @@ async def cb_refresh_stock(callback: types.CallbackQuery):
 @error_handler
 async def cb_free_coupons_list(callback: types.CallbackQuery):
     """Show list of available free coupons / giveaways."""
-    from bot.database import queries as db
     from bot.keyboards.coupon_kb import free_coupons_list_kb
 
     free_coupons = await db.get_active_free_coupons()
@@ -794,7 +773,6 @@ async def cb_free_coupons_list(callback: types.CallbackQuery):
 @error_handler
 async def cb_claim_free_coupon(callback: types.CallbackQuery):
     """User tries to claim a free coupon."""
-    from bot.database import queries as db
 
     fc_id = int(callback.data.split(":")[1])
     user_id = callback.from_user.id
