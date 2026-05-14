@@ -3291,9 +3291,10 @@ async def cb_admin_channels_settings(callback: types.CallbackQuery):
     import json
     settings = await db.get_bot_settings()
     channels_json = settings.get("channels_list") or "[]"
-    btn_enabled = settings.get("channels_button_enabled")
-    if btn_enabled is None:
-        btn_enabled = True
+    ch_static = settings.get("channels_static_enabled")
+    ch_inline = settings.get("channels_inline_enabled")
+    if ch_static is None: ch_static = True
+    if ch_inline is None: ch_inline = True
 
     try:
         channels = json.loads(channels_json)
@@ -3310,21 +3311,25 @@ async def cb_admin_channels_settings(callback: types.CallbackQuery):
     else:
         ch_preview = "_No channels configured yet_"
 
-    visibility = "🟢 *Visible*" if btn_enabled else "🔴 *Hidden*"
+    static_icon = "🟢" if ch_static else "🔴"
+    inline_icon = "🟢" if ch_inline else "🔴"
 
     text = (
         f"📢 *Channels Management*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"📋 *Current Channels:*\n{ch_preview}\n\n"
-        f"👁️ Button Visibility: {visibility}\n\n"
-        f"💡 _Controls both static keyboard \\& inline welcome buttons_"
+        f"━━━ *Button Visibility* ━━━\n"
+        f"📌 Static \\(keyboard\\): {static_icon}\n"
+        f"💬 Inline \\(floating\\): {inline_icon}\n"
     )
 
-    toggle_text = "🔴 Hide Button" if btn_enabled else "🟢 Show Button"
+    static_label = "🔴 Hide from Keyboard" if ch_static else "🟢 Show in Keyboard"
+    inline_label = "🔴 Hide from Inline" if ch_inline else "🟢 Show in Inline"
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✏️ Edit Channels", callback_data="admin_channels_edit")],
-        [InlineKeyboardButton(text=toggle_text, callback_data="admin_channels_toggle")],
+        [InlineKeyboardButton(text=static_label, callback_data="admin_ch_toggle_static")],
+        [InlineKeyboardButton(text=inline_label, callback_data="admin_ch_toggle_inline")],
         [InlineKeyboardButton(text="🗑️ Clear All", callback_data="admin_channels_clear")],
         [back_button("admin_panel")],
     ])
@@ -3406,26 +3411,41 @@ async def cb_admin_channels_clear(callback: types.CallbackQuery):
     await cb_admin_channels_settings(callback)
 
 
-@router.callback_query(F.data == "admin_channels_toggle")
+@router.callback_query(F.data == "admin_ch_toggle_static")
 @admin_only
 @error_handler
-async def cb_admin_channels_toggle(callback: types.CallbackQuery):
-    """Toggle channels button visibility in user keyboard & inline buttons."""
+async def cb_admin_ch_toggle_static(callback: types.CallbackQuery):
+    """Toggle channels button in static keyboard."""
     settings = await db.get_bot_settings()
-    current = settings.get("channels_button_enabled")
-    if current is None:
-        current = True
+    current = settings.get("channels_static_enabled")
+    if current is None: current = True
     new_val = not current
-
-    await db.update_bot_settings(channels_button_enabled=new_val)
-
+    await db.update_bot_settings(channels_static_enabled=new_val)
     await db.add_admin_log(
-        callback.from_user.id, "channels_toggle", "bot_settings", "channels_button_enabled",
-        f"Channels button {'enabled' if new_val else 'disabled'}"
+        callback.from_user.id, "channels_static_toggle", "bot_settings", "channels_static_enabled",
+        f"Static keyboard channel button {'shown' if new_val else 'hidden'}"
     )
+    status = "🟢 Shown" if new_val else "🔴 Hidden"
+    await callback.answer(f"📌 Static keyboard: {status}", show_alert=True)
+    await cb_admin_channels_settings(callback)
 
-    status = "🟢 Visible" if new_val else "🔴 Hidden"
-    await callback.answer(f"📢 Channels button: {status}", show_alert=True)
+
+@router.callback_query(F.data == "admin_ch_toggle_inline")
+@admin_only
+@error_handler
+async def cb_admin_ch_toggle_inline(callback: types.CallbackQuery):
+    """Toggle channels button in inline/floating buttons."""
+    settings = await db.get_bot_settings()
+    current = settings.get("channels_inline_enabled")
+    if current is None: current = True
+    new_val = not current
+    await db.update_bot_settings(channels_inline_enabled=new_val)
+    await db.add_admin_log(
+        callback.from_user.id, "channels_inline_toggle", "bot_settings", "channels_inline_enabled",
+        f"Inline channel button {'shown' if new_val else 'hidden'}"
+    )
+    status = "🟢 Shown" if new_val else "🔴 Hidden"
+    await callback.answer(f"💬 Inline button: {status}", show_alert=True)
     await cb_admin_channels_settings(callback)
 
 

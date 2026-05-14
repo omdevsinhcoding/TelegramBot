@@ -403,9 +403,15 @@ async def init_db() -> asyncpg.Pool:
         except Exception:
             pass
 
-        # Toggle for channels button visibility
+        # Toggle for channels button visibility — static keyboard
         try:
-            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS channels_button_enabled BOOLEAN DEFAULT TRUE;")
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS channels_static_enabled BOOLEAN DEFAULT TRUE;")
+        except Exception:
+            pass
+
+        # Toggle for channels button visibility — inline/floating
+        try:
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS channels_inline_enabled BOOLEAN DEFAULT TRUE;")
         except Exception:
             pass
 

@@ -75,13 +75,15 @@ async def cmd_start(message: types.Message):
         settings = await db.get_bot_settings()
         support_text = settings.get("disclaimer_text") or ""
         disclaimer_mode = settings.get("disclaimer_mode") or "button"
-        channels_enabled = settings.get("channels_button_enabled")
-        if channels_enabled is None:
-            channels_enabled = True
+        ch_static = settings.get("channels_static_enabled")
+        ch_inline = settings.get("channels_inline_enabled")
+        if ch_static is None: ch_static = True
+        if ch_inline is None: ch_inline = True
     except Exception:
         support_text = ""
         disclaimer_mode = "button"
-        channels_enabled = True
+        ch_static = True
+        ch_inline = True
 
     support_line = ""
     if support_text:
@@ -115,7 +117,7 @@ async def cmd_start(message: types.Message):
         ],
     ]
     bottom_row = [InlineKeyboardButton(text="🤝 Refer & Earn", callback_data="referral_menu")]
-    if channels_enabled:
+    if ch_inline:
         bottom_row.append(InlineKeyboardButton(text="📢 Join Channels", callback_data="show_channels"))
     inline_rows.append(bottom_row)
 
@@ -132,7 +134,7 @@ async def cmd_start(message: types.Message):
     await message.answer(
         "📋 *Quick Menu:*",
         parse_mode="MarkdownV2",
-        reply_markup=main_menu_kb(user.id, disclaimer_mode, channels_enabled),
+        reply_markup=main_menu_kb(user.id, disclaimer_mode, ch_static),
     )
 
 
