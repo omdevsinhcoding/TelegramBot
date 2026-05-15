@@ -87,6 +87,14 @@ class ForceJoinMiddleware(BaseMiddleware):
             force_channel_raw = settings.get("force_channel") if settings else None
 
             if not force_channel_raw:
+                # No force channel configured — handle orphaned check_join_status callbacks
+                if isinstance(event, CallbackQuery) and event.data == "check_join_status":
+                    await event.answer("✅ No channel join required! You can use the bot.", show_alert=True)
+                    try:
+                        await event.message.delete()
+                    except Exception:
+                        pass
+                    return
                 return await handler(event, data)
 
             # Support multiple channels: "-100123,@channel2"
@@ -98,6 +106,7 @@ class ForceJoinMiddleware(BaseMiddleware):
 
             # Check membership in ALL configured channels
             not_joined = []
+            verification_errors = []
             for channel in channels:
                 try:
                     chat_id = int(channel) if channel.lstrip("-").isdigit() else channel
@@ -119,8 +128,18 @@ class ForceJoinMiddleware(BaseMiddleware):
                         })
                 except Exception as e:
                     logger.warning(f"Force join check failed for {channel}: {e}")
-                    # If bot is not admin or channel is invalid, skip this channel
+                    # Track that we couldn't verify this channel
+                    verification_errors.append(channel)
                     continue
+
+            # If we couldn't verify ANY channel and none were confirmed as not-joined,
+            # let the user through to avoid lockout, but log a warning
+            if verification_errors and not not_joined:
+                if len(verification_errors) == len(channels):
+                    logger.error(
+                        f"Force join: Bot cannot verify ANY configured channel ({verification_errors}). "
+                        f"Ensure bot is admin in all channels. Letting user {user.id} through."
+                    )
 
             if not_joined:
                 # User hasn't joined one or more channels — block them
@@ -132,12 +151,11 @@ class ForceJoinMiddleware(BaseMiddleware):
                         url = f"https://t.me/{ch['channel'].replace('@', '')}"
                     else:
                         # For numeric IDs, we need the invite link (already tried above)
-                        # If no invite link available, try constructing from bot info
                         url = None
 
                     if url:
                         buttons.append([InlineKeyboardButton(
-                            text="📢 Join Channel",
+                            text=f"📢 Join {ch['title']}",
                             url=url,
                         )])
 
@@ -156,16 +174,23 @@ class ForceJoinMiddleware(BaseMiddleware):
 
                 if isinstance(event, CallbackQuery):
                     if event.data == "check_join_status":
+                        # User clicked "I have joined" but still not joined
                         await event.answer(
                             "❌ You have not joined yet! Join the channel first.",
                             show_alert=True
                         )
                         return
+                    # For any other callback, EDIT the existing message instead of
+                    # sending a new one — prevents spamming join messages
                     try:
-                        await event.message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
-                        await event.answer()
+                        await event.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
                     except Exception:
-                        pass
+                        # edit_text fails if message content is identical or message is media
+                        try:
+                            await event.message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
+                        except Exception:
+                            pass
+                    await event.answer()
                     return
 
                 elif isinstance(event, Message):
@@ -178,15 +203,20 @@ class ForceJoinMiddleware(BaseMiddleware):
                 from bot.keyboards.main_menu import main_menu_kb
                 from bot.utils.helpers import escape_md
                 first = escape_md(user.first_name or "there")
-                await event.message.answer(
-                    f"✅ Thanks for joining, *{first}*\\! You can now use the bot\\.",
-                    parse_mode="MarkdownV2",
-                    reply_markup=main_menu_kb(user.id)
-                )
                 try:
-                    await event.message.delete()
+                    await event.message.edit_text(
+                        f"✅ Thanks for joining, *{first}*\\! You can now use the bot\\.",
+                        parse_mode="MarkdownV2",
+                        reply_markup=None,
+                    )
                 except Exception:
                     pass
+                # Send main menu as a new message (reply keyboard)
+                await event.message.answer(
+                    "📋 *Quick Menu:*",
+                    parse_mode="MarkdownV2",
+                    reply_markup=main_menu_kb(user.id),
+                )
                 return
 
         except Exception as e:

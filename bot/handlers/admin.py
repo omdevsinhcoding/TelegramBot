@@ -2107,7 +2107,10 @@ async def cb_admin_bot_settings(callback: types.CallbackQuery):
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"✏️ Bot Name: {bot_name}", callback_data="admin_change_bot_name")],
-        [InlineKeyboardButton(text="📢 Force Join Channel", callback_data="admin_toggle_force_join")],
+        [InlineKeyboardButton(
+            text=f"🔴 Remove Force Join: {force_channel[:30]}" if force_channel else "🟢 Set Force Join Channel",
+            callback_data="admin_toggle_force_join"
+        )],
         [InlineKeyboardButton(text="⏱️ Payment Timeout", callback_data="admin_dynconf:payment_timeout_seconds"),
          InlineKeyboardButton(text="💰 Min Recharge", callback_data="admin_dynconf:bharatpe_min_recharge")],
         [InlineKeyboardButton(text="🔄 Poll Interval", callback_data="admin_dynconf:payment_poll_interval")],

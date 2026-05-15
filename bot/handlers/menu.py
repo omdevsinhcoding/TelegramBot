@@ -999,3 +999,18 @@ async def cb_wallet_insufficient(callback: types.CallbackQuery):
         "⚠️ Insufficient wallet balance!\nEarn more via referrals or use other payment methods.",
         show_alert=True,
     )
+
+
+@router.callback_query(F.data == "check_join_status")
+@error_handler
+async def cb_check_join_status_fallback(callback: types.CallbackQuery):
+    """Fallback handler for check_join_status when force channel is disabled.
+
+    The middleware normally handles this callback, but if force_channel is removed
+    while a user still has the old 'Join Channel' prompt, this prevents a hanging button.
+    """
+    await callback.answer("✅ You're all set! You can use the bot.", show_alert=True)
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
