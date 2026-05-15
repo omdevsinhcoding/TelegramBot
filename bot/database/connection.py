@@ -426,6 +426,12 @@ async def init_db() -> asyncpg.Pool:
         except Exception:
             pass
 
+        # Admin toggle: whether force join applies to admins too
+        try:
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS force_join_apply_admins BOOLEAN DEFAULT FALSE;")
+        except Exception:
+            pass
+
         # Coupon reservation system — track reserved stock
         try:
             await conn.execute("ALTER TABLE coupons ADD COLUMN IF NOT EXISTS reserved_qty INTEGER DEFAULT 0;")

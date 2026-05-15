@@ -38,21 +38,21 @@ class ForceJoinMiddleware(BaseMiddleware):
         if isinstance(event, CallbackQuery) and event.message and event.message.chat.type != "private":
             return await handler(event, data)
 
-        # ── Admin bypass — ONLY for admin-specific operations ──
-        # Admins can always access the admin panel, but they ALSO see force join
-        # for regular user actions (buying, support, etc.)
+        # ── Admin bypass logic ──
+        # Always let admins access admin panel operations.
+        # Whether admins also see force join for REGULAR actions depends on
+        # the "force_join_apply_admins" setting in bot_settings.
         if Config.is_admin(user.id):
+            # Always allow admin panel callbacks
             if isinstance(event, CallbackQuery) and event.data:
-                # Allow all admin panel callbacks
                 if (event.data.startswith("admin") or
                     event.data == "admin_fsm_cancel"):
                     return await handler(event, data)
             elif isinstance(event, Message):
                 text = (event.text or "").strip()
-                # Allow admin panel button, /cancel, /admin commands
                 if text == "👑 Admin Panel" or text.startswith("/cancel") or text.startswith("/admin"):
                     return await handler(event, data)
-                # Allow messages while admin is in an admin FSM state
+                # Allow admin FSM state inputs
                 state = data.get("state")
                 if state:
                     try:
@@ -61,6 +61,17 @@ class ForceJoinMiddleware(BaseMiddleware):
                             return await handler(event, data)
                     except Exception:
                         pass
+
+            # Check if admin should also see force join for regular actions
+            try:
+                _settings = await db.get_bot_settings()
+                apply_admins = _settings.get("force_join_apply_admins", False) if _settings else False
+            except Exception:
+                apply_admins = False
+
+            if not apply_admins:
+                # Default: admins skip force join entirely
+                return await handler(event, data)
 
         # Check if user is banned
         try:

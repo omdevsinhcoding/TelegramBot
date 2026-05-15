@@ -2122,6 +2122,7 @@ async def cb_admin_force_join(callback: types.CallbackQuery):
     """Dedicated Force Join management page — shows all channels, add/remove."""
     settings = await db.get_bot_settings()
     force_channel_raw = settings.get("force_channel") if settings else None
+    apply_admins = settings.get("force_join_apply_admins", False) if settings else False
 
     channels = [ch.strip() for ch in force_channel_raw.split(",") if ch.strip()] if force_channel_raw else []
 
@@ -2139,6 +2140,7 @@ async def cb_admin_force_join(callback: types.CallbackQuery):
 
     status = "🟢 Active" if channels else "🔴 Disabled"
     count = len(channels)
+    admin_icon = "🟢 Yes" if apply_admins else "🔴 No"
 
     if ch_lines:
         ch_text = "\n".join(ch_lines)
@@ -2150,15 +2152,20 @@ async def cb_admin_force_join(callback: types.CallbackQuery):
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"Users must join these channels/groups\n"
         f"before they can use the bot\\.\n\n"
-        f"Status: {status} \\({count} channel{'s' if count != 1 else ''}\\)\n\n"
+        f"Status: {status} \\({count} channel{'s' if count != 1 else ''}\\)\n"
+        f"👮 Apply to Admins: {admin_icon}\n\n"
         f"📋 *Configured Channels:*\n"
         f"{ch_text}\n\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"💡 Bot must be *admin* in each channel\\!"
     )
 
+    # Admin toggle button text
+    admin_toggle_text = "👮 Admins: 🟢 Must Join — tap to skip" if apply_admins else "👮 Admins: 🔴 Skipped — tap to enforce"
+
     buttons = [
         [InlineKeyboardButton(text="➕ Add Channel(s)", callback_data="admin_fj_add")],
+        [InlineKeyboardButton(text=admin_toggle_text, callback_data="admin_fj_toggle_admins")],
     ]
 
     # Remove buttons for each channel
@@ -2304,6 +2311,19 @@ async def cb_admin_fj_clear(callback: types.CallbackQuery):
     await callback.answer("✅ All force join channels removed!", show_alert=True)
     await cb_admin_force_join(callback)
 
+
+@router.callback_query(F.data == "admin_fj_toggle_admins")
+@admin_only
+@error_handler
+async def cb_admin_fj_toggle_admins(callback: types.CallbackQuery):
+    """Toggle whether force join also applies to admins."""
+    settings = await db.get_bot_settings()
+    current = settings.get("force_join_apply_admins", False) if settings else False
+    new_val = not current
+    await db.update_bot_settings(force_join_apply_admins=new_val)
+    status = "enforced for admins too" if new_val else "skipped for admins"
+    await callback.answer(f"👮 Force Join {status}!", show_alert=True)
+    await cb_admin_force_join(callback)
 
 
 # ── Bot Name Change ──────────────────────────────────────
