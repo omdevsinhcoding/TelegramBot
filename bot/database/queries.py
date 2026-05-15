@@ -687,6 +687,11 @@ async def toggle_free_coupon(fc_id: int) -> bool:
     await pool.execute("UPDATE free_coupons SET is_active = $2 WHERE id = $1", fc_id, new_status)
     return new_status
 
+async def set_all_free_coupons_active(active: bool):
+    """Enable or disable ALL giveaways at once."""
+    pool = await get_pool()
+    await pool.execute("UPDATE free_coupons SET is_active = $1", active)
+
 # ── REFERRAL QUERIES ─────────────────────────────────────
 
 async def get_referral_settings():

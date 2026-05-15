@@ -1640,6 +1640,25 @@ async def cb_giveaway_viewcodes(callback: types.CallbackQuery):
     logger.info(f"Admin {callback.from_user.id} downloaded {unclaimed} unclaimed codes for giveaway {gid}")
 
 
+@router.callback_query(F.data == "admin_giveaway_toggle_all")
+@admin_only
+@error_handler
+async def cb_giveaway_toggle_all(callback: types.CallbackQuery):
+    """Enable or disable ALL giveaways at once."""
+    giveaways = await db.get_all_free_coupons()
+    any_active = any(g["is_active"] for g in giveaways)
+    # If any are active → disable all; otherwise enable all
+    new_status = not any_active
+    await db.set_all_free_coupons_active(new_status)
+    action = "enabled 🟢" if new_status else "disabled 🔴"
+    await callback.answer(f"All giveaways {action}", show_alert=True)
+    await db.add_admin_log(
+        callback.from_user.id, "toggle_all_giveaways", "giveaway", None,
+        f"Set all giveaways to {'active' if new_status else 'inactive'}"
+    )
+    await cb_admin_giveaways(callback)
+
+
 @router.callback_query(F.data.startswith("admin_giveaway_toggle:"))
 @admin_only
 @error_handler
