@@ -106,7 +106,7 @@ async def cb_coupon_detail(callback: types.CallbackQuery):
     if disclaimer_mode == "description" and disclaimer_text:
         text += (
             f"\n⚠️ *Disclaimer:*\n"
-            f"_{escape_md(disclaimer_text[:300])}_\n"
+            f"_{escape_md(disclaimer_text)}_\n"
         )
 
     # If out of stock but reserved, add waitlist button
