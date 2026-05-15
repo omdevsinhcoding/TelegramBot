@@ -196,6 +196,31 @@ class ForceJoinMiddleware(BaseMiddleware):
 
                 kb = InlineKeyboardMarkup(inline_keyboard=buttons)
 
+                total = len(channels)
+                joined_count = total - len(not_joined)
+                remaining = len(not_joined)
+
+                if isinstance(event, CallbackQuery) and event.data == "check_join_status":
+                    if joined_count > 0:
+                        # Some channels joined — show progress + updated list
+                        text = (
+                            f"✅ *Joined {joined_count}/{total}\\!*\n\n"
+                            f"⏳ {remaining} more channel{'s' if remaining != 1 else ''} to go\\.\n\n"
+                            f"👇 Join the remaining channel{'s' if remaining != 1 else ''} below:"
+                        )
+                        try:
+                            await event.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+                        except Exception:
+                            pass
+                        await event.answer(f"✅ Joined {joined_count}/{total}! {remaining} remaining.", show_alert=True)
+                    else:
+                        # No channels joined yet
+                        await event.answer(
+                            "❌ You have not joined yet! Join the channel first.",
+                            show_alert=True
+                        )
+                    return
+
                 text = (
                     "🚨 *Mandatory Channel Join*\n\n"
                     "You must join our channel\\(s\\) to use this bot\\!\n\n"
@@ -203,12 +228,6 @@ class ForceJoinMiddleware(BaseMiddleware):
                 )
 
                 if isinstance(event, CallbackQuery):
-                    if event.data == "check_join_status":
-                        await event.answer(
-                            "❌ You have not joined yet! Join the channel first.",
-                            show_alert=True
-                        )
-                        return
                     # Edit existing message to prevent spam
                     try:
                         await event.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
