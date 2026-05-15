@@ -70,11 +70,14 @@ async def create_purchase_order(user_id: int, coupon_id: int, amount: float,
     }
 
 
-async def complete_order(order_id: str, txn_ref: str, user_id: int) -> bool:
+async def complete_order(order_id: str, txn_ref: str, user_id: int, bot=None) -> bool:
     """Mark order as paid and deliver coupon(s).
     
     Stock was already reserved during order creation.
     We just confirm the reservation and deliver codes.
+    
+    Args:
+        bot: aiogram Bot instance for sending referral notifications.
     """
     order = await db.get_order(order_id)
     if not order or order["status"] != "pending":
@@ -101,10 +104,10 @@ async def complete_order(order_id: str, txn_ref: str, user_id: int) -> bool:
     if delivered > 0:
         await db.update_order_status(order_id, "delivered")
 
-    # Reward referrer if applicable
+    # Reward referrer if applicable (works for ALL payment methods)
     from bot.handlers.referral import process_referral_on_purchase
     try:
-        await process_referral_on_purchase(user_id, order["amount"])
+        await process_referral_on_purchase(user_id, order["amount"], bot=bot)
     except Exception as e:
         logger.error(f"Referral process failed for order {order_id}: {e}")
 

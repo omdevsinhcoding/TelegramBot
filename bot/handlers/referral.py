@@ -251,8 +251,14 @@ async def cb_ref_history(callback: types.CallbackQuery):
     await callback.answer()
 
 
-async def process_referral_on_purchase(user_id: int, order_amount: float):
-    """Called after a successful purchase to credit referral commission."""
+async def process_referral_on_purchase(user_id: int, order_amount, bot=None):
+    """Called after a successful purchase to credit referral commission.
+    
+    Works for ALL payment methods (Paytm, BharatPe, Razorpay, Wallet).
+    Converts order_amount to float to safely handle Decimal from DB.
+    """
+    from bot.utils.logger import logger
+
     settings = await db.get_referral_settings()
     if not settings or not settings["is_active"]:
         return
@@ -267,17 +273,65 @@ async def process_referral_on_purchase(user_id: int, order_amount: float):
     mode = settings["mode"]
 
     if mode == "commission":
-        # Commission mode: give % of purchase to referrer
+        # Commission mode: give % of purchase to referrer's wallet
         pct = float(settings["commission_percent"])
-        commission = round(order_amount * pct / 100, 2)
-        if commission > 0:
-            await db.add_referral_earnings(referrer_id, commission)
-            # Update referral record
-            await pool.execute(
-                "UPDATE referrals SET status = 'purchased', commission = commission + $3 "
-                "WHERE referrer_id = $1 AND referred_id = $2",
-                referrer_id, user_id, commission
+        amount_float = float(order_amount)  # CRITICAL: Decimal → float to avoid TypeError
+        commission = round(amount_float * pct / 100, 2)
+        if commission <= 0:
+            return
+
+        # Credit referrer's wallet + referral_earnings
+        await db.add_referral_earnings(referrer_id, commission)
+
+        # Log wallet transaction for referrer
+        try:
+            referrer_wallet = await db.get_wallet_balance(referrer_id)
+            await db.add_wallet_transaction(
+                referrer_id, commission, "topup",
+                bal_before=referrer_wallet - commission,
+                bal_after=referrer_wallet,
+                reference=f"referral_commission_from_{user_id}",
             )
+        except Exception as e:
+            logger.warning(f"Referral wallet transaction log failed (non-critical): {e}")
+
+        # Update referral record
+        await pool.execute(
+            "UPDATE referrals SET status = 'purchased', commission = commission + $3 "
+            "WHERE referrer_id = $1 AND referred_id = $2",
+            referrer_id, user_id, commission
+        )
+
+        # Notify referrer about earned commission
+        try:
+            buyer = await pool.fetchrow(
+                "SELECT full_name, username FROM users WHERE telegram_id = $1", user_id
+            )
+            buyer_name = ""
+            if buyer:
+                buyer_name = buyer["full_name"] or buyer["username"] or str(user_id)
+            else:
+                buyer_name = str(user_id)
+
+            notify_text = (
+                f"🎉 *Referral Commission Earned\\!*\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"👤 Your referral *{escape_md(buyer_name)}* made a purchase\\!\n"
+                f"💰 Commission: *₹{escape_md(str(commission))}* \\({escape_md(str(pct))}%\\)\n"
+                f"💵 Wallet Balance: *₹{escape_md(str(round(float(referrer_wallet), 2)))}*\n\n"
+                f"🚀 _Keep referring to earn more\\!_"
+            )
+            if bot:
+                await bot.send_message(referrer_id, notify_text, parse_mode="MarkdownV2")
+            else:
+                logger.debug(f"No bot instance for referrer notification (user={referrer_id})")
+        except Exception as e:
+            logger.warning(f"Referrer notification failed (non-critical): {e}")
+
+        logger.info(
+            f"Referral commission credited: referrer={referrer_id}, "
+            f"buyer={user_id}, commission=₹{commission}, pct={pct}%"
+        )
 
 
 @router.callback_query(F.data == "ref_enter_code")

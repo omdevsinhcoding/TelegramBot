@@ -316,7 +316,7 @@ async def cb_pay_wallet(callback: types.CallbackQuery):
     txn_ref = order_info["txn_ref"]
 
     # Complete order — delivers codes + marks paid
-    success = await complete_order(order_id, txn_ref, user_id)
+    success = await complete_order(order_id, txn_ref, user_id, bot=callback.bot)
 
     if success:
         title = escape_md(coupon["title"])
@@ -613,7 +613,7 @@ async def msg_bharatpe_utr(message: types.Message, state: FSMContext):
 
         # Complete order (reduce stock + deliver coupon)
         from bot.services.order_service import complete_order
-        success = await complete_order(order_id, txn_ref, message.from_user.id)
+        success = await complete_order(order_id, txn_ref, message.from_user.id, bot=message.bot)
 
         if success:
             text = await _build_success_message(order_id, coupon_id, amount, utr)
@@ -803,8 +803,13 @@ async def cb_check_razorpay(callback: types.CallbackQuery):
         except Exception:
             pass
 
-        # Complete the order
-        success = await complete_order(order_id, coupon_id, callback.from_user.id, "razorpay", utr=payment_id)
+        # Complete the order — fetch txn_ref for Razorpay
+        txn_row_rz = await pool.fetchrow(
+            "SELECT txn_ref FROM transactions WHERE order_id = $1 ORDER BY created_at DESC LIMIT 1",
+            order_id
+        )
+        rz_txn_ref = txn_row_rz["txn_ref"] if txn_row_rz else payment_id
+        success = await complete_order(order_id, rz_txn_ref, callback.from_user.id, bot=callback.bot)
 
         if success:
             text = await _build_success_message(order_id, coupon_id, amount, payment_id or link_id)
@@ -903,7 +908,7 @@ async def cb_check_payment(callback: types.CallbackQuery):
             if is_paid:
                 # Payment received! Complete the order
                 from bot.services.order_service import complete_order
-                success = await complete_order(order_id, txn_ref, order["user_id"])
+                success = await complete_order(order_id, txn_ref, order["user_id"], bot=callback.bot)
                 if success:
                     coupon = await get_coupon_detail(order["coupon_id"])
                     code_row = await get_delivered_code(order_id, order["coupon_id"])
@@ -1000,7 +1005,7 @@ async def cb_cancel_order(callback: types.CallbackQuery, state: FSMContext):
                     if is_paid:
                         # Payment was received! Complete the order instead
                         from bot.services.order_service import complete_order
-                        success = await complete_order(order_id, txn_ref, order["user_id"])
+                        success = await complete_order(order_id, txn_ref, order["user_id"], bot=callback.bot)
                         if success:
                             coupon = await get_coupon_detail(order["coupon_id"])
                             code_row = await get_delivered_code(order_id, order["coupon_id"])
