@@ -1327,7 +1327,7 @@ async def cb_giveaway_pick_coupon(callback: types.CallbackQuery, state: FSMConte
             f"📝 Title: *{escape_md(title)}*\n"
             f"📦 Codes loaded: *{len(codes)}*\n"
             f"👤 Codes per user: *{cpu}*\n"
-            f"👥 Max users: *~{max_users}*",
+            f"👥 Max users: *\\~{max_users}*",
             parse_mode="MarkdownV2", reply_markup=kb,
         )
     except Exception as e:
@@ -1456,7 +1456,7 @@ async def _finalize_giveaway(message: types.Message, state: FSMContext, codes: l
             f"📝 Title: *{escape_md(title)}*\n"
             f"📦 Codes loaded: *{len(codes)}*\n"
             f"👤 Codes per user: *{cpu}*\n"
-            f"👥 Max users: *~{max_users}*",
+            f"👥 Max users: *\\~{max_users}*",
             parse_mode="MarkdownV2", reply_markup=kb,
         )
     except Exception as e:
