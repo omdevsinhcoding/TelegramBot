@@ -2,6 +2,9 @@
 DreamX Coupon Bot — Force Join Middleware
 Checks if the user has joined the mandatory channel/group(s) before allowing access.
 Supports multiple channels (comma-separated) and both @username and numeric ID formats.
+
+Admins bypass force join ONLY for admin panel operations — they still see the
+force join prompt for regular user actions (buying, claiming, etc.).
 """
 
 from typing import Callable, Dict, Any, Awaitable
@@ -35,16 +38,35 @@ class ForceJoinMiddleware(BaseMiddleware):
         if isinstance(event, CallbackQuery) and event.message and event.message.chat.type != "private":
             return await handler(event, data)
 
-        # Admins bypass force join
+        # ── Admin bypass — ONLY for admin-specific operations ──
+        # Admins can always access the admin panel, but they ALSO see force join
+        # for regular user actions (buying, support, etc.)
         if Config.is_admin(user.id):
-            return await handler(event, data)
+            if isinstance(event, CallbackQuery) and event.data:
+                # Allow all admin panel callbacks
+                if (event.data.startswith("admin") or
+                    event.data == "admin_fsm_cancel"):
+                    return await handler(event, data)
+            elif isinstance(event, Message):
+                text = (event.text or "").strip()
+                # Allow admin panel button, /cancel, /admin commands
+                if text == "👑 Admin Panel" or text.startswith("/cancel") or text.startswith("/admin"):
+                    return await handler(event, data)
+                # Allow messages while admin is in an admin FSM state
+                state = data.get("state")
+                if state:
+                    try:
+                        current = await state.get_state()
+                        if current and "AdminStates" in current:
+                            return await handler(event, data)
+                    except Exception:
+                        pass
 
         # Check if user is banned
         try:
             is_banned = await db.is_user_banned(user.id)
             if is_banned:
                 import json
-                from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
                 # Fetch custom ban message from settings
                 try:
@@ -87,7 +109,7 @@ class ForceJoinMiddleware(BaseMiddleware):
             force_channel_raw = settings.get("force_channel") if settings else None
 
             if not force_channel_raw:
-                # No force channel configured — handle orphaned check_join_status callbacks
+                # No force channel — handle orphaned check_join_status callbacks
                 if isinstance(event, CallbackQuery) and event.data == "check_join_status":
                     await event.answer("✅ No channel join required! You can use the bot.", show_alert=True)
                     try:
@@ -128,12 +150,10 @@ class ForceJoinMiddleware(BaseMiddleware):
                         })
                 except Exception as e:
                     logger.warning(f"Force join check failed for {channel}: {e}")
-                    # Track that we couldn't verify this channel
                     verification_errors.append(channel)
                     continue
 
-            # If we couldn't verify ANY channel and none were confirmed as not-joined,
-            # let the user through to avoid lockout, but log a warning
+            # If we couldn't verify ANY channel, let user through to avoid lockout
             if verification_errors and not not_joined:
                 if len(verification_errors) == len(channels):
                     logger.error(
@@ -150,7 +170,6 @@ class ForceJoinMiddleware(BaseMiddleware):
                     elif str(ch["channel"]).startswith("@"):
                         url = f"https://t.me/{ch['channel'].replace('@', '')}"
                     else:
-                        # For numeric IDs, we need the invite link (already tried above)
                         url = None
 
                     if url:
@@ -168,24 +187,21 @@ class ForceJoinMiddleware(BaseMiddleware):
 
                 text = (
                     "🚨 *Mandatory Channel Join*\n\n"
-                    "You must join our channel to use this bot\\!\n\n"
-                    "👇 Join using the button below, then tap *✅ I have joined*\\."
+                    "You must join our channel\\(s\\) to use this bot\\!\n\n"
+                    "👇 Join using the buttons below, then tap *✅ I have joined*\\."
                 )
 
                 if isinstance(event, CallbackQuery):
                     if event.data == "check_join_status":
-                        # User clicked "I have joined" but still not joined
                         await event.answer(
                             "❌ You have not joined yet! Join the channel first.",
                             show_alert=True
                         )
                         return
-                    # For any other callback, EDIT the existing message instead of
-                    # sending a new one — prevents spamming join messages
+                    # Edit existing message to prevent spam
                     try:
                         await event.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
                     except Exception:
-                        # edit_text fails if message content is identical or message is media
                         try:
                             await event.message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
                         except Exception:
@@ -211,7 +227,6 @@ class ForceJoinMiddleware(BaseMiddleware):
                     )
                 except Exception:
                     pass
-                # Send main menu as a new message (reply keyboard)
                 await event.message.answer(
                     "📋 *Quick Menu:*",
                     parse_mode="MarkdownV2",

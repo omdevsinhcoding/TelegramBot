@@ -26,9 +26,10 @@ def admin_panel_kb() -> InlineKeyboardMarkup:
         ],
         [InlineKeyboardButton(text="⚙️ Bot Settings", callback_data="admin_bot_settings"),
          InlineKeyboardButton(text="🆘 Support", callback_data="admin_support_settings")],
-        [InlineKeyboardButton(text="⚠️ Disclaimer", callback_data="admin_disclaimer_settings"),
+        [InlineKeyboardButton(text="🔐 Force Join", callback_data="admin_force_join"),
          InlineKeyboardButton(text="📢 Channels", callback_data="admin_channels_settings")],
-        [InlineKeyboardButton(text="🚫 Ban Message", callback_data="admin_ban_message")],
+        [InlineKeyboardButton(text="⚠️ Disclaimer", callback_data="admin_disclaimer_settings"),
+         InlineKeyboardButton(text="🚫 Ban Message", callback_data="admin_ban_message")],
         [
             InlineKeyboardButton(text="📋 Logs", callback_data="admin_logs"),
             InlineKeyboardButton(text="🏠 Home", callback_data="back_home")
@@ -113,14 +114,6 @@ def admin_giveaway_view_kb(giveaway_id: int, is_active: bool) -> InlineKeyboardM
         [InlineKeyboardButton(text=toggle_text, callback_data=f"admin_giveaway_toggle:{giveaway_id}")],
         [InlineKeyboardButton(text="🗑️ Delete Giveaway", callback_data=f"admin_giveaway_del:{giveaway_id}")],
         [back_button("admin_giveaways")],
-    ])
-
-
-def admin_bot_settings_kb(force_channel: str | None) -> InlineKeyboardMarkup:
-    toggle_text = "🔴 Remove Force Join" if force_channel else "🟢 Set Force Join Channel"
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=toggle_text, callback_data="admin_toggle_force_join")],
-        [back_button("admin_panel")],
     ])
 
 

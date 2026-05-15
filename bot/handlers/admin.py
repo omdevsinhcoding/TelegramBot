@@ -2080,13 +2080,9 @@ async def cb_ref_reward_del(callback: types.CallbackQuery):
 @error_handler
 async def cb_admin_bot_settings(callback: types.CallbackQuery):
     settings = await db.get_bot_settings()
-    force_channel = settings.get("force_channel") if settings else None
     bot_name = (settings.get("bot_name") or "DreamX Store") if settings else "DreamX Store"
     
     dyn = await db.get_dynamic_config()
-    
-    status = "🟢 Active" if force_channel else "🔴 Disabled"
-    chan = escape_md(force_channel) if force_channel else "None"
     
     timeout_val = dyn["payment_timeout_seconds"]
     min_recharge = dyn["bharatpe_min_recharge"]
@@ -2096,9 +2092,6 @@ async def cb_admin_bot_settings(callback: types.CallbackQuery):
         f"⚙️ *Bot Settings*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"🏷️ *Bot Name:* `{escape_md(bot_name)}`\n\n"
-        f"📢 *Force Join Channel*\n"
-        f"Status: {status}\n"
-        f"Channel: `{chan}`\n\n"
         f"━━━ *Dynamic Config* ━━━\n"
         f"⏱️ Payment Timeout: *{timeout_val}s* \\({timeout_val // 60} min\\)\n"
         f"💰 Min Recharge \\(BharatPe\\): *₹{min_recharge:.0f}*\n"
@@ -2107,10 +2100,6 @@ async def cb_admin_bot_settings(callback: types.CallbackQuery):
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"✏️ Bot Name: {bot_name}", callback_data="admin_change_bot_name")],
-        [InlineKeyboardButton(
-            text=f"🔴 Remove Force Join: {force_channel[:30]}" if force_channel else "🟢 Set Force Join Channel",
-            callback_data="admin_toggle_force_join"
-        )],
         [InlineKeyboardButton(text="⏱️ Payment Timeout", callback_data="admin_dynconf:payment_timeout_seconds"),
          InlineKeyboardButton(text="💰 Min Recharge", callback_data="admin_dynconf:bharatpe_min_recharge")],
         [InlineKeyboardButton(text="🔄 Poll Interval", callback_data="admin_dynconf:payment_poll_interval")],
@@ -2124,47 +2113,122 @@ async def cb_admin_bot_settings(callback: types.CallbackQuery):
     await callback.answer()
 
 
+# ── Force Join Channel Management (Dedicated Page) ───────
+
+@router.callback_query(F.data == "admin_force_join")
+@admin_only
+@error_handler
+async def cb_admin_force_join(callback: types.CallbackQuery):
+    """Dedicated Force Join management page — shows all channels, add/remove."""
+    settings = await db.get_bot_settings()
+    force_channel_raw = settings.get("force_channel") if settings else None
+
+    channels = [ch.strip() for ch in force_channel_raw.split(",") if ch.strip()] if force_channel_raw else []
+
+    # Verify each channel
+    bot = callback.bot
+    ch_lines = []
+    for i, ch in enumerate(channels):
+        try:
+            chat_id = int(ch) if ch.lstrip("-").isdigit() else ch
+            chat_info = await bot.get_chat(chat_id)
+            title = escape_md(chat_info.title or ch)
+            ch_lines.append(f"  {i+1}\\. ✅ *{title}* — `{escape_md(ch)}`")
+        except Exception:
+            ch_lines.append(f"  {i+1}\\. ❌ `{escape_md(ch)}` — _bot not admin_")
+
+    status = "🟢 Active" if channels else "🔴 Disabled"
+    count = len(channels)
+
+    if ch_lines:
+        ch_text = "\n".join(ch_lines)
+    else:
+        ch_text = "  _No channels configured_"
+
+    text = (
+        f"🔐 *Force Join Channels*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"Users must join these channels/groups\n"
+        f"before they can use the bot\\.\n\n"
+        f"Status: {status} \\({count} channel{'s' if count != 1 else ''}\\)\n\n"
+        f"📋 *Configured Channels:*\n"
+        f"{ch_text}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"💡 Bot must be *admin* in each channel\\!"
+    )
+
+    buttons = [
+        [InlineKeyboardButton(text="➕ Add Channel(s)", callback_data="admin_fj_add")],
+    ]
+
+    # Remove buttons for each channel
+    for i, ch in enumerate(channels):
+        short = ch[:25] + "..." if len(ch) > 25 else ch
+        buttons.append([InlineKeyboardButton(
+            text=f"🗑️ Remove {short}",
+            callback_data=f"admin_fj_remove:{i}"
+        )])
+
+    if channels:
+        buttons.append([InlineKeyboardButton(text="🔴 Remove All Channels", callback_data="admin_fj_clear")])
+
+    buttons.append([back_button("admin_panel")])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    await _safe_edit_or_send(callback.message, text, reply_markup=kb)
+    await callback.answer()
+
+
+# Legacy redirect — old "admin_toggle_force_join" from Bot Settings
 @router.callback_query(F.data == "admin_toggle_force_join")
 @admin_only
 @error_handler
-async def cb_admin_toggle_force_join(callback: types.CallbackQuery, state: FSMContext):
-    settings = await db.get_bot_settings()
-    force_channel = settings.get("force_channel") if settings else None
-    
-    if force_channel:
-        await db.update_bot_settings(force_channel=None)
-        await callback.answer("Force Join Channel removed!", show_alert=True)
-        await cb_admin_bot_settings(callback)
-    else:
-        await callback.message.edit_text(
-            "📢 Send the *Channel/Group ID* or *Username*\n\n"
-            "Examples:\n"
-            "• `@MyChannel`\n"
-            "• `\\-1001234567890`\n\n"
-            "💡 Use /id command in your channel to get the ID\\.\n\n"
-            "⚠️ *IMPORTANT*: Bot MUST be admin in the channel\\!",
-            parse_mode="MarkdownV2",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [back_button("admin_bot_settings"), admin_cancel_button()]
-            ]),
-        )
-        await state.set_state(AdminStates.force_channel_input)
-        await callback.answer()
+async def cb_admin_toggle_force_join_legacy(callback: types.CallbackQuery):
+    """Redirect to the new force join page."""
+    await cb_admin_force_join(callback)
+
+
+@router.callback_query(F.data == "admin_fj_add")
+@admin_only
+@error_handler
+async def cb_admin_fj_add(callback: types.CallbackQuery, state: FSMContext):
+    """Ask admin to send channel IDs to add."""
+    await callback.message.edit_text(
+        "📢 *Add Force Join Channel\\(s\\)*\n\n"
+        "Send the *Channel/Group ID* or *@username*\n\n"
+        "You can add multiple at once \\(comma\\-separated\\):\n\n"
+        "Examples:\n"
+        "• `@MyChannel`\n"
+        "• `\\-1001234567890`\n"
+        "• `@Channel1, @Channel2, \\-100123`\n\n"
+        "💡 Use /id command in your channel to get the ID\\.\n\n"
+        "⚠️ *IMPORTANT*: Bot MUST be admin in each channel\\!",
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [back_button("admin_force_join"), admin_cancel_button()]
+        ]),
+    )
+    await state.set_state(AdminStates.force_channel_input)
+    await callback.answer()
 
 
 @router.message(AdminStates.force_channel_input)
 @error_handler
 async def msg_force_channel_input(message: types.Message, state: FSMContext):
-    val = message.text.strip()
-    
-    channels = [ch.strip() for ch in val.split(",") if ch.strip()]
+    val = message.text.strip() if message.text else ""
+    if not val:
+        await message.answer("⚠️ Please send a channel ID or @username\\.", parse_mode="MarkdownV2")
+        return
+
+    new_channels = [ch.strip() for ch in val.split(",") if ch.strip()]
     valid = []
     errors = []
     
-    for ch in channels:
+    for ch in new_channels:
         try:
             chat_id = int(ch) if ch.lstrip("-").isdigit() else ch
-            await message.bot.get_chat(chat_id)
+            chat_info = await message.bot.get_chat(chat_id)
+            # Try to generate invite link (ensures bot is admin)
             try:
                 await message.bot.export_chat_invite_link(chat_id)
             except Exception:
@@ -2183,17 +2247,63 @@ async def msg_force_channel_input(message: types.Message, state: FSMContext):
         )
         return
     
-    save_val = ",".join(valid)
+    # Merge with existing channels (don't duplicate)
+    settings = await db.get_bot_settings()
+    existing_raw = settings.get("force_channel") if settings else None
+    existing = [ch.strip() for ch in existing_raw.split(",") if ch.strip()] if existing_raw else []
+    
+    # Normalize for dedup
+    for v in valid:
+        if v not in existing:
+            existing.append(v)
+    
+    save_val = ",".join(existing)
     await db.update_bot_settings(force_channel=save_val)
     await state.clear()
     
-    result = f"✅ Force Join updated\\!\n\nChannels: `{escape_md(save_val)}`"
+    result = f"✅ Force Join updated\\!\n\nTotal channels: *{len(existing)}*"
+    added = escape_md(", ".join(valid))
+    result += f"\nAdded: `{added}`"
     if errors:
         skipped = escape_md(", ".join(e.split(":")[0] for e in errors))
         result += f"\n\n⚠️ Skipped invalid: {skipped}"
     
-    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_bot_settings")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_force_join")]])
     await message.answer(result, parse_mode="MarkdownV2", reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("admin_fj_remove:"))
+@admin_only
+@error_handler
+async def cb_admin_fj_remove(callback: types.CallbackQuery):
+    """Remove a specific channel from force join list by index."""
+    idx = int(callback.data.split(":")[1])
+    
+    settings = await db.get_bot_settings()
+    force_channel_raw = settings.get("force_channel") if settings else None
+    channels = [ch.strip() for ch in force_channel_raw.split(",") if ch.strip()] if force_channel_raw else []
+    
+    if idx < 0 or idx >= len(channels):
+        await callback.answer("Channel not found.", show_alert=True)
+        return
+    
+    removed = channels.pop(idx)
+    save_val = ",".join(channels) if channels else None
+    await db.update_bot_settings(force_channel=save_val)
+    
+    await callback.answer(f"✅ Removed: {removed}", show_alert=True)
+    await cb_admin_force_join(callback)
+
+
+@router.callback_query(F.data == "admin_fj_clear")
+@admin_only
+@error_handler
+async def cb_admin_fj_clear(callback: types.CallbackQuery):
+    """Remove ALL force join channels."""
+    await db.update_bot_settings(force_channel=None)
+    await callback.answer("✅ All force join channels removed!", show_alert=True)
+    await cb_admin_force_join(callback)
+
 
 
 # ── Bot Name Change ──────────────────────────────────────
