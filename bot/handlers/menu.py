@@ -8,7 +8,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 
-from bot.keyboards.main_menu import main_menu_kb, main_menu_inline_kb
+from bot.keyboards.main_menu import main_menu_kb, main_menu_inline_kb, get_fresh_main_menu_kb
 from bot.keyboards.common import back_button
 from bot.database import queries as db
 from bot.utils.helpers import escape_md
@@ -741,6 +741,18 @@ async def cb_back_home(callback: types.CallbackQuery):
         except Exception:
             pass
         await callback.message.answer(welcome, parse_mode="MarkdownV2", reply_markup=inline_kb)
+
+    # Refresh the reply keyboard with latest settings (no /start needed)
+    try:
+        fresh_kb = await get_fresh_main_menu_kb(callback.from_user.id)
+        await callback.message.answer(
+            "📋 *Quick Menu:*",
+            parse_mode="MarkdownV2",
+            reply_markup=fresh_kb,
+        )
+    except Exception:
+        pass
+
     await callback.answer()
 
 

@@ -7,7 +7,7 @@ from aiogram import Router, types
 from aiogram.filters import CommandStart, Command
 
 from bot.services.user_service import register_user
-from bot.keyboards.main_menu import main_menu_kb
+from bot.keyboards.main_menu import get_fresh_main_menu_kb
 from bot.database import queries as db
 from bot.utils.helpers import escape_md
 from bot.utils.decorators import error_handler
@@ -118,15 +118,10 @@ async def cmd_start(message: types.Message):
     try:
         settings = await db.get_bot_settings()
         support_text = settings.get("disclaimer_text") or ""
-        disclaimer_mode = settings.get("disclaimer_mode") or "button"
-        ch_static = settings.get("channels_static_enabled")
         ch_inline = settings.get("channels_inline_enabled")
-        if ch_static is None: ch_static = True
         if ch_inline is None: ch_inline = True
     except Exception:
         support_text = ""
-        disclaimer_mode = "button"
-        ch_static = True
         ch_inline = True
 
     support_line = ""
@@ -174,11 +169,11 @@ async def cmd_start(message: types.Message):
         reply_markup=inline_kb,
     )
 
-    # Send persistent reply keyboard
+    # Send persistent reply keyboard (auto-fetches latest settings)
     await message.answer(
         "📋 *Quick Menu:*",
         parse_mode="MarkdownV2",
-        reply_markup=main_menu_kb(user.id, disclaimer_mode, ch_static),
+        reply_markup=await get_fresh_main_menu_kb(user.id),
     )
 
 

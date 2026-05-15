@@ -246,7 +246,7 @@ class ForceJoinMiddleware(BaseMiddleware):
             # User has joined all channels
             if isinstance(event, CallbackQuery) and event.data == "check_join_status":
                 await event.answer("✅ Thank you for joining!", show_alert=True)
-                from bot.keyboards.main_menu import main_menu_kb
+                from bot.keyboards.main_menu import get_fresh_main_menu_kb
                 from bot.utils.helpers import escape_md
                 first = escape_md(user.first_name or "there")
                 try:
@@ -260,7 +260,7 @@ class ForceJoinMiddleware(BaseMiddleware):
                 await event.message.answer(
                     "📋 *Quick Menu:*",
                     parse_mode="MarkdownV2",
-                    reply_markup=main_menu_kb(user.id),
+                    reply_markup=await get_fresh_main_menu_kb(user.id),
                 )
                 return
 

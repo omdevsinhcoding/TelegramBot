@@ -53,6 +53,27 @@ def main_menu_kb(user_id: int, disclaimer_mode: str = "button", channels_static:
     )
 
 
+async def get_fresh_main_menu_kb(user_id: int) -> ReplyKeyboardMarkup:
+    """Build main menu keyboard with FRESH settings from DB.
+
+    Always fetches the latest disclaimer_mode and channels_static_enabled
+    so the user sees an updated keyboard on every interaction — no /start needed.
+    """
+    from bot.database import queries as db
+
+    try:
+        settings = await db.get_bot_settings()
+        disclaimer_mode = settings.get("disclaimer_mode") or "button"
+        ch_static = settings.get("channels_static_enabled")
+        if ch_static is None:
+            ch_static = True
+    except Exception:
+        disclaimer_mode = "button"
+        ch_static = True
+
+    return main_menu_kb(user_id, disclaimer_mode, ch_static)
+
+
 def main_menu_inline_kb(user_id: int) -> InlineKeyboardMarkup:
     """Inline keyboard fallback used inside callback-based views."""
     buttons = [

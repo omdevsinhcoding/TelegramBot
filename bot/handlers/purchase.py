@@ -340,11 +340,11 @@ async def cb_pay_wallet(callback: types.CallbackQuery):
     except Exception:
         pass
 
-    from bot.keyboards.main_menu import main_menu_kb
+    from bot.keyboards.main_menu import get_fresh_main_menu_kb
     await callback.message.answer(
         success_text,
         parse_mode="MarkdownV2",
-        reply_markup=main_menu_kb(user_id),
+        reply_markup=await get_fresh_main_menu_kb(user_id),
     )
     await callback.answer()
     logger.info(f"Wallet payment: user={user_id}, order={order_id}, amount={amount}, balance_left={new_balance}")
@@ -633,8 +633,8 @@ async def msg_bharatpe_utr(message: types.Message, state: FSMContext):
             kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
             await message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
             # Re-send main menu keyboard so user can continue without /start
-            from bot.keyboards.main_menu import main_menu_kb
-            await message.answer("👇 Use buttons below to continue:", reply_markup=main_menu_kb(message.from_user.id))
+            from bot.keyboards.main_menu import get_fresh_main_menu_kb
+            await message.answer("👇 Use buttons below to continue:", reply_markup=await get_fresh_main_menu_kb(message.from_user.id))
 
             logger.info(f"BharatPe VERIFIED: order={order_id}, UTR={utr}, amount={amount}")
         else:
@@ -856,8 +856,8 @@ async def cb_check_payment(callback: types.CallbackQuery):
             pass
         await callback.message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
         # Re-send main menu keyboard
-        from bot.keyboards.main_menu import main_menu_kb
-        await callback.message.answer("👇 Use buttons below to continue:", reply_markup=main_menu_kb(callback.from_user.id))
+        from bot.keyboards.main_menu import get_fresh_main_menu_kb
+        await callback.message.answer("👇 Use buttons below to continue:", reply_markup=await get_fresh_main_menu_kb(callback.from_user.id))
         await callback.answer("Payment verified! ✅", show_alert=True)
         return
 
@@ -942,8 +942,8 @@ async def cb_check_payment(callback: types.CallbackQuery):
                         pass
                     await callback.message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
                     # Re-send main menu keyboard
-                    from bot.keyboards.main_menu import main_menu_kb
-                    await callback.message.answer("👇 Use buttons below to continue:", reply_markup=main_menu_kb(callback.from_user.id))
+                    from bot.keyboards.main_menu import get_fresh_main_menu_kb
+                    await callback.message.answer("👇 Use buttons below to continue:", reply_markup=await get_fresh_main_menu_kb(callback.from_user.id))
                     await callback.answer("Payment verified! ✅", show_alert=True)
                     return
 
