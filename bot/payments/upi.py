@@ -75,10 +75,16 @@ async def generate_upi_intent_url(
     return url
 
 
-def create_qr_buffer(upi_url: str, amount: float, txn_ref: str) -> io.BytesIO:
+def create_qr_buffer(upi_url: str, amount: float, txn_ref: str, bot_name: str = "DreamX Store") -> io.BytesIO:
     """
     Generate a branded QR code image and return as bytes buffer.
     Creates a professional dark-themed QR with payment details.
+    
+    Args:
+        upi_url: The UPI intent URL to encode.
+        amount: Payment amount for display.
+        txn_ref: Transaction reference for display.
+        bot_name: Dynamic bot name from admin settings.
     """
     # Create QR code
     qr = qrcode.QRCode(
@@ -95,7 +101,7 @@ def create_qr_buffer(upi_url: str, amount: float, txn_ref: str) -> io.BytesIO:
     qr_w, qr_h = qr_img.size
     padding = 60
     canvas_w = qr_w + padding * 2
-    canvas_h = qr_h + padding * 2 + 120
+    canvas_h = qr_h + padding * 2 + 155  # extra height for developer tag
 
     canvas = Image.new("RGB", (canvas_w, canvas_h), "#0f0f23")
     draw = ImageDraw.Draw(canvas)
@@ -104,13 +110,15 @@ def create_qr_buffer(upi_url: str, amount: float, txn_ref: str) -> io.BytesIO:
     try:
         font_title = ImageFont.truetype("arial.ttf", 24)
         font_info = ImageFont.truetype("arial.ttf", 18)
+        font_small = ImageFont.truetype("arial.ttf", 13)
     except OSError:
         font_title = ImageFont.load_default()
         font_info = ImageFont.load_default()
+        font_small = ImageFont.load_default()
 
-    # Header
+    # Header — dynamic bot name
     draw.text(
-        (canvas_w // 2, 25), "💎 DreamX Store",
+        (canvas_w // 2, 25), f"💎 {bot_name}",
         fill="#e94560", anchor="mt", font=font_title,
     )
 
@@ -130,6 +138,12 @@ def create_qr_buffer(upi_url: str, amount: float, txn_ref: str) -> io.BytesIO:
     draw.text(
         (canvas_w // 2, y_footer + 55), "Scan with any UPI app",
         fill="#16c784", anchor="mt", font=font_info,
+    )
+
+    # Developer tag — small text at bottom
+    draw.text(
+        (canvas_w // 2, y_footer + 82), "Developer: @Erroroo",
+        fill="#555566", anchor="mt", font=font_small,
     )
 
     buf = io.BytesIO()

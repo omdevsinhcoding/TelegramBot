@@ -420,6 +420,12 @@ async def init_db() -> asyncpg.Pool:
         except Exception:
             pass
 
+        # Customizable bot name (admin can change via Bot Settings)
+        try:
+            await conn.execute("ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS bot_name TEXT DEFAULT 'DreamX Store';")
+        except Exception:
+            pass
+
         # Coupon reservation system — track reserved stock
         try:
             await conn.execute("ALTER TABLE coupons ADD COLUMN IF NOT EXISTS reserved_qty INTEGER DEFAULT 0;")

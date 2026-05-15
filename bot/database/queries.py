@@ -868,6 +868,12 @@ async def get_payment_settings():
     }
 
 
+async def get_bot_name() -> str:
+    """Get the admin-configured bot name. Defaults to 'DreamX Store'."""
+    settings = await get_bot_settings()
+    return (settings.get("bot_name") or "DreamX Store") if settings else "DreamX Store"
+
+
 # ── USER MANAGEMENT QUERIES ─────────────────────────────
 
 async def search_user(query: str):

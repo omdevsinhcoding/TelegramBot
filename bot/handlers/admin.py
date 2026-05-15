@@ -78,6 +78,8 @@ class AdminStates(StatesGroup):
     dynamic_config_input = State()
     # Channels management
     channels_input = State()
+    # Bot name
+    bot_name_input = State()
 
 
 # ── Universal Cancel — inline ❌ button + /cancel fallback ──
@@ -1935,6 +1937,7 @@ async def cb_ref_reward_del(callback: types.CallbackQuery):
 async def cb_admin_bot_settings(callback: types.CallbackQuery):
     settings = await db.get_bot_settings()
     force_channel = settings.get("force_channel") if settings else None
+    bot_name = (settings.get("bot_name") or "DreamX Store") if settings else "DreamX Store"
     
     dyn = await db.get_dynamic_config()
     
@@ -1948,6 +1951,7 @@ async def cb_admin_bot_settings(callback: types.CallbackQuery):
     text = (
         f"⚙️ *Bot Settings*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🏷️ *Bot Name:* `{escape_md(bot_name)}`\n\n"
         f"📢 *Force Join Channel*\n"
         f"Status: {status}\n"
         f"Channel: `{chan}`\n\n"
@@ -1958,6 +1962,7 @@ async def cb_admin_bot_settings(callback: types.CallbackQuery):
     )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"✏️ Bot Name: {bot_name}", callback_data="admin_change_bot_name")],
         [InlineKeyboardButton(text="📢 Force Join Channel", callback_data="admin_toggle_force_join")],
         [InlineKeyboardButton(text="⏱️ Payment Timeout", callback_data="admin_dynconf:payment_timeout_seconds"),
          InlineKeyboardButton(text="💰 Min Recharge", callback_data="admin_dynconf:bharatpe_min_recharge")],
@@ -2042,6 +2047,59 @@ async def msg_force_channel_input(message: types.Message, state: FSMContext):
     
     kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_bot_settings")]])
     await message.answer(result, parse_mode="MarkdownV2", reply_markup=kb)
+
+
+# ── Bot Name Change ──────────────────────────────────────
+
+@router.callback_query(F.data == "admin_change_bot_name")
+@admin_only
+@error_handler
+async def cb_admin_change_bot_name(callback: types.CallbackQuery, state: FSMContext):
+    settings = await db.get_bot_settings()
+    current = (settings.get("bot_name") or "DreamX Store") if settings else "DreamX Store"
+
+    await callback.message.edit_text(
+        f"✏️ *Change Bot Name*\n\n"
+        f"Current name: `{escape_md(current)}`\n\n"
+        f"Send the new bot name\\.\n"
+        f"This name will appear on:\n"
+        f"• Payment QR codes\n"
+        f"• Bot settings panel\n\n"
+        f"_Max 64 characters_",
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [back_button("admin_bot_settings"), admin_cancel_button()]
+        ]),
+    )
+    await state.set_state(AdminStates.bot_name_input)
+    await callback.answer()
+
+
+@router.message(AdminStates.bot_name_input)
+@error_handler
+async def msg_bot_name_input(message: types.Message, state: FSMContext):
+    new_name = (message.text or "").strip()
+    if not new_name:
+        await message.answer("⚠️ Please enter a valid name.")
+        return
+    if len(new_name) > 64:
+        await message.answer("⚠️ Name is too long. Max 64 characters.")
+        return
+
+    await db.update_bot_settings(bot_name=new_name)
+    await state.clear()
+
+    await db.add_admin_log(
+        message.from_user.id, "change_bot_name", "settings", None,
+        f"Changed bot name to: {new_name}"
+    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_bot_settings")]])
+    await message.answer(
+        f"✅ Bot name updated to: *{escape_md(new_name)}*\n\n"
+        f"The new name will now appear on payment QR codes and other dynamic areas\\.",
+        parse_mode="MarkdownV2", reply_markup=kb,
+    )
 
 
 # ══════════════════════════════════════════════════════════

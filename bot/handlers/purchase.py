@@ -389,7 +389,8 @@ async def cb_pay_paytm(callback: types.CallbackQuery):
 
     # Generate dynamic QR for Paytm
     upi_url = await generate_upi_intent_url(amount, txn_ref, f"Order {order_id}", "paytm")
-    qr_buf = create_qr_buffer(upi_url, amount, txn_ref)
+    bot_name = await db.get_bot_name()
+    qr_buf = create_qr_buffer(upi_url, amount, txn_ref, bot_name=bot_name)
 
     dyn = await db.get_dynamic_config()
     timeout_min = dyn["payment_timeout_seconds"] // 60
