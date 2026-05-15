@@ -62,6 +62,7 @@ def admin_coupon_edit_kb(coupon_id: int, is_active: bool) -> InlineKeyboardMarku
         [InlineKeyboardButton(text="📝 Edit Description", callback_data=f"admin_edit_field:{coupon_id}:desc")],
         [InlineKeyboardButton(text="🔑 Add Codes", callback_data=f"admin_add_codes:{coupon_id}"),
          InlineKeyboardButton(text="📄 Upload File", callback_data=f"admin_upload_codes:{coupon_id}")],
+        [InlineKeyboardButton(text="📥 View Codes", callback_data=f"admin_view_codes:{coupon_id}")],
         [InlineKeyboardButton(text=toggle_text, callback_data=toggle_data)],
         [InlineKeyboardButton(text="🗑️ Delete Coupon", callback_data=f"admin_coupon_del:{coupon_id}")],
         [back_button("admin_coupons")],
@@ -108,6 +109,7 @@ def admin_giveaway_view_kb(giveaway_id: int, is_active: bool) -> InlineKeyboardM
     """View/edit a specific giveaway."""
     toggle_text = "🔴 Disable" if is_active else "🟢 Enable"
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📥 View Codes", callback_data=f"admin_giveaway_viewcodes:{giveaway_id}")],
         [InlineKeyboardButton(text=toggle_text, callback_data=f"admin_giveaway_toggle:{giveaway_id}")],
         [InlineKeyboardButton(text="🗑️ Delete Giveaway", callback_data=f"admin_giveaway_del:{giveaway_id}")],
         [back_button("admin_giveaways")],

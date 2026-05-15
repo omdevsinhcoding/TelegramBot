@@ -473,6 +473,39 @@ async def mark_code_sold(code_id: int, user_id: int, order_id: str):
     """, code_id, user_id, order_id)
 
 
+async def get_coupon_unsold_codes_list(coupon_id: int) -> list[str]:
+    """Get all unsold/remaining codes for a coupon (admin download)."""
+    pool = await get_pool()
+    rows = await pool.fetch(
+        "SELECT code FROM coupon_codes WHERE coupon_id = $1 AND is_sold = FALSE ORDER BY id",
+        coupon_id
+    )
+    return [r["code"] for r in rows]
+
+
+async def get_coupon_code_stats(coupon_id: int) -> dict:
+    """Get code statistics for a coupon."""
+    pool = await get_pool()
+    row = await pool.fetchrow("""
+        SELECT 
+            COUNT(*) as total,
+            COUNT(*) FILTER (WHERE is_sold = TRUE) as sold,
+            COUNT(*) FILTER (WHERE is_sold = FALSE) as unsold
+        FROM coupon_codes WHERE coupon_id = $1
+    """, coupon_id)
+    return dict(row) if row else {"total": 0, "sold": 0, "unsold": 0}
+
+
+async def get_giveaway_unclaimed_codes_list(fc_id: int) -> list[str]:
+    """Get all unclaimed codes for a giveaway (admin download)."""
+    pool = await get_pool()
+    rows = await pool.fetch(
+        "SELECT code FROM free_coupon_codes WHERE free_coupon_id = $1 AND is_claimed = FALSE ORDER BY id",
+        fc_id
+    )
+    return [r["code"] for r in rows]
+
+
 # ── ADMIN LOG QUERIES ────────────────────────────────────
 
 async def add_admin_log(admin_id: int, action: str, target_type: str = None,

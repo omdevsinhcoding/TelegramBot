@@ -613,6 +613,91 @@ async def msg_upload_codes_file(message: types.Message, state: FSMContext):
     )
 
 
+# ── View/Download Coupon Codes ────────────────────────────
+
+@router.callback_query(F.data.startswith("admin_view_codes:"))
+@admin_only
+@error_handler
+async def cb_admin_view_codes(callback: types.CallbackQuery):
+    """View code stats + download remaining unsold codes as .txt file."""
+    coupon_id = int(callback.data.split(":")[1])
+    coupon = await get_coupon_detail(coupon_id)
+    if not coupon:
+        await callback.answer("Coupon not found.", show_alert=True)
+        return
+
+    stats = await db.get_coupon_code_stats(coupon_id)
+    total = stats["total"]
+    sold = stats["sold"]
+    unsold = stats["unsold"]
+    title = escape_md(coupon["title"])
+
+    text = (
+        f"📥 *View Codes — Coupon \\#{coupon_id}*\n\n"
+        f"🏷️ {title}\n\n"
+        f"📊 *Code Statistics:*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📦 Total Codes: *{total}*\n"
+        f"✅ Sold: *{sold}*\n"
+        f"📭 Unsold/Remaining: *{unsold}*\n"
+        f"━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    buttons = []
+    if unsold > 0:
+        buttons.append([InlineKeyboardButton(
+            text=f"📄 Download {unsold} Unsold Codes (.txt)",
+            callback_data=f"admin_download_codes:{coupon_id}"
+        )])
+    buttons.append([back_button(f"admin_coupon_edit:{coupon_id}")])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_download_codes:"))
+@admin_only
+@error_handler
+async def cb_admin_download_codes(callback: types.CallbackQuery):
+    """Download all unsold coupon codes as a .txt file."""
+    coupon_id = int(callback.data.split(":")[1])
+    coupon = await get_coupon_detail(coupon_id)
+    if not coupon:
+        await callback.answer("Coupon not found.", show_alert=True)
+        return
+
+    codes = await db.get_coupon_unsold_codes_list(coupon_id)
+    if not codes:
+        await callback.answer("No unsold codes available.", show_alert=True)
+        return
+
+    # Create .txt file content
+    file_content = "\n".join(codes)
+    safe_title = "".join(c for c in coupon["title"] if c.isalnum() or c in (' ', '-', '_')).strip()[:40]
+    filename = f"unsold_codes_{safe_title}_{coupon_id}.txt"
+
+    from aiogram.types import BufferedInputFile
+    file_buf = BufferedInputFile(
+        file_content.encode("utf-8"),
+        filename=filename
+    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_coupon_edit:{coupon_id}")]])
+    await callback.message.answer_document(
+        document=file_buf,
+        caption=(
+            f"📄 *Unsold Codes — {escape_md(coupon['title'])}*\n\n"
+            f"📦 Total: *{len(codes)}* codes\n"
+            f"📁 File: `{escape_md(filename)}`"
+        ),
+        parse_mode="MarkdownV2",
+        reply_markup=kb,
+    )
+    await callback.answer(f"📄 {len(codes)} codes exported!")
+    logger.info(f"Admin {callback.from_user.id} downloaded {len(codes)} unsold codes for coupon {coupon_id}")
+
+
 # ── View Orders ───────────────────────────────────────────
 
 @router.callback_query(F.data == "admin_orders")
@@ -1494,6 +1579,53 @@ async def cb_giveaway_reclaim(callback: types.CallbackQuery):
         caption=f"📥 Reclaimed {len(codes)} unclaimed codes from Giveaway #{gid}"
     )
     await callback.answer(f"Reclaimed {len(codes)} codes!", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin_giveaway_viewcodes:"))
+@admin_only
+@error_handler
+async def cb_giveaway_viewcodes(callback: types.CallbackQuery):
+    """View/download unclaimed giveaway codes as .txt (non-destructive)."""
+    gid = int(callback.data.split(":")[1])
+    g = await db.get_free_coupon(gid)
+    if not g:
+        await callback.answer("Giveaway not found.", show_alert=True)
+        return
+
+    codes = await db.get_giveaway_unclaimed_codes_list(gid)
+    title = g["title"]
+    total = g.get("total_codes", 0)
+    unclaimed = len(codes)
+    claimed = total - unclaimed
+
+    if not codes:
+        await callback.answer("No unclaimed codes left in this giveaway.", show_alert=True)
+        return
+
+    # Create .txt file content
+    file_content = "\n".join(codes)
+    safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).strip()[:40]
+    filename = f"unclaimed_codes_{safe_title}_{gid}.txt"
+
+    from aiogram.types import BufferedInputFile
+    file_buf = BufferedInputFile(
+        file_content.encode("utf-8"),
+        filename=filename
+    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_giveaway_view:{gid}")]])
+    await callback.message.answer_document(
+        document=file_buf,
+        caption=(
+            f"📄 *Unclaimed Codes — {escape_md(title)}*\n\n"
+            f"📦 Total: *{total}* \\| ✅ Claimed: *{claimed}* \\| 📭 Unclaimed: *{unclaimed}*\n"
+            f"📁 File: `{escape_md(filename)}`"
+        ),
+        parse_mode="MarkdownV2",
+        reply_markup=kb,
+    )
+    await callback.answer(f"📄 {unclaimed} codes exported!")
+    logger.info(f"Admin {callback.from_user.id} downloaded {unclaimed} unclaimed codes for giveaway {gid}")
 
 
 @router.callback_query(F.data.startswith("admin_giveaway_toggle:"))
