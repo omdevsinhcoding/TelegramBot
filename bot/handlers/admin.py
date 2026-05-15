@@ -28,6 +28,18 @@ from bot.utils.logger import logger
 router = Router()
 
 
+async def _safe_edit_or_send(message: types.Message, text: str, reply_markup=None, parse_mode="MarkdownV2"):
+    """Try to edit the message text; if it fails (e.g. document/photo message), delete and send new."""
+    try:
+        await message.edit_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
+    except Exception:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        await message.answer(text, parse_mode=parse_mode, reply_markup=reply_markup)
+
+
 # ── FSM States ────────────────────────────────────────────
 
 class AdminStates(StatesGroup):
@@ -135,8 +147,8 @@ async def cb_admin_panel(callback: types.CallbackQuery):
         f"⏰ Expired: {escape_md(str(stats['total_expired']))}"
     )
 
-    await callback.message.edit_text(
-        text, parse_mode="MarkdownV2", reply_markup=admin_panel_kb()
+    await _safe_edit_or_send(
+        callback.message, text, reply_markup=admin_panel_kb()
     )
     await callback.answer()
 
@@ -149,8 +161,8 @@ async def cb_admin_panel(callback: types.CallbackQuery):
 async def cb_admin_coupons(callback: types.CallbackQuery):
     coupons = await list_all_coupons()
     text = "📦 *Manage Coupons*\n\nSelect a coupon to edit or add a new one:"
-    await callback.message.edit_text(
-        text, parse_mode="MarkdownV2", reply_markup=admin_coupons_kb(coupons)
+    await _safe_edit_or_send(
+        callback.message, text, reply_markup=admin_coupons_kb(coupons)
     )
     await callback.answer()
 
@@ -180,8 +192,8 @@ async def cb_admin_coupon_edit(callback: types.CallbackQuery):
         f"Status: {status}"
     )
 
-    await callback.message.edit_text(
-        text, parse_mode="MarkdownV2",
+    await _safe_edit_or_send(
+        callback.message, text,
         reply_markup=admin_coupon_edit_kb(coupon_id, coupon["is_active"])
     )
     await callback.answer()
@@ -1200,8 +1212,8 @@ async def cb_bc_send_now(callback: types.CallbackQuery, state: FSMContext):
 async def cb_admin_giveaways(callback: types.CallbackQuery):
     giveaways = await db.get_all_free_coupons()
     text = "🎁 *Manage Giveaways*\n\nSelect a giveaway or add new:"
-    await callback.message.edit_text(
-        text, parse_mode="MarkdownV2", reply_markup=admin_giveaways_kb(giveaways)
+    await _safe_edit_or_send(
+        callback.message, text, reply_markup=admin_giveaways_kb(giveaways)
     )
     await callback.answer()
 
@@ -1251,7 +1263,7 @@ async def cb_admin_giveaway_view(callback: types.CallbackQuery):
             )
         ])
 
-    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    await _safe_edit_or_send(callback.message, text, reply_markup=kb)
     await callback.answer()
 
 
