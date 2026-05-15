@@ -532,7 +532,7 @@ async def cb_show_channels(callback: types.CallbackQuery):
 @router.callback_query(F.data == "referral_menu")
 @error_handler
 async def cb_referral_menu(callback: types.CallbackQuery):
-    """Show referral info from inline button."""
+    """Show referral info from inline button — same as static '🎁 Refer & Earn'."""
     settings = await db.get_referral_settings()
 
     if not settings or not settings.get("is_active"):
@@ -540,42 +540,107 @@ async def cb_referral_menu(callback: types.CallbackQuery):
         return
 
     user_id = callback.from_user.id
-    user = await db.get_user(user_id)
-    ref_code = user.get("referral_code", "") if user else ""
+    ref_code = await db.get_or_create_referral_code(user_id)
     ref_count = await db.get_referral_count(user_id)
+    earnings = await db.get_user_referral_earnings(user_id)
     wallet = await db.get_user_wallet(user_id)
 
     bot_info = await callback.bot.get_me()
-    ref_link = f"https://t.me/{bot_info.username}?start={ref_code}" if ref_code else "N/A"
+    link = f"https://t.me/{bot_info.username}?start={ref_code}"
 
     mode = settings["mode"]
-    if mode == "wallet_reward":
+    if mode == "code_reward":
+        rewards = await db.get_referral_rewards()
+        active_rewards = [r for r in rewards if r["is_active"]]
+        if active_rewards:
+            how_it_works = (
+                f"✨ *How it works:*\n"
+                f"1️⃣ Share your link\n"
+                f"2️⃣ Friends join the bot\n"
+                f"3️⃣ Reach milestones to claim free coupons\\!\n\n"
+                f"🎁 *Available Rewards:*\n"
+            )
+            for r in active_rewards:
+                title_esc = escape_md(r["title"])
+                needed = r["referrals_needed"]
+                if ref_count >= needed:
+                    how_it_works += f"✅ {title_esc} — {needed} refs \\(unlocked\\!\\)\n"
+                else:
+                    how_it_works += f"🔒 {title_esc} — {needed} refs\n"
+        else:
+            how_it_works = (
+                f"✨ *How it works:*\n"
+                f"1️⃣ Share your link\n"
+                f"2️⃣ Friends join the bot\n"
+                f"3️⃣ Earn free coupons\\!\n"
+            )
+    elif mode == "wallet_reward":
         reward_amt = float(settings.get("reward_amount", 10.0) or 10.0)
-        mode_info = f"💵 Earn *₹{escape_md(str(reward_amt))}* per referral\\!"
-    elif mode == "commission":
-        pct = settings.get("commission_percent", 10)
-        mode_info = f"💰 Earn *{escape_md(str(pct))}%* on referred purchases\\!"
-    else:
-        mode_info = f"🎁 Reach milestones to claim free coupons\\!"
+        how_it_works = (
+            f"✨ *How it works:*\n"
+            f"1️⃣ Share your link\n"
+            f"2️⃣ Friends join the bot\n"
+            f"3️⃣ Get 💵 *₹{escape_md(str(reward_amt))}* per referral\\!\n\n"
+            f"💰 Reward goes straight to your wallet\\!\n"
+        )
+    else:  # commission
+        pct = settings["commission_percent"]
+        how_it_works = (
+            f"✨ *How it works:*\n"
+            f"1️⃣ Share your link\n"
+            f"2️⃣ Friends join \\& buy\n"
+            f"3️⃣ Earn 💰 *{escape_md(str(pct))}%* commission\n"
+        )
+
+    from bot.utils.helpers import format_currency
+    link_esc = escape_md(link)
+    ref_code_esc = escape_md(ref_code)
+    earnings_esc = escape_md(format_currency(earnings))
+    wallet_esc = escape_md(format_currency(wallet))
 
     text = (
-        f"🤝 *Refer \\& Earn*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🤝 *REFER \\& EARN*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"{mode_info}\n\n"
-        f"👥 Your Referrals: *{ref_count}*\n"
-        f"💰 Wallet: *₹{escape_md(str(float(wallet)))}*\n"
-        f"🔗 Your Link:\n`{escape_md(ref_link)}`\n\n"
-        f"Share your link to earn rewards\\!"
+        f"{how_it_works}\n"
+        f"🔗 *Your Link:*\n"
+        f"`{link_esc}`\n\n"
+        f"🔑 *Code:*\n"
+        f"`{ref_code_esc}`\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📊 *Your Stats*\n\n"
+        f"👥 Referrals: *{ref_count}*\n"
+        f"💸 Earnings: *{earnings_esc}*\n"
+        f"💰 Wallet: *{wallet_esc}*\n\n"
+        f"💡 _Wallet balance can be used to purchase coupons\\!_ 💳\n"
+        f"━━━━━━━━━━━━━━━━━━━━"
     )
 
     buttons = []
+
+    # 🎁 Claim Rewards — FIRST PRIORITY (top)
     if mode == "code_reward":
         claimable = await db.get_claimable_rewards(user_id, ref_count)
         if claimable:
             buttons.append([InlineKeyboardButton(text="🎁 Claim Rewards", callback_data="ref_claim_rewards")])
+
+    # Allow manual entry if no referrer
+    referrer = await db.get_referrer_of(user_id)
+    if not referrer:
+        buttons.append([InlineKeyboardButton(text="🔗 Enter Referral Code", callback_data="ref_enter_code")])
+
+    buttons.append([InlineKeyboardButton(text="📋 My Referral History", callback_data="ref_history")])
     buttons.append([back_button("back_home")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+
+    try:
+        await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    except Exception:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        await callback.message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
     await callback.answer()
 
 
