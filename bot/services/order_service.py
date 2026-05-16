@@ -21,24 +21,37 @@ class OutOfStockError(Exception):
 
 async def create_purchase_order(user_id: int, coupon_id: int, amount: float,
                                  gateway: str = "paytm", qty: int = 1) -> dict:
-    """Create a new pending order with STOCK RESERVATION.
+    """Create a new pending order with optional STOCK RESERVATION.
 
-    1. Atomically reserve stock (decrement stock, increment reserved_qty)
-    2. If reservation fails → raise OutOfStockError
-    3. Create order + transaction records
+    When reservation_enabled=True (default):
+      1. Atomically reserve stock (decrement stock, increment reserved_qty)
+      2. If reservation fails → raise OutOfStockError
+    
+    When reservation_enabled=False (admin disabled):
+      1. Simply check stock >= qty without reserving
+      2. If insufficient → raise OutOfStockError
+      (Stock is reduced on payment success via confirm_reservation which still works)
 
     The txn_ref uses the user's TXN_{timestamp}_{random} format.
-    This same ID is used as 'tr' in UPI URL AND as ORDERID for Paytm status checks.
     """
-    # ── Step 1: Reserve stock atomically ──
-    reserved = await db.reserve_stock(coupon_id, qty)
-    if not reserved:
-        raise OutOfStockError(f"Not enough stock for coupon {coupon_id} (requested {qty})")
+    # Check if reservation is enabled
+    dyn = await db.get_dynamic_config()
+    use_reservation = dyn.get("reservation_enabled", True)
+
+    if use_reservation:
+        # ── Step 1A: Reserve stock atomically ──
+        reserved = await db.reserve_stock(coupon_id, qty)
+        if not reserved:
+            raise OutOfStockError(f"Not enough stock for coupon {coupon_id} (requested {qty})")
+    else:
+        # ── Step 1B: Just check stock without reserving ──
+        coupon_row = await db.get_coupon(coupon_id)
+        if not coupon_row or coupon_row["stock"] < qty:
+            raise OutOfStockError(f"Not enough stock for coupon {coupon_id} (requested {qty})")
 
     # ── Step 2: Create order ──
     order_id = generate_order_id()           # human-readable: DX-xxxxx-XXXXXX
     txn_ref = generate_unique_txn_id()       # Paytm ORDERID: TXN_{timestamp}_{random}
-    dyn = await db.get_dynamic_config()
     timeout_sec = dyn["payment_timeout_seconds"]
 
     await db.create_order(order_id, user_id, coupon_id, amount, timeout_sec, qty)
@@ -57,8 +70,8 @@ async def create_purchase_order(user_id: int, coupon_id: int, amount: float,
         merchant_id, gateway
     )
 
-    logger.info(f"Order created (reserved): {order_id}, txn={txn_ref}, user={user_id}, "
-                f"amount={amount}, qty={qty}, gateway={gateway}")
+    logger.info(f"Order created ({'reserved' if use_reservation else 'no-reserve'}): {order_id}, "
+                f"txn={txn_ref}, user={user_id}, amount={amount}, qty={qty}, gateway={gateway}")
 
     return {
         "order_id": order_id,

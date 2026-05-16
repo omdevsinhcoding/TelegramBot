@@ -1022,12 +1022,16 @@ async def get_dynamic_config() -> dict:
         payment_timeout_seconds: int (default 600)
         bharatpe_min_recharge: float (default 10)
         payment_poll_interval: int (default 30)
+        reservation_enabled: bool (default True) — stock reservation system on/off
+        waitlist_enabled: bool (default True) — waitlist on/off
     """
     settings = await get_bot_settings()
     return {
         "payment_timeout_seconds": int(settings.get("payment_timeout_seconds") or 600),
         "bharatpe_min_recharge": float(settings.get("bharatpe_min_recharge") or 10),
         "payment_poll_interval": int(settings.get("payment_poll_interval") or 30),
+        "reservation_enabled": bool(settings.get("reservation_enabled", True) if settings.get("reservation_enabled") is not None else True),
+        "waitlist_enabled": bool(settings.get("waitlist_enabled", True) if settings.get("waitlist_enabled") is not None else True),
     }
 
 

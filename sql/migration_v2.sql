@@ -136,6 +136,21 @@ INSERT INTO bot_settings DEFAULT VALUES
 WHERE NOT EXISTS (SELECT 1 FROM bot_settings);
 
 -- ────────────────────────────────────────────────────────────
+-- 12. Add missing columns added after initial migration
+-- ────────────────────────────────────────────────────────────
+
+-- force_join_apply_admins: controls whether force join also applies to admins
+ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS force_join_apply_admins BOOLEAN DEFAULT FALSE;
+
+-- reservation_enabled: controls whether stock reservation system is active
+-- When OFF: stock is NOT reserved on order creation — users buy from shared pool
+ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS reservation_enabled BOOLEAN DEFAULT TRUE;
+
+-- waitlist_enabled: controls whether users are put on a waitlist when stock is 0
+-- When OFF: users get a simple "out of stock" message instead
+ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS waitlist_enabled BOOLEAN DEFAULT TRUE;
+
+-- ────────────────────────────────────────────────────────────
 -- 11. ADMINS table
 -- ────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS admins (

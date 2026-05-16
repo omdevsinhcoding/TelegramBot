@@ -2168,6 +2168,11 @@ async def cb_admin_bot_settings(callback: types.CallbackQuery):
     timeout_val = dyn["payment_timeout_seconds"]
     min_recharge = dyn["bharatpe_min_recharge"]
     poll_val = dyn["payment_poll_interval"]
+    reservation_on = dyn.get("reservation_enabled", True)
+    waitlist_on = dyn.get("waitlist_enabled", True)
+    
+    res_icon = "🟢 ON" if reservation_on else "🔴 OFF"
+    wl_icon = "🟢 ON" if waitlist_on else "🔴 OFF"
     
     text = (
         f"⚙️ *Bot Settings*\n"
@@ -2176,14 +2181,26 @@ async def cb_admin_bot_settings(callback: types.CallbackQuery):
         f"━━━ *Dynamic Config* ━━━\n"
         f"⏱️ Payment Timeout: *{timeout_val}s* \\({timeout_val // 60} min\\)\n"
         f"💰 Min Recharge \\(BharatPe\\): *₹{min_recharge:.0f}*\n"
-        f"🔄 Expiry Poll Interval: *{poll_val}s*\n"
+        f"🔄 Expiry Poll Interval: *{poll_val}s*\n\n"
+        f"━━━ *System Controls* ━━━\n"
+        f"🔒 Reservation System: *{res_icon}*\n"
+        f"   _When ON: stock is locked per order \\(prevents overselling\\)_\n"
+        f"   _When OFF: first\\-paid\\-first\\-served, no locking_\n\n"
+        f"📋 Waitlist System: *{wl_icon}*\n"
+        f"   _When ON: out\\-of\\-stock users join a queue & get notified_\n"
+        f"   _When OFF: users see simple out\\-of\\-stock message_\n"
     )
+    
+    res_toggle_text = "🔴 Disable Reservation" if reservation_on else "🟢 Enable Reservation"
+    wl_toggle_text = "🔴 Disable Waitlist" if waitlist_on else "🟢 Enable Waitlist"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"✏️ Bot Name: {bot_name}", callback_data="admin_change_bot_name")],
         [InlineKeyboardButton(text="⏱️ Payment Timeout", callback_data="admin_dynconf:payment_timeout_seconds"),
          InlineKeyboardButton(text="💰 Min Recharge", callback_data="admin_dynconf:bharatpe_min_recharge")],
         [InlineKeyboardButton(text="🔄 Poll Interval", callback_data="admin_dynconf:payment_poll_interval")],
+        [InlineKeyboardButton(text=res_toggle_text, callback_data="admin_toggle_reservation")],
+        [InlineKeyboardButton(text=wl_toggle_text, callback_data="admin_toggle_waitlist")],
         [InlineKeyboardButton(text="👮 Manage Admins", callback_data="admin_manage_admins")],
         [back_button("admin_panel")],
     ])
@@ -2192,6 +2209,50 @@ async def cb_admin_bot_settings(callback: types.CallbackQuery):
         text, parse_mode="MarkdownV2", reply_markup=kb
     )
     await callback.answer()
+
+
+# ── Reservation System Toggle ─────────────────────────────
+
+@router.callback_query(F.data == "admin_toggle_reservation")
+@admin_only
+@error_handler
+async def cb_admin_toggle_reservation(callback: types.CallbackQuery):
+    """Toggle the stock reservation system on/off."""
+    dyn = await db.get_dynamic_config()
+    current = dyn.get("reservation_enabled", True)
+    new_val = not current
+    await db.update_bot_settings(reservation_enabled=new_val)
+    status = "🟢 Enabled" if new_val else "🔴 Disabled"
+    await db.add_admin_log(
+        callback.from_user.id, "toggle_reservation", "bot_settings", "reservation_enabled",
+        f"Reservation system {'enabled' if new_val else 'disabled'}"
+    )
+    logger.info(f"Admin {callback.from_user.id} toggled reservation system: {status}")
+    await callback.answer(f"Reservation System: {status}", show_alert=True)
+    await cb_admin_bot_settings(callback)
+
+
+# ── Waitlist Toggle ───────────────────────────────────────
+
+@router.callback_query(F.data == "admin_toggle_waitlist")
+@admin_only
+@error_handler
+async def cb_admin_toggle_waitlist(callback: types.CallbackQuery):
+    """Toggle the waitlist system on/off."""
+    dyn = await db.get_dynamic_config()
+    current = dyn.get("waitlist_enabled", True)
+    new_val = not current
+    await db.update_bot_settings(waitlist_enabled=new_val)
+    status = "🟢 Enabled" if new_val else "🔴 Disabled"
+    await db.add_admin_log(
+        callback.from_user.id, "toggle_waitlist", "bot_settings", "waitlist_enabled",
+        f"Waitlist system {'enabled' if new_val else 'disabled'}"
+    )
+    logger.info(f"Admin {callback.from_user.id} toggled waitlist system: {status}")
+    await callback.answer(f"Waitlist System: {status}", show_alert=True)
+    await cb_admin_bot_settings(callback)
+
+
 
 
 # ── Force Join Channel Management (Dedicated Page) ───────

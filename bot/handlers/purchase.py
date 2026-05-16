@@ -94,18 +94,36 @@ async def _check_stock_or_reserved(coupon, qty: int, user_id: int, callback_or_m
     if stock >= qty:
         return True  # Stock available, no extra DB query needed
     
-    # Stock not enough — only NOW check reservation info (rare path)
-    res = await db.get_reservation_info(coupon_id)
-    
-    if res["reserved_qty"] > 0 and res["wait_minutes"] > 0:
-        await db.add_to_waitlist(user_id, coupon_id)
-        msg = (
-            f"⏳ Reserved by another buyer.\n"
-            f"🔔 You're on the waitlist!\n"
-            f"⏰ Available in ~{res['wait_minutes']} min"
-        )
+    # Stock not enough — check reservation info and admin flags
+    dyn = await db.get_dynamic_config()
+    use_reservation = dyn.get("reservation_enabled", True)
+    use_waitlist = dyn.get("waitlist_enabled", True)
+
+    if use_reservation:
+        # Only check reservation info if reservation system is on
+        res = await db.get_reservation_info(coupon_id)
+        if res["reserved_qty"] > 0 and res["wait_minutes"] > 0:
+            if use_waitlist:
+                await db.add_to_waitlist(user_id, coupon_id)
+                msg = (
+                    f"⏳ Reserved by another buyer.\n"
+                    f"🔔 You're on the waitlist!\n"
+                    f"⏰ Available in ~{res['wait_minutes']} min"
+                )
+            else:
+                msg = f"❌ Out of stock. Only {stock} available right now."
+        else:
+            msg = f"❌ Not enough stock! Only {stock} available."
     else:
-        msg = f"❌ Not enough stock! Only {stock} available."
+        # Reservation disabled — simple out-of-stock message
+        if use_waitlist:
+            await db.add_to_waitlist(user_id, coupon_id)
+            msg = (
+                f"❌ Out of stock!\n"
+                f"🔔 You're on the waitlist — we'll notify you when it's back!"
+            )
+        else:
+            msg = f"❌ Out of stock! Only {stock} available right now."
     
     if hasattr(callback_or_message, 'data'):
         await callback_or_message.answer(msg, show_alert=True)
@@ -568,8 +586,8 @@ async def msg_bharatpe_utr(message: types.Message, state: FSMContext):
         await message.answer("⚠️ Symbol not allowed\\. UTR must be alphanumeric\\.", parse_mode="MarkdownV2")
         return
 
-    if len(utr) > 12:
-        await message.answer("⚠️ UTR cannot be more than 12 digits\\.", parse_mode="MarkdownV2")
+    if len(utr) > 22:
+        await message.answer("⚠️ UTR cannot be more than 22 characters\\.", parse_mode="MarkdownV2")
         return
 
     if utr[0] == '0':
