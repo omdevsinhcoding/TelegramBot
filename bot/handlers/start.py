@@ -45,33 +45,14 @@ async def cmd_start(message: types.Message):
                             f"Start shopping to unlock referral rewards 🎁"
                         )
 
-                        # Check force channel — reward only after joining
-                        channel_joined = True
-                        try:
-                            settings = await db.get_bot_settings()
-                            force_raw = settings.get("force_channel") if settings else None
-                            if force_raw:
-                                channels = [ch.strip() for ch in force_raw.split(",") if ch.strip()]
-                                bot = message.bot
-                                for channel in channels:
-                                    try:
-                                        chat_id = int(channel) if channel.lstrip("-").isdigit() else channel
-                                        member = await bot.get_chat_member(chat_id=chat_id, user_id=user.id)
-                                        if member.status in ("left", "kicked"):
-                                            channel_joined = False
-                                            break
-                                    except Exception:
-                                        pass
-                        except Exception:
-                            pass
-
                         # Get referral mode
                         ref_settings = await db.get_referral_settings()
                         mode = ref_settings["mode"] if ref_settings else "commission"
 
-                        # Grant wallet_reward IMMEDIATELY on join (if channels joined)
+                        # Grant wallet_reward IMMEDIATELY on join — no channel gate
+                        # (force_channel controls bot access, not referral rewards)
                         reward_msg = ""
-                        if mode == "wallet_reward" and channel_joined and ref_settings:
+                        if mode == "wallet_reward" and ref_settings:
                             reward_amt = float(ref_settings.get("reward_amount", 10.0) or 10.0)
                             try:
                                 await db.add_referral_earnings(referrer_id, reward_amt)
@@ -104,7 +85,7 @@ async def cmd_start(message: types.Message):
                                 f"🎉 *New Referral\\!*\n\n"
                                 f"👤 {ref_name} joined using your link\\!"
                             )
-                            if mode == "wallet_reward" and channel_joined:
+                            if mode == "wallet_reward" and ref_settings:
                                 reward_amt = float(ref_settings.get("reward_amount", 10.0) or 10.0)
                                 bal = await db.get_wallet_balance(referrer_id)
                                 notify_text += (
@@ -116,8 +97,6 @@ async def cmd_start(message: types.Message):
                                 notify_text += f"\n💰 You'll earn {escape_md(str(pct))}% on their purchases\\!"
                             elif mode == "code_reward":
                                 notify_text += f"\n🎁 Keep referring to unlock free coupons\\!"
-                            elif mode == "wallet_reward" and not channel_joined:
-                                notify_text += f"\n⏳ Reward pending — user needs to join channels first\\."
 
                             notify_text += f"\nKeep sharing to earn more rewards 💰"
 
