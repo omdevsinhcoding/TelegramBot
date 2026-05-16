@@ -493,6 +493,27 @@ async def init_db() -> asyncpg.Pool:
         except Exception:
             pass
 
+        # ── CRITICAL: Unique partial indexes for ON CONFLICT deduplication ──
+        # These indexes are REQUIRED by the ON CONFLICT clauses in:
+        #   - add_coupon_codes_bulk() / add_coupon_code()
+        #   - add_giveaway_codes()
+        # Without them, PostgreSQL cannot infer an arbiter and ON CONFLICT fails.
+        try:
+            await conn.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_coupon_codes_unique_unsold
+                    ON coupon_codes (coupon_id, code) WHERE is_sold = FALSE;
+            """)
+        except Exception as e:
+            logger.warning(f"coupon_codes unique index (non-critical): {e}")
+
+        try:
+            await conn.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_free_coupon_codes_unique_unclaimed
+                    ON free_coupon_codes (free_coupon_id, code) WHERE is_claimed = FALSE;
+            """)
+        except Exception as e:
+            logger.warning(f"free_coupon_codes unique index (non-critical): {e}")
+
         # ── Referral claims: fix free-reward bug (migration v4) ────────────
         # Problem: referral_claims.reward_id had ON DELETE CASCADE, so when
         # admin removed a reward all claim records were wiped. A new reward
