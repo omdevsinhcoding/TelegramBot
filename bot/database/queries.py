@@ -561,7 +561,8 @@ async def sync_all_coupon_stocks():
 async def add_coupon_code(coupon_id: int, code: str):
     pool = await get_pool()
     await pool.execute(
-        "INSERT INTO coupon_codes (coupon_id, code) VALUES ($1, $2)",
+        """INSERT INTO coupon_codes (coupon_id, code) VALUES ($1, $2)
+           ON CONFLICT (coupon_id, code) WHERE is_sold = FALSE DO NOTHING""",
         coupon_id, code
     )
 
@@ -696,16 +697,39 @@ async def create_free_coupon(title: str, codes_per_user: int, created_by: int) -
         title, '', codes_per_user, created_by)
     return row["id"]
 
-async def add_giveaway_codes(fc_id: int, codes: list):
+async def add_giveaway_codes(fc_id: int, codes: list) -> int:
+    """Add codes to a giveaway, skipping duplicates.
+    
+    Returns the number of NEW codes actually inserted.
+    """
     pool = await get_pool()
+    # Deduplicate input
+    seen = set()
+    unique_codes = []
     for code in codes:
         c = code.strip()
-        if c:
-            await pool.execute("INSERT INTO free_coupon_codes (free_coupon_id, code) VALUES ($1, $2)", fc_id, c)
+        if c and c not in seen:
+            seen.add(c)
+            unique_codes.append(c)
+    
+    inserted = 0
+    for c in unique_codes:
+        result = await pool.execute(
+            """INSERT INTO free_coupon_codes (free_coupon_id, code)
+               VALUES ($1, $2)
+               ON CONFLICT (free_coupon_id, code) WHERE is_claimed = FALSE
+               DO NOTHING""",
+            fc_id, c
+        )
+        if result and result.endswith("1"):
+            inserted += 1
+    
+    # Update max_claims based on total unclaimed codes
     fc = await pool.fetchrow("SELECT codes_per_user FROM free_coupons WHERE id = $1", fc_id)
     total = await pool.fetchval("SELECT COUNT(*) FROM free_coupon_codes WHERE free_coupon_id = $1", fc_id)
     cpu = fc["codes_per_user"] if fc else 1
     await pool.execute("UPDATE free_coupons SET max_claims = $2 WHERE id = $1", fc_id, total // max(cpu, 1))
+    return inserted
 
 
 async def get_coupons_with_codes():
@@ -1325,24 +1349,55 @@ async def get_dynamic_config() -> dict:
 
 # ── BULK COUPON CODE INSERT ─────────────────────────────
 
-async def add_coupon_codes_bulk(coupon_id: int, codes: list[str]):
+async def add_coupon_codes_bulk(coupon_id: int, codes: list[str]) -> int:
     """Insert multiple coupon codes in a single transaction.
     
     Much faster than inserting one-by-one. Prevents timeout errors
     when admin pastes hundreds of codes.
+    
+    Deduplicates codes:
+      - Removes duplicates within the input list itself
+      - Skips codes that already exist as unsold for this coupon (ON CONFLICT)
+    
+    Returns the number of NEW codes actually inserted.
     """
     if not codes:
         return 0
+
+    # ── Deduplicate input list (preserve order, keep first occurrence) ──
+    seen = set()
+    unique_codes = []
+    for c in codes:
+        c_stripped = c.strip()
+        if c_stripped and c_stripped not in seen:
+            seen.add(c_stripped)
+            unique_codes.append(c_stripped)
+
+    if not unique_codes:
+        return 0
+
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            await conn.executemany(
-                "INSERT INTO coupon_codes (coupon_id, code) VALUES ($1, $2)",
-                [(coupon_id, code) for code in codes]
-            )
+            # Use INSERT ... ON CONFLICT to skip duplicates at DB level
+            # The unique partial index idx_coupon_codes_unique_unsold
+            # covers (coupon_id, code) WHERE is_sold = FALSE
+            inserted = 0
+            for code in unique_codes:
+                result = await conn.execute(
+                    """INSERT INTO coupon_codes (coupon_id, code)
+                       VALUES ($1, $2)
+                       ON CONFLICT (coupon_id, code) WHERE is_sold = FALSE
+                       DO NOTHING""",
+                    coupon_id, code
+                )
+                # asyncpg returns "INSERT 0 1" on success, "INSERT 0 0" on conflict
+                if result and result.endswith("1"):
+                    inserted += 1
+
     # Sync coupons.stock with actual unsold count
     await sync_coupon_stock(coupon_id)
-    return len(codes)
+    return inserted
 
 
 # ── ADMIN MANAGEMENT QUERIES ────────────────────────────

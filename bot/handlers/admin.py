@@ -332,15 +332,17 @@ async def msg_add_coupon_codes(message: types.Message, state: FSMContext):
     if codes_text.lower() != "skip":
         codes = [c.strip() for c in codes_text.split("\n") if c.strip()]
         try:
-            await db.add_coupon_codes_bulk(coupon_id, codes)
+            codes_added = await db.add_coupon_codes_bulk(coupon_id, codes)
         except Exception as e:
             logger.error(f"Bulk code insert failed: {e}")
-        codes_added = len(codes)
-        # Update stock to match actual codes
+        # Stock is synced inside add_coupon_codes_bulk via sync_coupon_stock
         if codes_added > 0:
             stock = codes_added
-            await edit_coupon(coupon_id, stock=stock)
             logger.info(f"Admin {message.from_user.id} — added {codes_added} codes to coupon {coupon_id}")
+
+    # Fetch actual stock after sync
+    coupon = await get_coupon_detail(coupon_id)
+    stock = coupon["stock"] if coupon else stock
 
     await db.add_admin_log(
         message.from_user.id, "add_coupon", "coupon", str(coupon_id),
@@ -513,32 +515,35 @@ async def msg_add_codes(message: types.Message, state: FSMContext):
     await state.clear()
 
     codes = [c.strip() for c in message.text.strip().split("\n") if c.strip()]
+    if not codes:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_coupon_edit:{coupon_id}")]])
+        await message.answer("⚠️ No valid codes found\\.", parse_mode="MarkdownV2", reply_markup=kb)
+        return
+
     try:
-        await db.add_coupon_codes_bulk(coupon_id, codes)
+        inserted = await db.add_coupon_codes_bulk(coupon_id, codes)
     except Exception as e:
         logger.error(f"Bulk code insert failed: {e}")
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_coupon_edit:{coupon_id}")]])
         await message.answer(f"❌ Error adding codes: {escape_md(str(e)[:100])}", parse_mode="MarkdownV2", reply_markup=kb)
         return
 
-    # Update stock to match available codes
-    pool = await db.get_pool()
-    count_row = await pool.fetchrow(
-        "SELECT COUNT(*) as cnt FROM coupon_codes WHERE coupon_id = $1 AND is_sold = FALSE",
-        coupon_id
-    )
-    new_stock = count_row["cnt"] if count_row else len(codes)
-    await edit_coupon(coupon_id, stock=new_stock)
+    # Stock is already synced inside add_coupon_codes_bulk via sync_coupon_stock
+    coupon = await get_coupon_detail(coupon_id)
+    new_stock = coupon["stock"] if coupon else inserted
+    skipped = len(codes) - inserted
+
     await db.add_admin_log(
         message.from_user.id, "add_codes", "coupon", str(coupon_id),
-        f"Added {len(codes)} codes, new stock: {new_stock}"
+        f"Added {inserted} codes (skipped {skipped} duplicates), new stock: {new_stock}"
     )
-    logger.info(f"Admin {message.from_user.id} added {len(codes)} codes to coupon {coupon_id}")
+    logger.info(f"Admin {message.from_user.id} added {inserted} codes to coupon {coupon_id} (skipped {skipped} dupes)")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_coupon_edit:{coupon_id}")]])
+    dup_note = f"\n⚠️ Skipped *{skipped}* duplicate\\(s\\)" if skipped > 0 else ""
     await message.answer(
-        f"✅ Added *{len(codes)}* codes to coupon \\#{coupon_id}\\!\n"
-        f"📦 Updated stock: *{new_stock}*",
+        f"✅ Added *{inserted}* codes to coupon \\#{coupon_id}\\!\\n"
+        f"📦 Updated stock: *{new_stock}*{dup_note}",
         parse_mode="MarkdownV2", reply_markup=kb,
     )
 
@@ -584,44 +589,43 @@ async def msg_upload_codes_file(message: types.Message, state: FSMContext):
     
     # Read and parse codes
     if isinstance(file_bytes, io.BytesIO):
-        content = file_bytes.read().decode("utf-8", errors="ignore")
+        content = file_bytes.read().decode("utf-8-sig", errors="ignore")
     else:
-        content = file_bytes.decode("utf-8", errors="ignore")
+        content = file_bytes.decode("utf-8-sig", errors="ignore")
     
-    codes = [c.strip() for c in content.split("\n") if c.strip()]
+    # Split by any line ending (\r\n, \r, \n) and strip whitespace
+    codes = [c.strip() for c in content.splitlines() if c.strip()]
     
     if not codes:
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_coupon_edit:{coupon_id}")]])
         await message.answer("⚠️ No codes found in the file.", reply_markup=kb)
         return
 
-    # Add codes to database (bulk insert)
+    # Add codes to database (bulk insert with deduplication)
     try:
-        await db.add_coupon_codes_bulk(coupon_id, codes)
+        inserted = await db.add_coupon_codes_bulk(coupon_id, codes)
     except Exception as e:
         logger.error(f"Bulk file code insert failed: {e}")
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_coupon_edit:{coupon_id}")]])
         await message.answer(f"❌ Error adding codes from file: {escape_md(str(e)[:100])}", parse_mode="MarkdownV2", reply_markup=kb)
         return
 
-    # Update stock
-    pool = await db.get_pool()
-    count_row = await pool.fetchrow(
-        "SELECT COUNT(*) as cnt FROM coupon_codes WHERE coupon_id = $1 AND is_sold = FALSE",
-        coupon_id
-    )
-    new_stock = count_row["cnt"] if count_row else len(codes)
-    await edit_coupon(coupon_id, stock=new_stock)
+    # Stock is already synced inside add_coupon_codes_bulk via sync_coupon_stock
+    coupon = await get_coupon_detail(coupon_id)
+    new_stock = coupon["stock"] if coupon else inserted
+    skipped = len(codes) - inserted
+
     await db.add_admin_log(
         message.from_user.id, "upload_codes", "coupon", str(coupon_id),
-        f"Uploaded {len(codes)} codes from file, new stock: {new_stock}"
+        f"Uploaded {inserted} codes from file (skipped {skipped} duplicates), new stock: {new_stock}"
     )
-    logger.info(f"Admin {message.from_user.id} uploaded {len(codes)} codes from file to coupon {coupon_id}")
+    logger.info(f"Admin {message.from_user.id} uploaded {inserted} codes from file to coupon {coupon_id} (skipped {skipped} dupes)")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_coupon_edit:{coupon_id}")]])
+    dup_note = f"\n⚠️ Skipped *{skipped}* duplicate\\(s\\)" if skipped > 0 else ""
     await message.answer(
-        f"✅ Uploaded *{len(codes)}* codes from file\\!\n"
-        f"📦 Updated stock: *{new_stock}*",
+        f"✅ Uploaded *{inserted}* codes from file\\!\n"
+        f"📦 Updated stock: *{new_stock}*{dup_note}",
         parse_mode="MarkdownV2", reply_markup=kb,
     )
 
