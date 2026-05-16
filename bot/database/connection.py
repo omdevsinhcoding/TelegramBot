@@ -462,6 +462,50 @@ async def init_db() -> asyncpg.Pool:
         except Exception:
             pass
 
+        # ── Referral claims: fix free-reward bug (migration v4) ────────────
+        # Problem: referral_claims.reward_id had ON DELETE CASCADE, so when
+        # admin removed a reward all claim records were wiped. A new reward
+        # then looked claimable for free because the consumption history was gone.
+        #
+        # Fix:
+        #   1. Add referrals_needed column — persists how many refs were consumed
+        #      per claim even after the referral_rewards row is deleted.
+        #   2. Make reward_id nullable — required before changing FK to SET NULL.
+        #   3. Switch FK to ON DELETE SET NULL so claims survive reward deletion.
+        try:
+            # Step 1: add referrals_needed column if missing
+            await conn.execute(
+                "ALTER TABLE referral_claims "
+                "ADD COLUMN IF NOT EXISTS referrals_needed INTEGER DEFAULT 0;"
+            )
+        except Exception as e:
+            logger.warning(f"referral_claims add referrals_needed (non-critical): {e}")
+
+        try:
+            # Step 2: make reward_id nullable (prerequisite for SET NULL FK)
+            await conn.execute(
+                "ALTER TABLE referral_claims ALTER COLUMN reward_id DROP NOT NULL;"
+            )
+        except Exception as e:
+            logger.warning(f"referral_claims drop not-null (non-critical): {e}")
+
+        try:
+            # Step 3: drop old CASCADE FK and recreate as SET NULL
+            await conn.execute(
+                "ALTER TABLE referral_claims "
+                "DROP CONSTRAINT IF EXISTS referral_claims_reward_id_fkey;"
+            )
+            await conn.execute("""
+                ALTER TABLE referral_claims
+                ADD CONSTRAINT referral_claims_reward_id_fkey
+                FOREIGN KEY (reward_id)
+                REFERENCES referral_rewards(id) ON DELETE SET NULL;
+            """)
+            logger.info("referral_claims FK updated to ON DELETE SET NULL.")
+        except Exception as e:
+            logger.warning(f"referral_claims FK change (non-critical): {e}")
+        # ──────────────────────────────────────────────────────────────────
+
     logger.info("Database pool ready.")
     _last_health_check = time.monotonic()
     _db_ready.set()

@@ -809,14 +809,36 @@ async def update_referral_reward_count(reward_id: int, count: int):
     await pool.execute("UPDATE referral_rewards SET referrals_needed = $2 WHERE id = $1", reward_id, count)
 
 async def get_claimable_rewards(user_id: int, ref_count: int) -> list:
-    """Get rewards user can claim (enough referrals + not already claimed + has stock)."""
+    """Get rewards user can claim based on *remaining* (unconsumed) referrals.
+
+    Remaining = total_refs - SUM(referrals_needed of all past claims).
+
+    This ensures that if admin removes a reward and adds a new one, users
+    CANNOT reuse referrals that were already consumed by prior claims.
+    Claims survive reward deletion because the FK is ON DELETE SET NULL,
+    and referrals_needed is persisted on the claim row itself.
+    """
     pool = await get_pool()
     return await pool.fetch(
-        "SELECT rr.*, c.title, c.stock FROM referral_rewards rr "
-        "JOIN coupons c ON rr.coupon_id = c.id "
-        "WHERE rr.is_active = TRUE AND rr.referrals_needed <= $2 AND c.stock > 0 "
-        "AND rr.id NOT IN (SELECT reward_id FROM referral_claims WHERE user_id = $1) "
-        "ORDER BY rr.referrals_needed ASC",
+        """
+        SELECT rr.*, c.title, c.stock
+        FROM referral_rewards rr
+        JOIN coupons c ON rr.coupon_id = c.id
+        WHERE rr.is_active = TRUE
+          AND c.stock > 0
+          AND rr.referrals_needed <= (
+            $2::int - COALESCE(
+              (SELECT SUM(COALESCE(rc.referrals_needed, 0))
+               FROM referral_claims rc WHERE rc.user_id = $1),
+              0
+            )
+          )
+          AND rr.id NOT IN (
+            SELECT reward_id FROM referral_claims
+            WHERE user_id = $1 AND reward_id IS NOT NULL
+          )
+        ORDER BY rr.referrals_needed ASC
+        """,
         user_id, ref_count
     )
 
@@ -830,11 +852,22 @@ async def get_user_referral_claims(user_id: int) -> list:
     )
 
 async def claim_referral_reward(user_id: int, reward_id: int) -> str | None:
-    """Claim a referral reward — assigns a coupon code to the user. Returns the code or None."""
+    """Claim a referral reward — assigns a coupon code to the user. Returns the code or None.
+
+    Inside a single atomic transaction:
+      1. Verifies reward is active + has stock.
+      2. Verifies user hasn't already claimed THIS reward_id.
+      3. Computes remaining refs = total_refs - already_consumed_refs and
+         ensures the user actually has enough *new* referrals to earn this reward.
+         This prevents free re-claims when admin removes and re-adds a reward.
+      4. Assigns an unsold code, decrements stock, and records the claim with
+         the referrals_needed value so future eligibility checks stay accurate
+         even after the reward row itself is deleted.
+    """
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            # Get reward details
+            # 1. Get reward details
             reward = await conn.fetchrow(
                 "SELECT rr.*, c.stock FROM referral_rewards rr "
                 "JOIN coupons c ON rr.coupon_id = c.id WHERE rr.id = $1 AND rr.is_active = TRUE",
@@ -843,7 +876,7 @@ async def claim_referral_reward(user_id: int, reward_id: int) -> str | None:
             if not reward or reward["stock"] <= 0:
                 return None
 
-            # Check not already claimed
+            # 2. Check this exact reward_id hasn't been claimed already
             existing = await conn.fetchrow(
                 "SELECT id FROM referral_claims WHERE user_id = $1 AND reward_id = $2",
                 user_id, reward_id
@@ -851,7 +884,23 @@ async def claim_referral_reward(user_id: int, reward_id: int) -> str | None:
             if existing:
                 return None
 
-            # Get available code
+            # 3. ── CORE FIX: verify remaining (unconsumed) referrals ──────
+            # Count total referrals this user has made
+            total_refs = await conn.fetchval(
+                "SELECT COUNT(*) FROM referrals WHERE referrer_id = $1", user_id
+            ) or 0
+            # Sum of referrals_needed across ALL past claims (survives reward deletion)
+            consumed_refs = await conn.fetchval(
+                "SELECT COALESCE(SUM(COALESCE(referrals_needed, 0)), 0) "
+                "FROM referral_claims WHERE user_id = $1",
+                user_id
+            ) or 0
+            remaining_refs = int(total_refs) - int(consumed_refs)
+            if remaining_refs < reward["referrals_needed"]:
+                return None  # Not enough new referrals — cannot claim
+            # ────────────────────────────────────────────────────────────
+
+            # 4. Get an unsold code
             code_row = await conn.fetchrow(
                 "SELECT id, code FROM coupon_codes WHERE coupon_id = $1 AND is_sold = FALSE LIMIT 1",
                 reward["coupon_id"]
@@ -869,10 +918,14 @@ async def claim_referral_reward(user_id: int, reward_id: int) -> str | None:
                 "UPDATE coupons SET stock = stock - 1 WHERE id = $1",
                 reward["coupon_id"]
             )
-            # Record claim
+            # Record claim — store referrals_needed so consumption is tracked
+            # permanently even if the referral_rewards row is later deleted.
             await conn.execute(
-                "INSERT INTO referral_claims (user_id, reward_id, coupon_id, code) VALUES ($1, $2, $3, $4)",
-                user_id, reward_id, reward["coupon_id"], code_row["code"]
+                "INSERT INTO referral_claims "
+                "(user_id, reward_id, coupon_id, code, referrals_needed) "
+                "VALUES ($1, $2, $3, $4, $5)",
+                user_id, reward_id, reward["coupon_id"],
+                code_row["code"], reward["referrals_needed"]
             )
             return code_row["code"]
 
