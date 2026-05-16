@@ -32,25 +32,40 @@ from aiogram.filters import Command
 async def cmd_id(message: types.Message):
     """Show the chat/channel/group ID. Works in private, group, supergroup."""
     chat = message.chat
+    user = message.from_user
 
-    if chat.type in ("group", "supergroup"):
+    user_id = user.id if user else "Unknown"
+    user_name = escape_md(user.first_name or "Unknown") if user else "Unknown"
+
+    if chat.type == "private":
+        username = f"@{escape_md(user.username)}" if user and user.username else "Not set"
+        text = (
+            f"🆔 *Your Telegram ID*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"👤 Name: *{user_name}*\n"
+            f"👤 Username: {username}\n"
+            f"🔑 ID: `{user_id}`"
+        )
+    elif chat.type in ("group", "supergroup"):
         title = escape_md(chat.title or "Unknown Group")
         text = (
-            f"👥 *Group Info*\n\n"
-            f"📝 Name: *{title}*\n"
-            f"🆔 Group ID: `{chat.id}`"
+            f"🆔 *Telegram IDs*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"👥 Group: *{title}*\n"
+            f"🔑 Group ID: `{chat.id}`\n\n"
+            f"👤 Your Name: *{user_name}*\n"
+            f"🔑 Your ID: `{user_id}`"
+        )
+    elif chat.type == "channel":
+        ch_name = escape_md(chat.title or "Unknown Channel")
+        text = (
+            f"🆔 *Telegram IDs*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📢 Channel: *{ch_name}*\n"
+            f"🔑 Channel ID: `{chat.id}`"
         )
     else:
-        # Private chat
-        user = message.from_user
-        name = escape_md(user.full_name or "Unknown")
-        username = f"@{escape_md(user.username)}" if user.username else "Not set"
-        text = (
-            f"👤 *Your Info*\n\n"
-            f"📝 Name: *{name}*\n"
-            f"👤 Username: {username}\n"
-            f"🆔 User ID: `{user.id}`"
-        )
+        text = f"🔑 Chat ID: `{chat.id}`\n👤 Your ID: `{user_id}`"
 
     await message.answer(text, parse_mode="MarkdownV2")
 

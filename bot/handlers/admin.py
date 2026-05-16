@@ -1948,7 +1948,7 @@ async def msg_manage_referral_user_input(message: types.Message, state: FSMConte
 
     if not refs:
         await message.answer(
-            f"ℹ️ User *{escape_md(referrer_name)}* `{referrer_id}` has no referrals\.",
+            f"ℹ️ User *{escape_md(referrer_name)}* `{referrer_id}` has no referrals\\.",
             parse_mode="MarkdownV2",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [back_button("admin_referral_settings")]
@@ -1973,7 +1973,7 @@ async def msg_manage_referral_user_input(message: types.Message, state: FSMConte
         f"🗑️ *Referrals by* `{referrer_id}` \\({escape_md(referrer_name)}\\)\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         + "\n".join(lines)
-        + f"\n\n_Removing a referral reverses the wallet credit and lets the referred user rejoin via another link\._"
+        + f"\n\n_Removing a referral reverses the wallet credit and lets the referred user rejoin via another link\\._"
     )
     buttons.append([InlineKeyboardButton(
         text="🗑️ Remove ALL referrals (reset)",
@@ -1997,19 +1997,19 @@ async def cb_admin_del_ref(callback: types.CallbackQuery):
     result = await db.delete_referral(referrer_id, referred_id)
     if result["deleted"]:
         rev = result["reversed_amount"]
-        msg = f"✅ Referral deleted\. Reversed ₹{escape_md(str(round(rev, 2)))} from referrer's wallet\."
+        msg = f"✅ Referral deleted\\. Reversed ₹{escape_md(str(round(rev, 2)))} from referrer's wallet\\."
         if rev == 0:
             msg = "✅ Referral deleted \(no wallet credit to reverse\)\."
         logger.info(f"Admin {callback.from_user.id} deleted referral {referrer_id}->{referred_id}")
     else:
-        msg = "❌ Referral record not found\."
+        msg = "❌ Referral record not found\\."
 
     await callback.answer()
     # Refresh the referral list for the same referrer
     refs = await db.get_referrals_for_user(referrer_id)
     if not refs:
         await callback.message.edit_text(
-            msg + f"\n\nNo more referrals for `{referrer_id}`\.",
+            msg + f"\n\nNo more referrals for `{referrer_id}`\\.",
             parse_mode="MarkdownV2",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [back_button("admin_referral_settings")]
@@ -2071,9 +2071,9 @@ async def cb_admin_del_ref_all(callback: types.CallbackQuery):
         show_alert=True
     )
     await callback.message.edit_text(
-        f"✅ *All {count} referral\(s\) deleted* for `{referrer_id}`\."
-        f"\n💰 Total reversed: ₹{escape_md(str(round(total_reversed, 2)))}\."
-        f"\n\nThe user can now be re\-referred for fresh testing\.",
+        f"✅ *All {count} referral\\(s\\) deleted* for `{referrer_id}`\\."
+        f"\n💰 Total reversed: ₹{escape_md(str(round(total_reversed, 2)))}\\."
+        f"\n\nThe user can now be re\\-referred for fresh testing\\.",
         parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [back_button("admin_referral_settings")]

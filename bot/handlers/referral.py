@@ -11,6 +11,7 @@ from bot.database import queries as db
 from bot.config import Config
 from bot.utils.helpers import escape_md, format_currency
 from bot.utils.decorators import error_handler
+from bot.utils.logger import logger
 from bot.keyboards.common import back_button
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
