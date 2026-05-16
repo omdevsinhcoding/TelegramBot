@@ -713,38 +713,79 @@ async def cb_admin_download_codes(callback: types.CallbackQuery):
 
 # ── View Orders ───────────────────────────────────────────
 
-@router.callback_query(F.data == "admin_orders")
+@router.callback_query(F.data.regexp(r"^admin_orders(:\d+)?$"))
 @admin_only
 @error_handler
 async def cb_admin_orders(callback: types.CallbackQuery):
-    """Show recent purchasers grouped by user."""
-    users = await db.get_recent_order_users(15)
+    """Show recent purchasers grouped by user — paginated (10 per page, up to 100)."""
+    # Parse page from callback data: admin_orders or admin_orders:2
+    parts = callback.data.split(":")
+    page = int(parts[1]) if len(parts) > 1 else 1
 
-    lines = ["🧾 *Recent Purchasers*\n"]
+    PER_PAGE = 10
+    TOTAL_FETCH = 100
+
+    users = await db.get_recent_order_users(TOTAL_FETCH)
+
     if not users:
-        lines.append("_No orders yet\\._")
-    else:
-        for u in users:
-            name = escape_md(u["full_name"] or "Unknown")
-            uid = u["user_id"]
-            orders = u["order_count"]
-            paid = u["paid_count"]
-            spent = escape_md(format_currency(float(u["total_spent"])))
-            lines.append(
-                f"👤 *{name}* \\(`{uid}`\\)\n"
-                f"   📦 Orders: *{orders}* \\| ✅ Paid: *{paid}* \\| 💰 {spent}"
-            )
+        await callback.message.edit_text(
+            "🧾 *Recent Purchasers*\n\n_No orders yet\\._",
+            parse_mode="MarkdownV2",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_panel")]])
+        )
+        await callback.answer()
+        return
+
+    total_users = len(users)
+    total_pages = (total_users + PER_PAGE - 1) // PER_PAGE
+    page = max(1, min(page, total_pages))
+
+    start = (page - 1) * PER_PAGE
+    end = min(start + PER_PAGE, total_users)
+    page_users = users[start:end]
+
+    lines = [
+        f"🧾 *RECENT PURCHASERS*",
+        f"━━━━━━━━━━━━━━━━━━━━",
+        f"📊 Showing *{start+1}\\-{end}* of *{total_users}* users",
+        f"📄 Page *{page}* / *{total_pages}*\n",
+    ]
+
+    for i, u in enumerate(page_users, start + 1):
+        name = escape_md((u["full_name"] or "Unknown")[:20])
+        uid = u["user_id"]
+        orders = u["order_count"]
+        paid = u["paid_count"]
+        pending = u.get("pending_count", 0)
+        spent = escape_md(format_currency(float(u["total_spent"])))
+
+        status_dot = "🟢" if paid > 0 else "🟡"
+        lines.append(
+            f"{status_dot} *{i}\\. {name}*\n"
+            f"   🆔 `{uid}`\n"
+            f"   📦 {orders} orders \\| ✅ {paid} paid \\| 💰 {spent}"
+        )
 
     text = "\n".join(lines)
 
     buttons = []
-    for u in users[:10]:
-        name = u["full_name"] or str(u["user_id"])
-        btn_text = f"👤 {name} ({u['order_count']} orders)"
+    for u in page_users:
+        name = (u["full_name"] or str(u["user_id"]))[:25]
+        paid_count = u["paid_count"]
+        btn_text = f"👤 {name} ({paid_count} paid)"
         buttons.append([InlineKeyboardButton(
             text=btn_text,
             callback_data=f"admin_order_user:{u['user_id']}"
         )])
+
+    # Pagination buttons
+    nav_row = []
+    if page > 1:
+        nav_row.append(InlineKeyboardButton(text="◀️ Back", callback_data=f"admin_orders:{page-1}"))
+    nav_row.append(InlineKeyboardButton(text=f"📄 {page}/{total_pages}", callback_data="noop"))
+    if page < total_pages:
+        nav_row.append(InlineKeyboardButton(text="Next ▶️", callback_data=f"admin_orders:{page+1}"))
+    buttons.append(nav_row)
 
     buttons.append([InlineKeyboardButton(text="🔍 Search Order ID", callback_data="admin_order_search")])
     buttons.append([back_button("admin_panel")])
@@ -964,31 +1005,107 @@ async def cb_admin_order_detail(callback: types.CallbackQuery):
 
 # ── Admin Logs ────────────────────────────────────────────
 
-@router.callback_query(F.data == "admin_logs")
+@router.callback_query(F.data.regexp(r"^admin_logs(:\d+)?$"))
 @admin_only
 @error_handler
 async def cb_admin_logs(callback: types.CallbackQuery):
-    logs = await db.get_admin_logs(15)
-    lines = ["📋 *Admin Logs*\n"]
-    for log in logs:
-        action = escape_md(log["action"])
-        target = escape_md(log["target_type"] or "")
-        tid = escape_md(log["target_id"] or "")
-        dt = escape_md(format_datetime(log["created_at"]))
-        # Show details if available
-        details = ""
-        if log.get("details"):
-            details = f"\n   📄 {escape_md(str(log['details']))}"
-        lines.append(
-            f"• {action} │ {target} `{tid}` │ {dt}{details}"
-        )
+    """Show admin activity logs — attractive, paginated display."""
+    parts = callback.data.split(":")
+    page = int(parts[1]) if len(parts) > 1 else 1
+
+    PER_PAGE = 8
+    TOTAL_FETCH = 50
+
+    logs = await db.get_admin_logs(TOTAL_FETCH)
+
     if not logs:
-        lines.append("No logs yet\\.")
+        await callback.message.edit_text(
+            "📋 *ADMIN ACTIVITY LOG*\n\n_No activity recorded yet\\._",
+            parse_mode="MarkdownV2",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_panel")]])
+        )
+        await callback.answer()
+        return
+
+    total_logs = len(logs)
+    total_pages = (total_logs + PER_PAGE - 1) // PER_PAGE
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * PER_PAGE
+    end = min(start + PER_PAGE, total_logs)
+    page_logs = logs[start:end]
+
+    # Action-specific emojis for visual appeal
+    action_emojis = {
+        "add": "➕", "create": "➕", "delete": "🗑️", "remove": "🗑️",
+        "update": "✏️", "edit": "✏️", "toggle": "🔀", "enable": "✅",
+        "disable": "❌", "broadcast": "📢", "export": "📤",
+        "import": "📥", "set": "⚙️", "reset": "🔄",
+    }
+
+    lines = [
+        "📋 *ADMIN ACTIVITY LOG*",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"📊 Showing *{start+1}\\-{end}* of *{total_logs}* entries",
+        f"📄 Page *{page}* / *{total_pages}*",
+        "",
+    ]
+
+    for log in page_logs:
+        action = str(log["action"] or "")
+        target = str(log["target_type"] or "")
+        tid = str(log["target_id"] or "")
+        dt = format_datetime(log["created_at"])
+
+        # Pick emoji based on action keywords
+        emoji = "📝"
+        action_lower = action.lower()
+        for keyword, em in action_emojis.items():
+            if keyword in action_lower:
+                emoji = em
+                break
+
+        # Format each log as a mini-card
+        action_esc = escape_md(action)
+        target_esc = escape_md(target)
+        tid_esc = escape_md(tid)
+        dt_esc = escape_md(dt)
+
+        card = f"{emoji} *{action_esc}*"
+        if target:
+            card += f"\n   📁 {target_esc}"
+        if tid:
+            card += f" `{tid_esc}`"
+        card += f"\n   🕐 {dt_esc}"
+
+        # Show details if available (truncated)
+        if log.get("details"):
+            detail_text = str(log["details"])[:80]
+            if len(str(log["details"])) > 80:
+                detail_text += "..."
+            card += f"\n   💬 _{escape_md(detail_text)}_"
+
+        lines.append(card)
+        lines.append("")  # Spacing between cards
 
     text = "\n".join(lines)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_panel")]])
+
+    # Pagination buttons
+    nav_row = []
+    if page > 1:
+        nav_row.append(InlineKeyboardButton(text="◀️ Newer", callback_data=f"admin_logs:{page-1}"))
+    nav_row.append(InlineKeyboardButton(text=f"📄 {page}/{total_pages}", callback_data="noop"))
+    if page < total_pages:
+        nav_row.append(InlineKeyboardButton(text="Older ▶️", callback_data=f"admin_logs:{page+1}"))
+
+    buttons = []
+    if nav_row:
+        buttons.append(nav_row)
+    buttons.append([back_button("admin_panel")])
+
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
     await callback.answer()
+
 
 
 # ── Broadcast ───────────────────────────────────────────
@@ -4530,4 +4647,12 @@ async def cb_admin_ban_msg_preview(callback: types.CallbackQuery):
         parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_buttons),
     )
+    await callback.answer()
+
+
+# ── No-op handler for pagination page indicators ──────────
+
+@router.callback_query(F.data == "noop")
+async def cb_noop(callback: types.CallbackQuery):
+    """No-op — handles page indicator buttons that shouldn't do anything."""
     await callback.answer()
