@@ -802,8 +802,8 @@ async def cb_check_razorpay(callback: types.CallbackQuery):
         coupon_id = order["coupon_id"]
 
         # Record transaction
+        pool = await db.get_pool()
         try:
-            pool = await db.get_pool()
             await pool.execute(
                 "UPDATE transactions SET status = 'success', utr = $1 WHERE order_id = $2 AND gateway = 'razorpay'",
                 payment_id or link_id, order_id
