@@ -1147,14 +1147,14 @@ async def cb_bc_quick_restart(callback: types.CallbackQuery, state: FSMContext):
     bot_name = await db.get_bot_name()
 
     restart_text = (
-        f"⚡ *{escape_md(bot_name)} — Updated\\!* ⚡\n"
+        f"⚡ <b>{bot_name} — Updated!</b> ⚡\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🎉 We've just rolled out exciting new features and improvements\\!\n\n"
-        f"✨ *What's new:*\n"
-        f"• 🚀 Faster performance\n"
-        f"• 🛡️ Better stability\n"
-        f"• 🎁 New rewards \\& offers\n\n"
-        f"👇 *Tap below to restart and enjoy the latest experience\\!*\n"
+        f"🎉 We've just rolled out exciting new features and improvements!\n\n"
+        f"✨ <b>What's new:</b>\n"
+        f"  • 🚀 Faster performance\n"
+        f"  • 🛡️ Better stability\n"
+        f"  • 🎁 New rewards & offers\n\n"
+        f"👇 <b>Tap below to restart and enjoy the latest experience!</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━"
     )
     bc_data = {
@@ -1173,15 +1173,14 @@ async def cb_bc_quick_restart(callback: types.CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="❌ Cancel", callback_data="admin_panel")],
     ])
     await callback.message.edit_text(
-        "📲 *Quick Restart Broadcast*\n\n"
+        "📲 <b>Quick Restart Broadcast</b>\n\n"
         "This will send the following message to ALL users:\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        f"⚡ *{escape_md(bot_name)} — Updated\\!* ⚡\n\n"
-        "🎉 Exciting new features \\& improvements\\!\n"
-        "👇 Tap to restart and enjoy\\!\n"
+        f"⚡ <b>{bot_name} — Updated!</b> ⚡\n\n"
+        "🎉 Exciting new features & improvements!\n"
+        "👇 Tap to restart and enjoy!\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🔗 Button: *🚀 Restart Bot Now*",
-        parse_mode="MarkdownV2",
+        f"🔗 Button: <b>🚀 Restart Bot Now</b>",
         reply_markup=kb,
     )
     await callback.answer()
