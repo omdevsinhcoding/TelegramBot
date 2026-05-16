@@ -25,7 +25,7 @@ router = Router()
 @router.message(F.text == "🎁 Refer & Earn")
 @error_handler
 async def text_refer_earn(message: types.Message):
-    """Show the Refer & Earn page."""
+    """Show the Refer & Earn page — respects admin mode setting."""
     settings = await db.get_referral_settings()
     if not settings or not settings["is_active"]:
         await message.answer("🎁 Referral program is currently inactive.")
@@ -40,23 +40,63 @@ async def text_refer_earn(message: types.Message):
     bot_info = await message.bot.get_me()
     link = f"https://t.me/{bot_info.username}?start={ref_code}"
 
-    reward_amt = float(settings.get("reward_amount", 10.0) or 10.0)
+    # ── Build mode-specific "how it works" section ──
+    mode = settings.get("mode", "wallet_reward") or "wallet_reward"
+
+    if mode == "code_reward":
+        rewards = await db.get_referral_rewards()
+        active_rewards = [r for r in rewards if r["is_active"]]
+        if active_rewards:
+            how_it_works = (
+                f"✨ *How it works:*\n"
+                f"1️⃣ Share your link\n"
+                f"2️⃣ Friends join the bot\n"
+                f"3️⃣ Reach milestones to claim free coupons\\!\n\n"
+                f"🎁 *Available Rewards:*\n"
+            )
+            for r in active_rewards:
+                title_esc = escape_md(r["title"])
+                needed = r["referrals_needed"]
+                if ref_count >= needed:
+                    how_it_works += f"✅ {title_esc} — {needed} refs \\(unlocked\\!\\)\n"
+                else:
+                    how_it_works += f"🔒 {title_esc} — {needed} refs\n"
+        else:
+            how_it_works = (
+                f"✨ *How it works:*\n"
+                f"1️⃣ Share your link\n"
+                f"2️⃣ Friends join the bot\n"
+                f"3️⃣ Earn free coupons\\!\n"
+            )
+    elif mode == "commission":
+        pct = settings.get("commission_percent", 10)
+        how_it_works = (
+            f"✨ *How it works:*\n"
+            f"1️⃣ Share your link\n"
+            f"2️⃣ Friends join \\& buy\n"
+            f"3️⃣ Earn 💰 *{escape_md(str(pct))}%* commission\n"
+        )
+    else:  # wallet_reward (default)
+        reward_amt = float(settings.get("reward_amount", 10.0) or 10.0)
+        amt_esc = escape_md(str(reward_amt))
+        how_it_works = (
+            f"✨ *How it works:*\n"
+            f"1️⃣ Share your link\n"
+            f"2️⃣ Friends join the bot\n"
+            f"3️⃣ Get 💵 *₹{amt_esc}* per referral\\!\n\n"
+            f"💰 Reward goes straight to your wallet\\!\n"
+        )
 
     link_esc = escape_md(link)
     ref_code_esc = escape_md(ref_code)
     earnings_esc = escape_md(format_currency(earnings))
     wallet_esc = escape_md(format_currency(wallet))
-    amt_esc = escape_md(str(reward_amt))
 
     text = (
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"🤝 *REFER \\& EARN*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"✨ *How it works:*\n"
-        f"1️⃣ Share your link\n"
-        f"2️⃣ Friends join the bot\n"
-        f"3️⃣ Get 💵 *₹{amt_esc}* per referral\\!\n\n"
-        f"💰 Reward goes straight to your wallet\\!\n\n"
+        f"{how_it_works}\n"
         f"🔗 *Your Link:*\n"
         f"`{link_esc}`\n\n"
         f"🔑 *Code:*\n"
@@ -71,6 +111,12 @@ async def text_refer_earn(message: types.Message):
     )
 
     buttons = []
+
+    # 🎁 Claim Rewards — show in code_reward mode when rewards are available
+    if mode == "code_reward":
+        claimable = await db.get_claimable_rewards(user_id, ref_count)
+        if claimable:
+            buttons.append([InlineKeyboardButton(text="🎁 Claim Rewards", callback_data="ref_claim_rewards")])
 
     # Allow manual entry if no referrer
     referrer = await db.get_referrer_of(user_id)
@@ -236,7 +282,13 @@ async def cb_ref_enter_code(callback: types.CallbackQuery, state: FSMContext):
 @router.message(ReferralStates.enter_referral_code)
 @error_handler
 async def msg_ref_enter_code(message: types.Message, state: FSMContext):
-    code = message.text.strip()
+    # Guard: menu button or command pressed during input
+    text = (message.text or "").strip()
+    if text.startswith("/") or any(ord(c) > 127 for c in text):
+        await state.clear()
+        return
+
+    code = text
     referrer = await db.get_user_by_referral_code(code)
     
     if not referrer:

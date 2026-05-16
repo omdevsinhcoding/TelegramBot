@@ -93,8 +93,14 @@ async def cb_topup_custom(callback: types.CallbackQuery, state: FSMContext):
 @router.message(WalletStates.waiting_custom_amount)
 @error_handler
 async def msg_custom_amount(message: types.Message, state: FSMContext):
+    # Guard: menu button or command pressed during input
+    text = (message.text or "").strip()
+    if text.startswith("/") or any(ord(c) > 127 for c in text):
+        await state.clear()
+        return
+
     try:
-        amount = float(message.text.strip())
+        amount = float(text)
         if amount < 10 or amount > 10000:
             await message.answer("⚠️ Amount must be between ₹10 and ₹10,000.")
             return
@@ -107,3 +113,13 @@ async def msg_custom_amount(message: types.Message, state: FSMContext):
     # Redirect to payment flow for topup
     from bot.handlers.purchase import initiate_topup_payment
     await initiate_topup_payment(message, amount)
+
+
+@router.callback_query(F.data.startswith("topup_amt:"))
+@error_handler
+async def cb_topup_amount(callback: types.CallbackQuery):
+    """Handle preset wallet top-up amount buttons."""
+    amount = float(callback.data.split(":")[1])
+    from bot.handlers.purchase import initiate_topup_payment
+    await initiate_topup_payment(callback.message, amount)
+    await callback.answer()

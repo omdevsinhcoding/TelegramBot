@@ -283,13 +283,19 @@ async def text_recover_coupon(message: types.Message, state: FSMContext):
 @error_handler
 async def msg_recover_by_order_id(message: types.Message, state: FSMContext):
     """Look up coupon code by order ID."""
+    # Guard: menu button or command pressed during input
+    text = (message.text or "").strip()
+    if text.startswith("/") or any(ord(c) > 127 for c in text):
+        await state.clear()
+        return
+
     await state.clear()
 
-    if not message.text:
+    if not text:
         await message.answer("⚠️ Please enter a valid Order ID.")
         return
 
-    order_id = message.text.strip()
+    order_id = text
 
     # Look up the order
     order = await db.get_order(order_id)
@@ -756,17 +762,6 @@ async def cb_back_home(callback: types.CallbackQuery):
         except Exception:
             pass
         await callback.message.answer(welcome, parse_mode="MarkdownV2", reply_markup=inline_kb)
-
-    # Refresh the reply keyboard with latest settings (no /start needed)
-    try:
-        fresh_kb = await get_fresh_main_menu_kb(callback.from_user.id)
-        await callback.message.answer(
-            "📋 *Quick Menu:*",
-            parse_mode="MarkdownV2",
-            reply_markup=fresh_kb,
-        )
-    except Exception:
-        pass
 
     await callback.answer()
 

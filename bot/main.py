@@ -22,7 +22,9 @@ from bot.handlers.coupons import router as coupons_router
 from bot.handlers.purchase import router as purchase_router
 from bot.handlers.admin import router as admin_router
 from bot.handlers.referral import router as referral_router
+from bot.handlers.wallet import router as wallet_router
 from bot.middlewares.force_join import ForceJoinMiddleware
+from bot.middlewares.fsm_clear import FSMClearMiddleware
 
 
 async def on_startup(bot: Bot):
@@ -80,6 +82,8 @@ async def main():
     dp = Dispatcher(storage=MemoryStorage())
 
     # Register Middlewares
+    # FSMClearMiddleware MUST be first — clears stale FSM state when menu buttons are pressed
+    dp.message.outer_middleware(FSMClearMiddleware())
     dp.message.outer_middleware(ForceJoinMiddleware())
     dp.callback_query.outer_middleware(ForceJoinMiddleware())
 
@@ -95,6 +99,7 @@ async def main():
     dp.include_router(purchase_router)
     dp.include_router(admin_router)
     dp.include_router(referral_router)
+    dp.include_router(wallet_router)
 
     logger.info("Starting DreamX Coupon Bot...")
 

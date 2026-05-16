@@ -5,6 +5,7 @@ Registers user, tracks referrals, and shows welcome screen.
 
 from aiogram import Router, types
 from aiogram.filters import CommandStart, Command
+from aiogram.fsm.context import FSMContext
 
 from bot.services.user_service import register_user
 from bot.keyboards.main_menu import get_fresh_main_menu_kb
@@ -18,7 +19,10 @@ router = Router()
 
 @router.message(CommandStart())
 @error_handler
-async def cmd_start(message: types.Message):
+async def cmd_start(message: types.Message, state: FSMContext):
+    # Clear any stale FSM state (e.g., abandoned BharatPe UTR entry)
+    await state.clear()
+
     user = message.from_user
     await register_user(user.id, user.username, user.full_name)
     logger.info(f"/start from {user.id} (@{user.username})")

@@ -201,8 +201,15 @@ async def cb_buy_custom_qty(callback: types.CallbackQuery, state: FSMContext):
 @error_handler
 async def msg_custom_qty(message: types.Message, state: FSMContext):
     """Receive custom quantity number."""
+    # Guard: menu button or command pressed during input
+    text = (message.text or "").strip()
+    if text.startswith("/") or any(ord(c) > 127 for c in text):
+        await state.clear()
+        await message.answer("⚠️ Quantity selection cancelled\\.", parse_mode="MarkdownV2")
+        return
+
     try:
-        qty = int(message.text.strip())
+        qty = int(text)
         if qty < 1:
             await message.answer("⚠️ Quantity must be at least 1.")
             return
@@ -864,6 +871,7 @@ async def msg_bharatpe_utr(message: types.Message, state: FSMContext):
     Automatic retry with delay is also implemented.
     """
     import asyncio
+    import re
 
     data = await state.get_data()
     order_id = data.get("order_id")
@@ -877,8 +885,16 @@ async def msg_bharatpe_utr(message: types.Message, state: FSMContext):
     utr = message.text.strip()
 
     # Validate UTR format (alphanumeric only)
-    import re
     if not re.match(r'^[a-zA-Z0-9]+$', utr):
+        # If text contains emoji or starts with /, it's a menu button/command — end session
+        if utr.startswith("/") or any(ord(c) > 127 for c in utr):
+            await state.clear()
+            await message.answer(
+                "⚠️ Payment session ended\\. Use the menu to continue\\.",
+                parse_mode="MarkdownV2",
+            )
+            return
+        # Otherwise it's a genuine invalid UTR attempt — let them retry
         await message.answer("⚠️ Symbol not allowed\\. UTR must be alphanumeric\\.", parse_mode="MarkdownV2")
         return
 
@@ -1679,5 +1695,26 @@ async def cb_view_codes(callback: types.CallbackQuery):
     await callback.message.edit_text("\n".join(lines), parse_mode="MarkdownV2", reply_markup=kb)
     await callback.answer()
 
+
+# ══════════════════════════════════════════════════════════════
+# WALLET TOP-UP VIA PAYMENT GATEWAY
+# ══════════════════════════════════════════════════════════════
+
+async def initiate_topup_payment(message: types.Message, amount: float):
+    """Initiate a wallet top-up payment via available gateway.
+    
+    Called from wallet.py when user enters a custom top-up amount.
+    Currently a placeholder — full gateway topup not yet implemented.
+    """
+    from bot.utils.helpers import escape_md, format_currency
+
+    amt_esc = escape_md(format_currency(amount))
+    await message.answer(
+        f"💰 *Wallet Top\\-Up*\n\n"
+        f"Amount: *{amt_esc}*\n\n"
+        f"⚠️ _Direct wallet top\\-up via payment gateway is coming soon\\._\n"
+        f"_For now, your wallet gets credited automatically through referral rewards\\._",
+        parse_mode="MarkdownV2",
+    )
 
 
