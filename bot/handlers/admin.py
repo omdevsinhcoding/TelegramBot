@@ -2089,7 +2089,9 @@ async def msg_manage_referral_user_input(message: types.Message, state: FSMConte
             rid = r["referred_id"]
             status = r["status"]
             commission = float(r["commission"] or 0)
-            lines.append(f"  \u2022 `{rid}` *{name}* \u2014 {status}, comm\\=\u20b9{commission:.1f}")
+            status_esc = escape_md(status)
+            comm_esc = escape_md(f"\u20b9{commission:.1f}")
+            lines.append(f"  \u2022 `{rid}` *{name}* \u2014 {status_esc}, comm\\={comm_esc}")
             buttons.append([InlineKeyboardButton(
                 text=f"\U0001f5d1\ufe0f Remove {str(r['referred_name'])[:20]} ({rid})",
                 callback_data=f"admin_del_ref:{user_id}:{rid}"
@@ -2166,7 +2168,9 @@ async def cb_admin_del_ref(callback: types.CallbackQuery):
         name = escape_md(str(r["referred_name"])[:25])
         rid  = r["referred_id"]
         commission = float(r["commission"] or 0)
-        lines.append(f"• `{rid}` *{name}* — {r['status']}, comm=₹{commission:.1f}")
+        status_esc = escape_md(r['status'])
+        comm_esc = escape_md(f"₹{commission:.1f}")
+        lines.append(f"• `{rid}` *{name}* — {status_esc}, comm\\={comm_esc}")
         buttons.append([InlineKeyboardButton(
             text=f"🗑️ Remove {str(r['referred_name'])[:20]} ({rid})",
             callback_data=f"admin_del_ref:{referrer_id}:{rid}"
