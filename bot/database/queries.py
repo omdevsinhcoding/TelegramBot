@@ -887,6 +887,13 @@ async def get_bot_settings():
     return row
 
 async def update_bot_settings(**kwargs):
+    """Update one or more bot_settings columns.
+    
+    Raises asyncpg.UndefinedColumnError if a column doesn't exist yet
+    (i.e. the relevant migration hasn't been run). Callers that toggle
+    reservation_enabled / waitlist_enabled should ensure migration_v3.sql
+    has been applied first.
+    """
     pool = await get_pool()
     sets = ", ".join(f"{k} = ${i+1}" for i, k in enumerate(kwargs.keys()))
     await pool.execute(f"UPDATE bot_settings SET {sets}, updated_at = NOW()", *list(kwargs.values()))
@@ -1024,15 +1031,46 @@ async def get_dynamic_config() -> dict:
         payment_poll_interval: int (default 30)
         reservation_enabled: bool (default True) — stock reservation system on/off
         waitlist_enabled: bool (default True) — waitlist on/off
+
+    NOTE: reservation_enabled and waitlist_enabled require migration_v3.sql to be
+    applied. If the columns are missing this function returns safe defaults instead
+    of crashing, so the bot stays operational until the migration is run.
     """
-    settings = await get_bot_settings()
-    return {
-        "payment_timeout_seconds": int(settings.get("payment_timeout_seconds") or 600),
-        "bharatpe_min_recharge": float(settings.get("bharatpe_min_recharge") or 10),
-        "payment_poll_interval": int(settings.get("payment_poll_interval") or 30),
-        "reservation_enabled": bool(settings.get("reservation_enabled", True) if settings.get("reservation_enabled") is not None else True),
-        "waitlist_enabled": bool(settings.get("waitlist_enabled", True) if settings.get("waitlist_enabled") is not None else True),
-    }
+    try:
+        settings = await get_bot_settings()
+        if settings is None:
+            raise ValueError("No bot_settings row")
+
+        # Helper: safely read a column that may not exist yet in the schema
+        def _safe_get(key, default):
+            try:
+                val = settings[key]
+                return val if val is not None else default
+            except (KeyError, Exception):
+                return default
+
+        return {
+            "payment_timeout_seconds": int(_safe_get("payment_timeout_seconds", 600)),
+            "bharatpe_min_recharge": float(_safe_get("bharatpe_min_recharge", 10)),
+            "payment_poll_interval": int(_safe_get("payment_poll_interval", 30)),
+            "reservation_enabled": bool(_safe_get("reservation_enabled", True)),
+            "waitlist_enabled": bool(_safe_get("waitlist_enabled", True)),
+        }
+    except Exception:
+        # Column(s) missing (migration_v3.sql not yet applied) — return safe defaults
+        import logging as _log
+        _log.getLogger("dreamx_bot").warning(
+            "get_dynamic_config: Could not read reservation_enabled/waitlist_enabled "
+            "— columns may be missing. Run sql/migration_v3.sql on your database. "
+            "Using safe defaults (both systems ON) until then."
+        )
+        return {
+            "payment_timeout_seconds": 600,
+            "bharatpe_min_recharge": 10.0,
+            "payment_poll_interval": 30,
+            "reservation_enabled": True,
+            "waitlist_enabled": True,
+        }
 
 
 # ── BULK COUPON CODE INSERT ─────────────────────────────

@@ -2221,7 +2221,17 @@ async def cb_admin_toggle_reservation(callback: types.CallbackQuery):
     dyn = await db.get_dynamic_config()
     current = dyn.get("reservation_enabled", True)
     new_val = not current
-    await db.update_bot_settings(reservation_enabled=new_val)
+    try:
+        await db.update_bot_settings(reservation_enabled=new_val)
+    except Exception as e:
+        if "does not exist" in str(e) or "UndefinedColumn" in type(e).__name__:
+            await callback.answer(
+                "⚠️ Database migration not applied!\n"
+                "Run sql/migration_v3.sql on your PostgreSQL database first.",
+                show_alert=True
+            )
+            return
+        raise
     status = "🟢 Enabled" if new_val else "🔴 Disabled"
     await db.add_admin_log(
         callback.from_user.id, "toggle_reservation", "bot_settings", "reservation_enabled",
@@ -2242,7 +2252,17 @@ async def cb_admin_toggle_waitlist(callback: types.CallbackQuery):
     dyn = await db.get_dynamic_config()
     current = dyn.get("waitlist_enabled", True)
     new_val = not current
-    await db.update_bot_settings(waitlist_enabled=new_val)
+    try:
+        await db.update_bot_settings(waitlist_enabled=new_val)
+    except Exception as e:
+        if "does not exist" in str(e) or "UndefinedColumn" in type(e).__name__:
+            await callback.answer(
+                "⚠️ Database migration not applied!\n"
+                "Run sql/migration_v3.sql on your PostgreSQL database first.",
+                show_alert=True
+            )
+            return
+        raise
     status = "🟢 Enabled" if new_val else "🔴 Disabled"
     await db.add_admin_log(
         callback.from_user.id, "toggle_waitlist", "bot_settings", "waitlist_enabled",
