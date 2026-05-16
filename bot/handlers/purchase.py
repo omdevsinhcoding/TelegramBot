@@ -597,13 +597,20 @@ async def msg_bharatpe_utr(message: types.Message, state: FSMContext):
         await message.answer("⚠️ This order is no longer pending\\. Please create a new order\\.", parse_mode="MarkdownV2")
         return
 
-    # Check if UTR was already used
+    # Check if UTR was already used (ANY status — prevents reuse even if admin gave account manually)
     pool = await db.get_pool()
     existing = await pool.fetchrow(
-        "SELECT order_id FROM transactions WHERE utr = $1 AND status = 'success'", utr
+        "SELECT order_id, status FROM transactions WHERE utr = $1", utr
     )
     if existing:
-        await message.answer("⚠️ This UTR has already been used\\.", parse_mode="MarkdownV2")
+        oid_esc = escape_md(existing["order_id"])
+        await message.answer(
+            f"🚫 *Already Claimed\\!*\n\n"
+            f"This UTR has already been used for order `{oid_esc}`\\.\n"
+            f"Each UTR can only be used once\\.\n\n"
+            f"_If you think this is a mistake, contact support\\._",
+            parse_mode="MarkdownV2",
+        )
         return
 
     # Show "checking" message
@@ -612,6 +619,15 @@ async def msg_bharatpe_utr(message: types.Message, state: FSMContext):
         parse_mode="MarkdownV2",
     )
 
+    # Store the UTR immediately in the transaction record (prevents reuse even if verification fails)
+    try:
+        await pool.execute(
+            "UPDATE transactions SET utr = $1 WHERE order_id = $2 AND utr IS NULL",
+            utr, order_id,
+        )
+    except Exception as e:
+        logger.warning(f"Non-critical: could not store UTR early for {order_id}: {e}")
+
     # Verify UTR against BharatPe API
     is_paid, details = await verify_bharatpe_utr(utr, amount)
 
@@ -619,8 +635,8 @@ async def msg_bharatpe_utr(message: types.Message, state: FSMContext):
         # Payment verified! Clear FSM state
         await state.clear()
 
-        # Store UTR in the transaction record (non-critical — don't let this block order completion)
-        txn_ref = utr  # fallback
+        # Update transaction with verification details
+        txn_ref = utr
         try:
             txn_row = await pool.fetchrow(
                 "SELECT txn_ref FROM transactions WHERE order_id = $1 ORDER BY created_at DESC LIMIT 1",
@@ -629,7 +645,7 @@ async def msg_bharatpe_utr(message: types.Message, state: FSMContext):
             if txn_row:
                 txn_ref = txn_row["txn_ref"]
                 await pool.execute(
-                    "UPDATE transactions SET utr = $1, raw_response = $2 WHERE txn_ref = $3",
+                    "UPDATE transactions SET utr = $1, raw_response = $2, status = 'success' WHERE txn_ref = $3",
                     utr, json.dumps(details), txn_ref,
                 )
         except Exception as e:
@@ -690,6 +706,7 @@ async def msg_bharatpe_utr(message: types.Message, state: FSMContext):
             parse_mode="MarkdownV2",
         )
         # DON'T clear state — let user retry with correct UTR
+
 
 
 # ══════════════════════════════════════════════════════════════
