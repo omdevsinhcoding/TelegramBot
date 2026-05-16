@@ -240,9 +240,12 @@ async def cb_ref_history(callback: types.CallbackQuery):
     lines = ["📋 *Referral History*\n"]
     for h in history:
         name = escape_md(h.get("full_name") or h.get("username") or "Unknown")
-        status = "✅" if h["status"] == "purchased" else "👤"
-        comm = escape_md(format_currency(float(h["commission"])))
-        lines.append(f"{status} {name} — {comm}")
+        # Guard against missing columns on older DB rows
+        status = h.get("status", "joined") or "joined"
+        comm_val = h.get("commission") or 0
+        status_icon = "✅" if status == "purchased" else "👤"
+        comm = escape_md(format_currency(float(comm_val)))
+        lines.append(f"{status_icon} {name} — {comm}")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
     await callback.message.edit_text(
@@ -361,7 +364,14 @@ async def msg_ref_enter_code(message: types.Message, state: FSMContext):
     if referrer_id == message.from_user.id:
         await message.answer("❌ You cannot use your own referral code.")
         return
-    
+
+    # Ensure current user is registered (prevents FK violation on referrals table)
+    await db.upsert_user(
+        message.from_user.id,
+        message.from_user.username,
+        message.from_user.full_name,
+    )
+
     await db.set_user_referrer(message.from_user.id, referrer_id)
     await state.clear()
     

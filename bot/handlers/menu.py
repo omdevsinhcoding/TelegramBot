@@ -912,6 +912,13 @@ async def cb_claim_free_coupon(callback: types.CallbackQuery):
         )
         return
 
+    # Ensure user is registered in DB (prevents FK violation in free_coupon_claims)
+    await db.upsert_user(
+        callback.from_user.id,
+        callback.from_user.username,
+        callback.from_user.full_name,
+    )
+
     # Try to claim
     codes = await db.claim_free_coupon(fc_id, user_id)
     if codes:

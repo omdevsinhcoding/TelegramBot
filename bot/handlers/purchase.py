@@ -275,6 +275,10 @@ async def cb_pay_wallet(callback: types.CallbackQuery):
 
     user_id = callback.from_user.id
     amount = float(coupon["discounted_price"]) * qty
+
+    # Ensure user exists in DB before creating order (prevents FK violation)
+    await db.upsert_user(user_id, callback.from_user.username, callback.from_user.full_name)
+
     wallet = await db.get_wallet_balance(user_id)
 
     if wallet < amount:
@@ -372,6 +376,9 @@ async def cb_pay_paytm(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     amount = float(coupon["discounted_price"]) * qty
 
+    # Ensure user exists in DB before creating order (prevents FK violation)
+    await db.upsert_user(user_id, callback.from_user.username, callback.from_user.full_name)
+
     # Create order with Paytm gateway (reserves stock atomically)
     try:
         order_info = await create_purchase_order(user_id, coupon_id, amount, "paytm", qty)
@@ -449,6 +456,9 @@ async def cb_pay_bharatpe(callback: types.CallbackQuery, state: FSMContext):
 
     user_id = callback.from_user.id
     amount = float(coupon["discounted_price"]) * qty
+
+    # Ensure user exists in DB before creating order (prevents FK violation)
+    await db.upsert_user(user_id, callback.from_user.username, callback.from_user.full_name)
 
     # Create order with BharatPe gateway (reserves stock atomically)
     try:
@@ -691,6 +701,9 @@ async def cb_pay_razorpay(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     amount = float(coupon["discounted_price"]) * qty
 
+    # Ensure user exists in DB before creating order (prevents FK violation)
+    await db.upsert_user(user_id, callback.from_user.username, callback.from_user.full_name)
+
     # Create order with Razorpay gateway (reserves stock atomically)
     try:
         order_info = await create_purchase_order(user_id, coupon_id, amount, "razorpay", qty)
@@ -704,6 +717,7 @@ async def cb_pay_razorpay(callback: types.CallbackQuery):
         )
         return
     order_id = order_info["order_id"]
+    txn_ref = order_info["txn_ref"]
 
     # Create Razorpay payment link
     from bot.payments.razorpay import create_payment_link
@@ -716,18 +730,12 @@ async def cb_pay_razorpay(callback: types.CallbackQuery):
     link_url = result["short_url"]
     link_id = result["link_id"]
 
-    # Store link_id for status checking
+    # Store link_id in the existing transaction record (UPDATE — avoids UNIQUE NOT NULL violation)
     try:
         pool = await db.get_pool()
         await pool.execute(
-            "UPDATE orders SET qr_message_id = 0 WHERE order_id = $1",
-            order_id
-        )
-        # Store razorpay link_id in a way we can retrieve it
-        await pool.execute(
-            "INSERT INTO transactions (order_id, gateway, utr, amount, status) "
-            "VALUES ($1, 'razorpay', $2, $3, 'pending')",
-            order_id, link_id, amount
+            "UPDATE transactions SET utr = $1 WHERE txn_ref = $2",
+            link_id, txn_ref
         )
     except Exception as e:
         logger.warning(f"Failed to store razorpay link_id: {e}")
