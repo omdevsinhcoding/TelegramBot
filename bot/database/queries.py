@@ -873,45 +873,64 @@ async def delete_referral(referrer_id: int, referred_id: int) -> dict:
         return {"deleted": False, "reversed_amount": 0.0}
 
     commission = float(ref_row["commission"] or 0)
-
-    # 2. If commission/reward was paid, reverse it from referrer's wallet
-    if commission > 0:
-        await pool.execute("""
-            UPDATE users
-            SET wallet_balance    = GREATEST(0, wallet_balance    - $2),
-                referral_earnings = GREATEST(0, referral_earnings - $2)
-            WHERE telegram_id = $1
-        """, referrer_id, commission)
-
-    # 3. For wallet_reward mode the commission column is 0 — check wallet_transactions
-    # to find if a reward was credited and reverse it
     reward_reversed = commission
-    if commission == 0:
-        txn = await pool.fetchrow("""
-            SELECT amount FROM wallet_transactions
-            WHERE user_id = $1
-              AND reference IN ($2, $3)
-            ORDER BY created_at DESC LIMIT 1
-        """, referrer_id,
-            f"ref_join_reward_from_{referred_id}",
-            f"ref_backfill_from_{referred_id}"
-        )
-        if txn:
-            reward_reversed = float(txn["amount"])
+
+    # 2. Try to reverse wallet credit (non-critical — must not block deletion)
+    try:
+        if commission > 0:
             await pool.execute("""
                 UPDATE users
                 SET wallet_balance    = GREATEST(0, wallet_balance    - $2),
                     referral_earnings = GREATEST(0, referral_earnings - $2)
                 WHERE telegram_id = $1
-            """, referrer_id, reward_reversed)
+            """, referrer_id, commission)
+        else:
+            # Commission column is 0 — check wallet_transactions for the actual reward
+            # Match ALL possible reference formats used across the codebase
+            txn = await pool.fetchrow("""
+                SELECT amount FROM wallet_transactions
+                WHERE user_id = $1
+                  AND reference IN ($2, $3, $4)
+                ORDER BY created_at DESC LIMIT 1
+            """, referrer_id,
+                f"referral_from_{referred_id}",
+                f"ref_join_reward_from_{referred_id}",
+                f"ref_backfill_from_{referred_id}"
+            )
+            if txn:
+                reward_reversed = float(txn["amount"])
+                await pool.execute("""
+                    UPDATE users
+                    SET wallet_balance    = GREATEST(0, wallet_balance    - $2),
+                        referral_earnings = GREATEST(0, referral_earnings - $2)
+                    WHERE telegram_id = $1
+                """, referrer_id, reward_reversed)
+            else:
+                # Fallback: check referral settings for default reward amount
+                try:
+                    ref_settings = await pool.fetchrow("SELECT reward_amount FROM referral_settings LIMIT 1")
+                    if ref_settings:
+                        reward_reversed = float(ref_settings["reward_amount"] or 0)
+                        if reward_reversed > 0:
+                            await pool.execute("""
+                                UPDATE users
+                                SET wallet_balance    = GREATEST(0, wallet_balance    - $2),
+                                    referral_earnings = GREATEST(0, referral_earnings - $2)
+                                WHERE telegram_id = $1
+                            """, referrer_id, reward_reversed)
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.warning(f"[REFERRAL] Wallet reversal failed (non-critical): {e}")
+        reward_reversed = 0.0
 
-    # 4. Delete the referral record
+    # 3. Delete the referral record (CRITICAL — must always execute)
     await pool.execute(
         "DELETE FROM referrals WHERE referrer_id = $1 AND referred_id = $2",
         referrer_id, referred_id
     )
 
-    # 5. Clear referred_by on the referred user so they can use another referral link
+    # 4. Clear referred_by on the referred user so they can enter a new code
     await pool.execute(
         "UPDATE users SET referred_by = NULL WHERE telegram_id = $1",
         referred_id

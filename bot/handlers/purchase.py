@@ -920,89 +920,159 @@ async def cb_check_payment(callback: types.CallbackQuery):
         await callback.answer("This order has expired. Please create a new order.", show_alert=True)
         return
 
-    # Status is pending — do a LIVE check with Paytm right now
+    # Status is pending — POLL Paytm API with retries
     pool = await db.get_pool()
     txn_row = await pool.fetchrow(
         "SELECT txn_ref, gateway, amount FROM transactions WHERE order_id = $1 ORDER BY created_at DESC LIMIT 1",
         order_id,
     )
 
-    if txn_row:
-        txn_ref = txn_row["txn_ref"]
-        gateway = txn_row["gateway"]
-        amount = float(txn_row["amount"])
+    if not txn_row:
+        await callback.answer("⚠️ Transaction not found.", show_alert=True)
+        return
 
-        # Only Paytm supports status polling — BharatPe uses UTR
-        if gateway == "bharatpe":
-            await callback.answer(
-                "📝 Please send your UTR number in the chat to verify payment.",
-                show_alert=True,
-            )
-            return
+    txn_ref = txn_row["txn_ref"]
+    gateway = txn_row["gateway"]
+    amount = float(txn_row["amount"])
 
-        response = await check_upi_status(txn_ref, gateway)
+    # Only Paytm supports status polling — BharatPe uses UTR
+    if gateway == "bharatpe":
+        await callback.answer(
+            "📝 Please send your UTR number in the chat to verify payment.",
+            show_alert=True,
+        )
+        return
 
-        if response.get("STATUS") != "API_ERROR" and "error" not in response:
-            is_paid, details = verify_payment(response, amount, txn_ref, gateway)
-            if is_paid:
-                # Store the Paytm UTR (BANKTXNID) so it can't be reused
-                if details and details.get("utr"):
-                    try:
-                        await pool.execute(
-                            "UPDATE transactions SET utr = $1 WHERE txn_ref = $2",
-                            details["utr"], txn_ref,
-                        )
-                    except Exception as e:
-                        logger.warning(f"Could not store Paytm UTR: {e}")
+    # Show "checking" status to user
+    await callback.answer()
+    oid_esc = escape_md(order_id)
+    checking_msg = await callback.message.answer(
+        f"🔄 *Verifying your payment\\.\\.\\.*\n\n"
+        f"📦 Order: `{oid_esc}`\n"
+        f"⏳ Checking with payment gateway\\.\\.\\.",
+        parse_mode="MarkdownV2",
+    )
 
-                # Payment received! Complete the order
-                from bot.services.order_service import complete_order
-                success = await complete_order(order_id, txn_ref, order["user_id"], bot=callback.bot)
-                if success:
-                    coupon = await get_coupon_detail(order["coupon_id"])
-                    code_row = await get_delivered_code(order_id, order["coupon_id"])
-                    code_text = ""
-                    if code_row:
-                        code_val = escape_md(code_row["code"])
-                        code_text = f"\n\n🔑 Code: `{code_val}`"
+    # Poll up to 3 times with 3-second gaps
+    import asyncio
+    MAX_ATTEMPTS = 3
+    POLL_DELAY = 3  # seconds
 
-                    coupon_title = escape_md(coupon["title"]) if coupon else "Coupon"
-                    amt = escape_md(format_currency(float(order["amount"])))
-                    oid = escape_md(order_id)
+    is_paid = False
+    details = None
 
-                    text = (
-                        f"🎉 *WOOHOO\\! PAYMENT SUCCESSFUL\\!* 🎉\n\n"
-                        f"🛍️ *Item:* {coupon_title}\n"
-                        f"💸 *Amount Paid:* {amt}\n"
-                        f"📦 *Order ID:* `{oid}`\n"
-                        f"{code_text}\n\n"
-                        f"💾 *Please save your Order ID for future reference:*\n"
-                        f"`{oid}`\n\n"
-                        f"🎊 *Thank you for your purchase\\! Enjoy\\!* 🎊"
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            response = await check_upi_status(txn_ref, gateway)
+
+            if response.get("STATUS") != "API_ERROR" and "error" not in response:
+                is_paid, details = verify_payment(response, amount, txn_ref, gateway)
+                if is_paid:
+                    break
+
+                # Check if definitively failed
+                from bot.payments.verifier import is_payment_failed
+                if is_payment_failed(response):
+                    break
+
+            if attempt < MAX_ATTEMPTS:
+                # Update checking message with attempt count
+                try:
+                    await checking_msg.edit_text(
+                        f"🔄 *Verifying your payment\\.\\.\\.*\n\n"
+                        f"📦 Order: `{oid_esc}`\n"
+                        f"⏳ Attempt {attempt}/{MAX_ATTEMPTS} — rechecking in {POLL_DELAY}s\\.\\.\\.",
+                        parse_mode="MarkdownV2",
                     )
+                except Exception:
+                    pass
+                await asyncio.sleep(POLL_DELAY)
 
-                    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
-                    
-                    # Delete QR message if stored
-                    try:
-                        if order.get("qr_message_id"):
-                            await callback.message.bot.delete_message(callback.message.chat.id, order["qr_message_id"])
-                    except Exception:
-                        pass
-                        
-                    try:
-                        await callback.message.delete()
-                    except Exception:
-                        pass
-                    await callback.message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
-                    # Re-send main menu keyboard
-                    from bot.keyboards.main_menu import get_fresh_main_menu_kb
-                    await callback.message.answer("👇 Use buttons below to continue:", reply_markup=await get_fresh_main_menu_kb(callback.from_user.id))
-                    await callback.answer("Payment verified! ✅", show_alert=True)
-                    return
+        except Exception as e:
+            logger.error(f"Paytm poll attempt {attempt} failed for {order_id}: {e}")
+            if attempt < MAX_ATTEMPTS:
+                await asyncio.sleep(POLL_DELAY)
 
-    # Still pending
-    await callback.answer("⏳ Payment not yet received. Please complete the payment and try again.", show_alert=True)
+    # Delete checking message
+    try:
+        await checking_msg.delete()
+    except Exception:
+        pass
+
+    if is_paid:
+        # Store the Paytm UTR (BANKTXNID) so it can't be reused
+        if details and details.get("utr"):
+            try:
+                await pool.execute(
+                    "UPDATE transactions SET utr = $1 WHERE txn_ref = $2",
+                    details["utr"], txn_ref,
+                )
+            except Exception as e:
+                logger.warning(f"Could not store Paytm UTR: {e}")
+
+        # Payment received! Complete the order
+        from bot.services.order_service import complete_order
+        success = await complete_order(order_id, txn_ref, order["user_id"], bot=callback.bot)
+        if success:
+            coupon = await get_coupon_detail(order["coupon_id"])
+            code_row = await get_delivered_code(order_id, order["coupon_id"])
+            code_text = ""
+            if code_row:
+                code_val = escape_md(code_row["code"])
+                code_text = f"\n\n🔑 Code: `{code_val}`"
+
+            coupon_title = escape_md(coupon["title"]) if coupon else "Coupon"
+            amt = escape_md(format_currency(float(order["amount"])))
+            oid = escape_md(order_id)
+            utr_text = ""
+            if details and details.get("utr"):
+                utr_text = f"\n🔖 *UTR:* `{escape_md(details['utr'])}`"
+
+            text = (
+                f"🎉 *WOOHOO\\! PAYMENT SUCCESSFUL\\!* 🎉\n\n"
+                f"🛍️ *Item:* {coupon_title}\n"
+                f"💸 *Amount Paid:* {amt}\n"
+                f"📦 *Order ID:* `{oid}`"
+                f"{utr_text}"
+                f"{code_text}\n\n"
+                f"💾 *Please save your Order ID for future reference:*\n"
+                f"`{oid}`\n\n"
+                f"🎊 *Thank you for your purchase\\! Enjoy\\!* 🎊"
+            )
+
+            kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
+            
+            # Delete QR message if stored
+            try:
+                if order.get("qr_message_id"):
+                    await callback.message.bot.delete_message(callback.message.chat.id, order["qr_message_id"])
+            except Exception:
+                pass
+                
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+            await callback.message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
+            # Re-send main menu keyboard
+            from bot.keyboards.main_menu import get_fresh_main_menu_kb
+            await callback.message.answer("👇 Use buttons below to continue:", reply_markup=await get_fresh_main_menu_kb(callback.from_user.id))
+            return
+    
+    # Payment NOT received after all attempts
+    amt_esc = escape_md(format_currency(amount))
+    await callback.message.answer(
+        f"❌ *Payment Not Received*\n\n"
+        f"We checked {MAX_ATTEMPTS} times but could not find your payment\\.\n\n"
+        f"📦 Order: `{oid_esc}`\n"
+        f"💰 Amount: {amt_esc}\n\n"
+        f"*Please ensure:*\n"
+        f"• You completed the payment for the exact amount\n"
+        f"• You paid using the QR code shown above\n"
+        f"• Wait a minute and try Check Payment again\n\n"
+        f"_If you already paid, please wait 1\\-2 minutes and try again\\._",
+        parse_mode="MarkdownV2",
+    )
 
 
 # ── Cancel Order ─────────────────────────────────────────
