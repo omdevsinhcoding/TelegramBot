@@ -1999,7 +1999,7 @@ async def cb_admin_del_ref(callback: types.CallbackQuery):
         rev = result["reversed_amount"]
         msg = f"✅ Referral deleted\\. Reversed ₹{escape_md(str(round(rev, 2)))} from referrer's wallet\\."
         if rev == 0:
-            msg = "✅ Referral deleted \(no wallet credit to reverse\)\."
+            msg = "✅ Referral deleted \\(no wallet credit to reverse\\)\\."
         logger.info(f"Admin {callback.from_user.id} deleted referral {referrer_id}->{referred_id}")
     else:
         msg = "❌ Referral record not found\\."

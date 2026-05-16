@@ -945,6 +945,16 @@ async def cb_check_payment(callback: types.CallbackQuery):
         if response.get("STATUS") != "API_ERROR" and "error" not in response:
             is_paid, details = verify_payment(response, amount, txn_ref, gateway)
             if is_paid:
+                # Store the Paytm UTR (BANKTXNID) so it can't be reused
+                if details and details.get("utr"):
+                    try:
+                        await pool.execute(
+                            "UPDATE transactions SET utr = $1 WHERE txn_ref = $2",
+                            details["utr"], txn_ref,
+                        )
+                    except Exception as e:
+                        logger.warning(f"Could not store Paytm UTR: {e}")
+
                 # Payment received! Complete the order
                 from bot.services.order_service import complete_order
                 success = await complete_order(order_id, txn_ref, order["user_id"], bot=callback.bot)
@@ -1042,6 +1052,16 @@ async def cb_cancel_order(callback: types.CallbackQuery, state: FSMContext):
                 if response.get("STATUS") != "API_ERROR" and "error" not in response:
                     is_paid, details = verify_payment(response, amount, txn_ref, gateway)
                     if is_paid:
+                        # Store the Paytm UTR so it can't be reused
+                        if details and details.get("utr"):
+                            try:
+                                await pool.execute(
+                                    "UPDATE transactions SET utr = $1 WHERE txn_ref = $2",
+                                    details["utr"], txn_ref,
+                                )
+                            except Exception as e:
+                                logger.warning(f"Could not store Paytm UTR: {e}")
+
                         # Payment was received! Complete the order instead
                         from bot.services.order_service import complete_order
                         success = await complete_order(order_id, txn_ref, order["user_id"], bot=callback.bot)
