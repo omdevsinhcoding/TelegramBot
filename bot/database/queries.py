@@ -29,6 +29,15 @@ async def get_all_users():
     return await pool.fetch("SELECT * FROM users ORDER BY joined_at DESC")
 
 
+async def get_users_paginated(limit: int = 15, offset: int = 0):
+    """Get users with pagination for admin panel."""
+    pool = await get_pool()
+    return await pool.fetch(
+        "SELECT * FROM users ORDER BY joined_at DESC LIMIT $1 OFFSET $2",
+        limit, offset
+    )
+
+
 async def get_user_count():
     pool = await get_pool()
     row = await pool.fetchrow("SELECT COUNT(*) as cnt FROM users")

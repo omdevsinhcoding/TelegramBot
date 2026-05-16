@@ -2844,7 +2844,7 @@ async def cb_admin_users(callback: types.CallbackQuery, state: FSMContext):
     )
     await state.set_state(AdminStates.user_search_input)
     buttons = [
-        [InlineKeyboardButton(text="📋 List Recent Users", callback_data="admin_users_recent")],
+        [InlineKeyboardButton(text=f"📋 All Users ({user_count})", callback_data="admin_users_all:1")],
         [admin_cancel_button()],
     ]
     await callback.message.edit_text(text, parse_mode="MarkdownV2",
@@ -2852,33 +2852,63 @@ async def cb_admin_users(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "admin_users_recent")
+@router.callback_query(F.data.startswith("admin_users_all:"))
 @admin_only
 @error_handler
-async def cb_admin_users_recent(callback: types.CallbackQuery):
-    users = await db.get_all_users()
-    recent = users[:15]  # Show last 15
+async def cb_admin_users_all(callback: types.CallbackQuery):
+    """Paginated list of ALL users."""
+    parts = callback.data.split(":")
+    page = int(parts[1]) if len(parts) > 1 else 1
+    per_page = 15
+    offset = (page - 1) * per_page
 
-    if not recent:
+    total = await db.get_user_count()
+    users = await db.get_users_paginated(per_page, offset)
+
+    if not users and page == 1:
         await callback.answer("No users found.", show_alert=True)
         return
 
+    total_pages = (total + per_page - 1) // per_page  # ceiling division
+
     buttons = []
-    for u in recent:
+    for u in users:
         name = u["full_name"] or u["username"] or str(u["telegram_id"])
         banned = "🚫 " if u.get("is_banned") else ""
         buttons.append([InlineKeyboardButton(
             text=f"{banned}{name[:25]} ({u['telegram_id']})",
             callback_data=f"admin_user_inspect:{u['telegram_id']}"
         )])
+
+    # Pagination nav
+    nav_row = []
+    if page > 1:
+        nav_row.append(InlineKeyboardButton(text="⬅️ Previous", callback_data=f"admin_users_all:{page - 1}"))
+    if page < total_pages:
+        nav_row.append(InlineKeyboardButton(text="Next ➡️", callback_data=f"admin_users_all:{page + 1}"))
+    if nav_row:
+        buttons.append(nav_row)
+
     buttons.append([back_button("admin_users")])
 
     await callback.message.edit_text(
-        "👥 *Recent Users*\n\nTap a user to inspect:",
+        f"👥 *All Users* — Page {page}/{total_pages}\n"
+        f"📊 Total: *{total}* users\n\n"
+        f"Tap a user to inspect:",
         parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
     )
     await callback.answer()
+
+
+@router.callback_query(F.data == "admin_users_recent")
+@admin_only
+@error_handler
+async def cb_admin_users_recent(callback: types.CallbackQuery):
+    """Redirect old 'recent' button to page 1 of all users."""
+    callback.data = "admin_users_all:1"
+    await cb_admin_users_all(callback)
+
 
 
 @router.message(AdminStates.user_search_input)
