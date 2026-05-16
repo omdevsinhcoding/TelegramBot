@@ -991,7 +991,7 @@ async def cb_admin_logs(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# ── Broadcast ─────────────────────────────────────────────
+# ── Broadcast ───────────────────────────────────────────
 
 @router.callback_query(F.data == "admin_broadcast")
 @admin_only
@@ -1020,22 +1020,28 @@ async def cb_broadcast(callback: types.CallbackQuery, state: FSMContext):
 @admin_only
 @error_handler
 async def cb_bc_quick_restart(callback: types.CallbackQuery, state: FSMContext):
-    """Pre-fill a 'please restart your bot' broadcast with a /start button."""
-    # Get bot username to build the deep link
+    """Pre-fill a beautiful restart broadcast with a /start button."""
     bot_me = await callback.message.bot.get_me()
     bot_username = bot_me.username
+    bot_name = await db.get_bot_name()
 
     restart_text = (
-        "🔄 *Bot Update!*\n\n"
-        "We've made improvements to the bot\\. "
-        "Please tap the button below to restart and get the latest experience\\! 🚀"
+        f"⚡ *{escape_md(bot_name)} — Updated\\!* ⚡\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🎉 We've just rolled out exciting new features and improvements\\!\n\n"
+        f"✨ *What's new:*\n"
+        f"• 🚀 Faster performance\n"
+        f"• 🛡️ Better stability\n"
+        f"• 🎁 New rewards \\& offers\n\n"
+        f"👇 *Tap below to restart and enjoy the latest experience\\!*\n"
+        f"━━━━━━━━━━━━━━━━━━━━"
     )
     bc_data = {
         "type": "text",
         "text": restart_text,
     }
     bc_buttons = [
-        {"text": "🚀 Restart Bot", "url": f"https://t.me/{bot_username}?start=restart"}
+        {"text": "🚀 Restart Bot Now", "url": f"https://t.me/{bot_username}?start=restart"}
     ]
     await state.clear()
     await state.update_data(bc_data=bc_data, bc_buttons=bc_buttons)
@@ -1047,18 +1053,17 @@ async def cb_bc_quick_restart(callback: types.CallbackQuery, state: FSMContext):
     ])
     await callback.message.edit_text(
         "📲 *Quick Restart Broadcast*\n\n"
-        "This will send the following message to ALL users with a *\"Restart Bot\"* button:\n\n"
+        "This will send the following message to ALL users:\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "🔄 *Bot Update\\!*\n\n"
-        "We've made improvements to the bot\\. "
-        "Please tap the button below to restart and get the latest experience\\! 🚀\n"
+        f"⚡ *{escape_md(bot_name)} — Updated\\!* ⚡\n\n"
+        "🎉 Exciting new features \\& improvements\\!\n"
+        "👇 Tap to restart and enjoy\\!\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🔗 Button: *Restart Bot* → `t\.me/{escape_md(bot_username)}?start=restart`",
+        f"🔗 Button: *🚀 Restart Bot Now*",
         parse_mode="MarkdownV2",
         reply_markup=kb,
     )
     await callback.answer()
-
 
 
 @router.message(AdminStates.broadcast_message)

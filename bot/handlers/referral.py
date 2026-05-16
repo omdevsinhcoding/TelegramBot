@@ -244,19 +244,75 @@ async def msg_ref_enter_code(message: types.Message, state: FSMContext):
         return
     
     referrer_id = referrer["telegram_id"]
-    if referrer_id == message.from_user.id:
+    user_id = message.from_user.id
+
+    if referrer_id == user_id:
         await message.answer("❌ You cannot use your own referral code.")
         return
 
-    # Ensure current user is registered (prevents FK violation on referrals table)
-    await db.upsert_user(
-        message.from_user.id,
-        message.from_user.username,
-        message.from_user.full_name,
-    )
+    # Check if already referred
+    existing = await db.get_referrer_of(user_id)
+    if existing:
+        await message.answer("❌ You already have a referrer. Each user can only be referred once.")
+        await state.clear()
+        return
 
-    await db.set_user_referrer(message.from_user.id, referrer_id)
+    # Ensure current user is registered (prevents FK violation)
+    await db.upsert_user(user_id, message.from_user.username, message.from_user.full_name)
+
+    # Record the referral
+    success = await db.record_referral(referrer_id, user_id)
+    if not success:
+        await message.answer("❌ Could not apply referral code. You may already have a referrer.")
+        await state.clear()
+        return
+
     await state.clear()
-    
-    await message.answer("✅ Referral code applied successfully!")
+    logger.info(f"[REFERRAL] Manual code entry: {referrer_id} -> {user_id}")
+
+    # Credit the referrer
+    ref_settings = await db.get_referral_settings()
+    if ref_settings and ref_settings["is_active"]:
+        reward_amt = float(ref_settings.get("reward_amount", 10.0) or 10.0)
+        try:
+            await db.add_referral_earnings(referrer_id, reward_amt)
+            logger.info(f"[REFERRAL] ₹{reward_amt} credited to {referrer_id} (manual code entry)")
+
+            # Log wallet transaction
+            try:
+                bal = await db.get_wallet_balance(referrer_id)
+                await db.add_wallet_transaction(
+                    referrer_id, reward_amt, "topup",
+                    bal_before=bal - reward_amt,
+                    bal_after=bal,
+                    reference=f"referral_from_{user_id}",
+                )
+            except Exception as wt_err:
+                logger.warning(f"[REFERRAL] wallet txn log failed: {wt_err}")
+
+            # Notify referrer
+            try:
+                ref_name = escape_md(message.from_user.first_name or "Someone")
+                bal = await db.get_wallet_balance(referrer_id)
+                notify_text = (
+                    f"🎉 *New Referral\\!*\n\n"
+                    f"👤 {ref_name} joined using your code\\!\n"
+                    f"💵 *₹{escape_md(str(reward_amt))}* added to your wallet\\!\n"
+                    f"💰 Balance: *₹{escape_md(str(round(float(bal), 2)))}*\n\n"
+                    f"🚀 _Keep sharing to earn more\\!_"
+                )
+                await message.bot.send_message(referrer_id, notify_text, parse_mode="MarkdownV2")
+            except Exception as n_err:
+                logger.warning(f"[REFERRAL] notification failed: {n_err}")
+
+        except Exception as credit_err:
+            logger.error(f"[REFERRAL] CREDIT FAILED (manual): {credit_err}")
+
+    referrer_name = referrer.get("full_name") or str(referrer_id)
+    await message.answer(
+        f"✅ Referral code applied! You were referred by *{escape_md(referrer_name)}*\\.\n"
+        f"🎁 Your friend has received their reward\\!",
+        parse_mode="MarkdownV2"
+    )
     await text_refer_earn(message)
+

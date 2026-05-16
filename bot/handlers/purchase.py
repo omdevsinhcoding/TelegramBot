@@ -580,18 +580,14 @@ async def msg_bharatpe_utr(message: types.Message, state: FSMContext):
 
     utr = message.text.strip()
 
-    # Validate UTR format (alphanumeric, max 12 chars — mirrors PHP validation)
+    # Validate UTR format (alphanumeric only)
     import re
     if not re.match(r'^[a-zA-Z0-9]+$', utr):
         await message.answer("⚠️ Symbol not allowed\\. UTR must be alphanumeric\\.", parse_mode="MarkdownV2")
         return
 
-    if len(utr) > 22:
-        await message.answer("⚠️ UTR cannot be more than 22 characters\\.", parse_mode="MarkdownV2")
-        return
-
-    if utr[0] == '0':
-        await message.answer("⚠️ Invalid UTR entered\\.", parse_mode="MarkdownV2")
+    if len(utr) < 6 or len(utr) > 30:
+        await message.answer("⚠️ UTR must be 6–30 characters\\.", parse_mode="MarkdownV2")
         return
 
     # Check order still valid
