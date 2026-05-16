@@ -45,12 +45,17 @@ async def get_user_count():
 
 
 async def get_total_stock():
-    """Get total available stock across all active coupons."""
+    """Total available stock = actual unsold codes across all active coupons.
+    Counts directly from coupon_codes so it's always accurate.
+    """
     pool = await get_pool()
-    row = await pool.fetchrow(
-        "SELECT COALESCE(SUM(stock), 0) as total FROM coupons WHERE is_active = TRUE"
-    )
-    return row["total"]
+    row = await pool.fetchrow("""
+        SELECT COUNT(*) as total
+        FROM coupon_codes cc
+        JOIN coupons c ON c.id = cc.coupon_id
+        WHERE cc.is_sold = FALSE AND c.is_active = TRUE
+    """)
+    return row["total"] if row else 0
 
 async def ban_user(telegram_id: int, banned: bool = True):
     pool = await get_pool()
@@ -509,7 +514,49 @@ async def get_pending_transactions():
     )
 
 
+
 # ── COUPON CODES QUERIES ─────────────────────────────────
+
+async def sync_coupon_stock(coupon_id: int):
+    """Reconcile coupons.stock with the real count of unsold codes.
+
+    Call this after any operation that changes coupon_codes (add, delete).
+    The coupons.stock column is used for fast stock checks / reservations,
+    so keeping it in sync is critical for accurate display.
+    """
+    pool = await get_pool()
+    await pool.execute("""
+        UPDATE coupons
+        SET stock = (
+            SELECT COUNT(*) FROM coupon_codes
+            WHERE coupon_id = $1 AND is_sold = FALSE
+        ),
+        updated_at = NOW()
+        WHERE id = $1
+    """, coupon_id)
+
+
+async def sync_all_coupon_stocks():
+    """Reconcile stock for ALL coupons in one query. Use after bulk operations."""
+    pool = await get_pool()
+    await pool.execute("""
+        UPDATE coupons c
+        SET stock = sub.unsold,
+            updated_at = NOW()
+        FROM (
+            SELECT coupon_id, COUNT(*) as unsold
+            FROM coupon_codes
+            WHERE is_sold = FALSE
+            GROUP BY coupon_id
+        ) sub
+        WHERE c.id = sub.coupon_id
+    """)
+    # Zero out coupons that have no codes at all
+    await pool.execute("""
+        UPDATE coupons SET stock = 0, updated_at = NOW()
+        WHERE id NOT IN (SELECT DISTINCT coupon_id FROM coupon_codes WHERE is_sold = FALSE)
+    """)
+
 
 async def add_coupon_code(coupon_id: int, code: str):
     pool = await get_pool()
@@ -529,10 +576,15 @@ async def get_available_code(coupon_id: int):
 
 async def mark_code_sold(code_id: int, user_id: int, order_id: str):
     pool = await get_pool()
+    # Get coupon_id before marking sold (needed for stock sync)
+    row = await pool.fetchrow("SELECT coupon_id FROM coupon_codes WHERE id = $1", code_id)
     await pool.execute("""
         UPDATE coupon_codes SET is_sold = TRUE, sold_to = $2, order_id = $3, sold_at = NOW()
         WHERE id = $1
     """, code_id, user_id, order_id)
+    # Sync stock: ensure coupons.stock matches actual unsold count
+    if row:
+        await sync_coupon_stock(row["coupon_id"])
 
 
 async def get_coupon_unsold_codes_list(coupon_id: int) -> list[str]:
@@ -791,6 +843,81 @@ async def record_referral(referrer_id: int, referred_id: int) -> bool:
         await pool.execute("UPDATE users SET referred_by = $1 WHERE telegram_id = $2", referrer_id, referred_id)
         return True
     except Exception: return False
+
+async def get_referrals_for_user(referrer_id: int) -> list:
+    """Return all referral rows where user is the referrer, with referred user's name."""
+    pool = await get_pool()
+    return await pool.fetch("""
+        SELECT r.referrer_id, r.referred_id, r.status, r.commission,
+               COALESCE(u.full_name, u.username, r.referred_id::text) AS referred_name,
+               r.created_at
+        FROM referrals r
+        LEFT JOIN users u ON u.telegram_id = r.referred_id
+        WHERE r.referrer_id = $1
+        ORDER BY r.created_at DESC
+    """, referrer_id)
+
+async def delete_referral(referrer_id: int, referred_id: int) -> dict:
+    """Delete a referral record and reverse the wallet credit.
+
+    Returns: {deleted: bool, reversed_amount: float}
+    """
+    pool = await get_pool()
+
+    # 1. Get the referral row so we know how much commission/reward was given
+    ref_row = await pool.fetchrow(
+        "SELECT status, commission FROM referrals WHERE referrer_id = $1 AND referred_id = $2",
+        referrer_id, referred_id
+    )
+    if not ref_row:
+        return {"deleted": False, "reversed_amount": 0.0}
+
+    commission = float(ref_row["commission"] or 0)
+
+    # 2. If commission/reward was paid, reverse it from referrer's wallet
+    if commission > 0:
+        await pool.execute("""
+            UPDATE users
+            SET wallet_balance    = GREATEST(0, wallet_balance    - $2),
+                referral_earnings = GREATEST(0, referral_earnings - $2)
+            WHERE telegram_id = $1
+        """, referrer_id, commission)
+
+    # 3. For wallet_reward mode the commission column is 0 — check wallet_transactions
+    # to find if a reward was credited and reverse it
+    reward_reversed = commission
+    if commission == 0:
+        txn = await pool.fetchrow("""
+            SELECT amount FROM wallet_transactions
+            WHERE user_id = $1
+              AND reference IN ($2, $3)
+            ORDER BY created_at DESC LIMIT 1
+        """, referrer_id,
+            f"ref_join_reward_from_{referred_id}",
+            f"ref_backfill_from_{referred_id}"
+        )
+        if txn:
+            reward_reversed = float(txn["amount"])
+            await pool.execute("""
+                UPDATE users
+                SET wallet_balance    = GREATEST(0, wallet_balance    - $2),
+                    referral_earnings = GREATEST(0, referral_earnings - $2)
+                WHERE telegram_id = $1
+            """, referrer_id, reward_reversed)
+
+    # 4. Delete the referral record
+    await pool.execute(
+        "DELETE FROM referrals WHERE referrer_id = $1 AND referred_id = $2",
+        referrer_id, referred_id
+    )
+
+    # 5. Clear referred_by on the referred user so they can use another referral link
+    await pool.execute(
+        "UPDATE users SET referred_by = NULL WHERE telegram_id = $1",
+        referred_id
+    )
+
+    return {"deleted": True, "reversed_amount": reward_reversed}
 
 async def get_referral_count(user_id: int) -> int:
     pool = await get_pool()
@@ -1194,6 +1321,8 @@ async def add_coupon_codes_bulk(coupon_id: int, codes: list[str]):
                 "INSERT INTO coupon_codes (coupon_id, code) VALUES ($1, $2)",
                 [(coupon_id, code) for code in codes]
             )
+    # Sync coupons.stock with actual unsold count
+    await sync_coupon_stock(coupon_id)
     return len(codes)
 
 

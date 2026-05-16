@@ -24,7 +24,7 @@ router = Router()
 @router.message(F.text == "🎁 Refer & Earn")
 @error_handler
 async def text_refer_earn(message: types.Message):
-    """Show the Refer & Earn page with rewards info."""
+    """Show the Refer & Earn page."""
     settings = await db.get_referral_settings()
     if not settings or not settings["is_active"]:
         await message.answer("🎁 Referral program is currently inactive.")
@@ -39,60 +39,23 @@ async def text_refer_earn(message: types.Message):
     bot_info = await message.bot.get_me()
     link = f"https://t.me/{bot_info.username}?start={ref_code}"
 
-    mode = settings["mode"]
-    if mode == "code_reward":
-        rewards = await db.get_referral_rewards()
-        active_rewards = [r for r in rewards if r["is_active"]]
-        if active_rewards:
-            how_it_works = (
-                f"✨ *How it works:*\n"
-                f"1️⃣ Share your link\n"
-                f"2️⃣ Friends join the bot\n"
-                f"3️⃣ Reach milestones to claim free coupons\\!\n\n"
-                f"🎁 *Available Rewards:*\n"
-            )
-            for r in active_rewards:
-                title_esc = escape_md(r["title"])
-                needed = r["referrals_needed"]
-                if ref_count >= needed:
-                    how_it_works += f"✅ {title_esc} — {needed} refs \\(unlocked\\!\\)\n"
-                else:
-                    how_it_works += f"🔒 {title_esc} — {needed} refs\n"
-        else:
-            how_it_works = (
-                f"✨ *How it works:*\n"
-                f"1️⃣ Share your link\n"
-                f"2️⃣ Friends join the bot\n"
-                f"3️⃣ Earn free coupons\\!\n"
-            )
-    elif mode == "wallet_reward":
-        reward_amt = float(settings.get("reward_amount", 10.0) or 10.0)
-        how_it_works = (
-            f"✨ *How it works:*\n"
-            f"1️⃣ Share your link\n"
-            f"2️⃣ Friends join the bot\n"
-            f"3️⃣ Get 💵 *₹{escape_md(str(reward_amt))}* per referral\\!\n\n"
-            f"💰 Reward goes straight to your wallet\\!\n"
-        )
-    else:  # commission
-        pct = settings["commission_percent"]
-        how_it_works = (
-            f"✨ *How it works:*\n"
-            f"1️⃣ Share your link\n"
-            f"2️⃣ Friends join \\& buy\n"
-            f"3️⃣ Earn 💰 *{escape_md(str(pct))}%* commission\n"
-        )
+    reward_amt = float(settings.get("reward_amount", 10.0) or 10.0)
 
     link_esc = escape_md(link)
     ref_code_esc = escape_md(ref_code)
     earnings_esc = escape_md(format_currency(earnings))
     wallet_esc = escape_md(format_currency(wallet))
+    amt_esc = escape_md(str(reward_amt))
 
     text = (
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"🤝 *REFER \\& EARN*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"{how_it_works}\n"
+        f"✨ *How it works:*\n"
+        f"1️⃣ Share your link\n"
+        f"2️⃣ Friends join the bot\n"
+        f"3️⃣ Get 💵 *₹{amt_esc}* per referral\\!\n\n"
+        f"💰 Reward goes straight to your wallet\\!\n\n"
         f"🔗 *Your Link:*\n"
         f"`{link_esc}`\n\n"
         f"🔑 *Code:*\n"
@@ -107,12 +70,6 @@ async def text_refer_earn(message: types.Message):
     )
 
     buttons = []
-
-    # 🎁 Claim Rewards — FIRST PRIORITY (top)
-    if mode == "code_reward":
-        claimable = await db.get_claimable_rewards(user_id, ref_count)
-        if claimable:
-            buttons.append([InlineKeyboardButton(text="🎁 Claim Rewards", callback_data="ref_claim_rewards")])
 
     # Allow manual entry if no referrer
     referrer = await db.get_referrer_of(user_id)
@@ -255,106 +212,12 @@ async def cb_ref_history(callback: types.CallbackQuery):
 
 
 async def process_referral_on_purchase(user_id: int, order_amount, bot=None):
-    """Credit referral COMMISSION to referrer on every purchase.
+    """No-op — all referral rewards are credited at JOIN time (start.py).
 
-    Only handles COMMISSION mode here.
-    wallet_reward is credited at JOIN time (start.py) — not on purchase.
-    code_reward is milestone-based — user claims manually.
+    This function is kept as a stub so callers in order_service.py
+    don't need to be modified.
     """
-    from bot.utils.logger import logger
-
-    try:
-        settings = await db.get_referral_settings()
-    except Exception as e:
-        logger.error(f"[REFERRAL] get_referral_settings failed: {e}")
-        return
-
-    if not settings or not settings["is_active"]:
-        return
-
-    mode = settings["mode"]
-    if mode != "commission":
-        # wallet_reward → handled at join time in start.py
-        # code_reward   → user claims manually from the UI
-        return
-
-    # ── Find referrer ────────────────────────────────────────────────
-    try:
-        pool = await db.get_pool()
-        user_row = await pool.fetchrow(
-            "SELECT referred_by FROM users WHERE telegram_id = $1", user_id
-        )
-    except Exception as e:
-        logger.error(f"[REFERRAL] DB lookup referred_by failed (buyer={user_id}): {e}")
-        return
-
-    if not user_row or not user_row["referred_by"]:
-        return
-
-    referrer_id = user_row["referred_by"]
-    amount      = float(order_amount)
-    pct         = float(settings.get("commission_percent") or 0)
-    commission  = round(amount * pct / 100, 2)
-
-    if commission <= 0:
-        logger.warning(f"[REFERRAL] commission=0 (pct={pct}%, amt={amount}) — skip.")
-        return
-
-    logger.info(
-        f"[REFERRAL] Commission: buyer={user_id}, referrer={referrer_id}, "
-        f"order=₹{amount}, pct={pct}%, commission=₹{commission}"
-    )
-
-    # ── Credit wallet ────────────────────────────────────────────────
-    try:
-        await db.add_referral_earnings(referrer_id, commission)
-    except Exception as e:
-        logger.error(f"[REFERRAL] add_referral_earnings FAILED: {e}")
-        return
-
-    # Log wallet transaction
-    try:
-        bal = await db.get_wallet_balance(referrer_id)
-        await db.add_wallet_transaction(
-            referrer_id, commission, "topup",
-            bal_before=bal - commission, bal_after=bal,
-            reference=f"ref_commission_from_{user_id}",
-        )
-    except Exception as e:
-        logger.warning(f"[REFERRAL] wallet_txn log failed (non-critical): {e}")
-
-    # Update referrals row
-    try:
-        await pool.execute("""
-            INSERT INTO referrals (referrer_id, referred_id, status, commission)
-            VALUES ($1, $2, 'purchased', $3)
-            ON CONFLICT (referrer_id, referred_id)
-            DO UPDATE SET status = 'purchased',
-                          commission = referrals.commission + EXCLUDED.commission
-        """, referrer_id, user_id, commission)
-    except Exception as e:
-        logger.warning(f"[REFERRAL] referrals update failed (non-critical): {e}")
-
-    # ── Notify referrer ──────────────────────────────────────────────
-    try:
-        buyer = await pool.fetchrow(
-            "SELECT full_name, username FROM users WHERE telegram_id = $1", user_id
-        )
-        name = (buyer["full_name"] or buyer["username"] or str(user_id)) if buyer else str(user_id)
-        bal  = await db.get_wallet_balance(referrer_id)
-        txt = (
-            f"🎉 *Referral Commission Earned\\!*\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"👤 *{escape_md(name)}* made a purchase\\!\n"
-            f"💰 Commission: *₹{escape_md(str(commission))}* "
-            f"\\({escape_md(str(pct))}%\\)\n"
-            f"💵 Wallet Balance: *₹{escape_md(str(round(bal, 2)))}*\n\n"
-            f"🚀 _Keep referring to earn more\\!_"
-        )
-        if bot:
-            await bot.send_message(referrer_id, txt, parse_mode="MarkdownV2")
-    except Exception as e:
-        logger.warning(f"[REFERRAL] notification failed (non-critical): {e}")
+    pass
 
 
 @router.callback_query(F.data == "ref_enter_code")

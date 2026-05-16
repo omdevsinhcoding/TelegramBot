@@ -37,30 +37,23 @@ async def cmd_start(message: types.Message):
                     if success:
                         referrer_id = referrer["telegram_id"]
                         referrer_name = referrer.get("full_name") or str(referrer_id)
-                        logger.info(f"Referral recorded: {referrer_id} -> {user.id}")
+                        logger.info(f"[REFERRAL] Recorded: {referrer_id} -> {user.id}")
 
-                        # Notify the REFERRED user
+                        # Show referred user a message
                         referral_msg = (
                             f"\n\n🔗 You were referred by *{escape_md(referrer_name)}*\\!\n"
-                            f"Start shopping to unlock referral rewards 🎁"
+                            f"🎁 Your friend will receive a reward\\!"
                         )
 
-                        # Get referral mode
+                        # ── Credit the referrer IMMEDIATELY ──
                         ref_settings = await db.get_referral_settings()
-                        mode = ref_settings["mode"] if ref_settings else "commission"
-
-                        # Grant wallet_reward IMMEDIATELY on join — no channel gate
-                        # (force_channel controls bot access, not referral rewards)
-                        reward_msg = ""
-                        if mode == "wallet_reward" and ref_settings:
+                        if ref_settings and ref_settings["is_active"]:
                             reward_amt = float(ref_settings.get("reward_amount", 10.0) or 10.0)
                             try:
+                                # Credit wallet
                                 await db.add_referral_earnings(referrer_id, reward_amt)
-                                reward_msg = f"\n💵 ₹{reward_amt} added to your wallet\\!"
-                                logger.info(
-                                    f"[REFERRAL] wallet_reward ₹{reward_amt} credited: "
-                                    f"referrer={referrer_id}, new_user={user.id}"
-                                )
+                                logger.info(f"[REFERRAL] ₹{reward_amt} credited to {referrer_id}")
+
                                 # Log wallet transaction
                                 try:
                                     bal = await db.get_wallet_balance(referrer_id)
@@ -68,45 +61,36 @@ async def cmd_start(message: types.Message):
                                         referrer_id, reward_amt, "topup",
                                         bal_before=bal - reward_amt,
                                         bal_after=bal,
-                                        reference=f"ref_join_reward_from_{user.id}",
+                                        reference=f"referral_from_{user.id}",
                                     )
                                 except Exception as wt_err:
-                                    logger.warning(f"[REFERRAL] wallet_txn log failed: {wt_err}")
+                                    logger.warning(f"[REFERRAL] wallet txn log failed: {wt_err}")
+
+                                # Notify referrer
+                                try:
+                                    ref_name = escape_md(user.first_name or "Someone")
+                                    bal = await db.get_wallet_balance(referrer_id)
+                                    notify_text = (
+                                        f"🎉 *New Referral\\!*\n\n"
+                                        f"👤 {ref_name} joined using your link\\!\n"
+                                        f"💵 *₹{escape_md(str(reward_amt))}* added to your wallet\\!\n"
+                                        f"💰 Balance: *₹{escape_md(str(round(float(bal), 2)))}*\n\n"
+                                        f"🚀 _Keep sharing to earn more\\!_"
+                                    )
+                                    await message.bot.send_message(
+                                        referrer_id, notify_text, parse_mode="MarkdownV2"
+                                    )
+                                except Exception as n_err:
+                                    logger.warning(f"[REFERRAL] notification failed: {n_err}")
+
                             except Exception as credit_err:
-                                logger.error(
-                                    f"[REFERRAL] wallet_reward credit FAILED: "
-                                    f"referrer={referrer_id}, amount={reward_amt}, err={credit_err}"
-                                )
-
-                        # Notify the REFERRER
-                        try:
-                            ref_name = escape_md(user.first_name or "Someone")
-                            notify_text = (
-                                f"🎉 *New Referral\\!*\n\n"
-                                f"👤 {ref_name} joined using your link\\!"
-                            )
-                            if mode == "wallet_reward" and ref_settings:
-                                reward_amt = float(ref_settings.get("reward_amount", 10.0) or 10.0)
-                                bal = await db.get_wallet_balance(referrer_id)
-                                notify_text += (
-                                    f"\n💵 *₹{escape_md(str(reward_amt))}* added to your wallet\\!"
-                                    f"\n💰 Balance: *₹{escape_md(str(round(float(bal), 2)))}*"
-                                )
-                            elif mode == "commission":
-                                pct = ref_settings.get("commission_percent", 10)
-                                notify_text += f"\n💰 You'll earn {escape_md(str(pct))}% on their purchases\\!"
-                            elif mode == "code_reward":
-                                notify_text += f"\n🎁 Keep referring to unlock free coupons\\!"
-
-                            notify_text += f"\nKeep sharing to earn more rewards 💰"
-
-                            await message.bot.send_message(
-                                referrer_id, notify_text, parse_mode="MarkdownV2",
-                            )
-                        except Exception as notify_err:
-                            logger.warning(f"[REFERRAL] referrer notification failed: {notify_err}")
+                                logger.error(f"[REFERRAL] CREDIT FAILED: {credit_err}")
+                        else:
+                            logger.info("[REFERRAL] System inactive — no reward credited.")
+                    else:
+                        logger.info(f"[REFERRAL] record_referral returned False for {user.id}")
     except Exception as e:
-        logger.warning(f"Referral processing error (non-critical): {e}")
+        logger.error(f"[REFERRAL] Start referral error: {e}")
 
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 

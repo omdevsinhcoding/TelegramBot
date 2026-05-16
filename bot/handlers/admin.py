@@ -69,6 +69,7 @@ class AdminStates(StatesGroup):
     ref_commission_input = State()
     ref_reward_amount_input = State()
     ref_reward_count_input = State()  # for setting referrals_needed on a coupon reward
+    manage_referral_user_input = State()  # search user to manage their referrals
     # Payment settings
     payment_field_input = State()
     payment_qr_upload = State()
@@ -1882,6 +1883,7 @@ async def cb_admin_referral_settings(callback: types.CallbackQuery):
 
     toggle_text = "🔴 Disable Referrals" if settings["is_active"] else "🟢 Enable Referrals"
     buttons.append([InlineKeyboardButton(text=toggle_text, callback_data="admin_ref_toggle_active")])
+    buttons.append([InlineKeyboardButton(text="🗑️ Manage / Remove Referrals", callback_data="admin_manage_referrals")])
     buttons.append([back_button("admin_panel")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -1890,6 +1892,188 @@ async def cb_admin_referral_settings(callback: types.CallbackQuery):
     except Exception:
         pass
     await callback.answer()
+
+
+# ── Referral Management (admin testing tool) ─────────────────────────────────
+
+@router.callback_query(F.data == "admin_manage_referrals")
+@admin_only
+@error_handler
+async def cb_admin_manage_referrals(callback: types.CallbackQuery, state: FSMContext):
+    """Prompt admin to enter a user ID whose referrals they want to view/delete."""
+    await state.set_state(AdminStates.manage_referral_user_input)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [back_button("admin_referral_settings"), admin_cancel_button()]
+    ])
+    await callback.message.edit_text(
+        "🗑️ *Manage Referrals*\n\n"
+        "Send the *Telegram ID* of the referrer whose referrals you want to view or delete:\n\n"
+        "_Tip: Use /id in the bot to get any user's ID_",
+        parse_mode="MarkdownV2",
+        reply_markup=kb,
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.manage_referral_user_input)
+@admin_only
+@error_handler
+async def msg_manage_referral_user_input(message: types.Message, state: FSMContext):
+    """Show all referrals made by the entered user ID."""
+    await state.clear()
+    text = message.text.strip()
+    try:
+        referrer_id = int(text)
+    except ValueError:
+        await message.answer(
+            "❌ Invalid ID. Send a numeric Telegram user ID.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [back_button("admin_manage_referrals")]
+            ])
+        )
+        return
+
+    refs = await db.get_referrals_for_user(referrer_id)
+    referrer_row = await db.get_user(referrer_id)
+    referrer_name = ""
+    if referrer_row:
+        referrer_name = referrer_row.get("full_name") or referrer_row.get("username") or str(referrer_id)
+    else:
+        referrer_name = str(referrer_id)
+
+    if not refs:
+        await message.answer(
+            f"ℹ️ User *{escape_md(referrer_name)}* `{referrer_id}` has no referrals\.",
+            parse_mode="MarkdownV2",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [back_button("admin_referral_settings")]
+            ])
+        )
+        return
+
+    lines = []
+    buttons = []
+    for r in refs:
+        name = escape_md(str(r["referred_name"])[:25])
+        rid  = r["referred_id"]
+        status = r["status"]
+        commission = float(r["commission"] or 0)
+        lines.append(f"• `{rid}` *{name}* — {status}, comm=₹{commission:.1f}")
+        buttons.append([InlineKeyboardButton(
+            text=f"🗑️ Remove {str(r['referred_name'])[:20]} ({rid})",
+            callback_data=f"admin_del_ref:{referrer_id}:{rid}"
+        )])
+
+    text_body = (
+        f"🗑️ *Referrals by* `{referrer_id}` \\({escape_md(referrer_name)}\\)\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        + "\n".join(lines)
+        + f"\n\n_Removing a referral reverses the wallet credit and lets the referred user rejoin via another link\._"
+    )
+    buttons.append([InlineKeyboardButton(
+        text="🗑️ Remove ALL referrals (reset)",
+        callback_data=f"admin_del_ref_all:{referrer_id}"
+    )])
+    buttons.append([back_button("admin_referral_settings")])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    await message.answer(text_body, parse_mode="MarkdownV2", reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("admin_del_ref:"))
+@admin_only
+@error_handler
+async def cb_admin_del_ref(callback: types.CallbackQuery):
+    """Delete one specific referral and reverse its wallet credit."""
+    _, referrer_id, referred_id = callback.data.split(":")
+    referrer_id = int(referrer_id)
+    referred_id = int(referred_id)
+
+    result = await db.delete_referral(referrer_id, referred_id)
+    if result["deleted"]:
+        rev = result["reversed_amount"]
+        msg = f"✅ Referral deleted\. Reversed ₹{escape_md(str(round(rev, 2)))} from referrer's wallet\."
+        if rev == 0:
+            msg = "✅ Referral deleted \(no wallet credit to reverse\)\."
+        logger.info(f"Admin {callback.from_user.id} deleted referral {referrer_id}->{referred_id}")
+    else:
+        msg = "❌ Referral record not found\."
+
+    await callback.answer()
+    # Refresh the referral list for the same referrer
+    refs = await db.get_referrals_for_user(referrer_id)
+    if not refs:
+        await callback.message.edit_text(
+            msg + f"\n\nNo more referrals for `{referrer_id}`\.",
+            parse_mode="MarkdownV2",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [back_button("admin_referral_settings")]
+            ])
+        )
+        return
+
+    lines   = []
+    buttons = []
+    for r in refs:
+        name = escape_md(str(r["referred_name"])[:25])
+        rid  = r["referred_id"]
+        commission = float(r["commission"] or 0)
+        lines.append(f"• `{rid}` *{name}* — {r['status']}, comm=₹{commission:.1f}")
+        buttons.append([InlineKeyboardButton(
+            text=f"🗑️ Remove {str(r['referred_name'])[:20]} ({rid})",
+            callback_data=f"admin_del_ref:{referrer_id}:{rid}"
+        )])
+    buttons.append([InlineKeyboardButton(
+        text="🗑️ Remove ALL referrals (reset)",
+        callback_data=f"admin_del_ref_all:{referrer_id}"
+    )])
+    buttons.append([back_button("admin_referral_settings")])
+
+    body = (
+        msg + "\n\n"
+        f"*Remaining referrals for* `{referrer_id}`:\n"
+        + "\n".join(lines)
+    )
+    await callback.message.edit_text(body, parse_mode="MarkdownV2",
+                                     reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+
+@router.callback_query(F.data.startswith("admin_del_ref_all:"))
+@admin_only
+@error_handler
+async def cb_admin_del_ref_all(callback: types.CallbackQuery):
+    """Delete ALL referrals for a referrer — full reset for testing."""
+    referrer_id = int(callback.data.split(":")[1])
+    refs = await db.get_referrals_for_user(referrer_id)
+    if not refs:
+        await callback.answer("No referrals found.", show_alert=True)
+        return
+
+    total_reversed = 0.0
+    count = 0
+    for r in refs:
+        result = await db.delete_referral(referrer_id, r["referred_id"])
+        if result["deleted"]:
+            total_reversed += result["reversed_amount"]
+            count += 1
+
+    logger.info(
+        f"Admin {callback.from_user.id} reset ALL {count} referrals for user {referrer_id}, "
+        f"reversed ₹{total_reversed:.2f}"
+    )
+    await callback.answer(
+        f"✅ Removed {count} referral(s). Reversed ₹{total_reversed:.2f} from wallet.",
+        show_alert=True
+    )
+    await callback.message.edit_text(
+        f"✅ *All {count} referral\(s\) deleted* for `{referrer_id}`\."
+        f"\n💰 Total reversed: ₹{escape_md(str(round(total_reversed, 2)))}\."
+        f"\n\nThe user can now be re\-referred for fresh testing\.",
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [back_button("admin_referral_settings")]
+        ])
+    )
 
 
 @router.callback_query(F.data.startswith("admin_ref_set_mode:"))
