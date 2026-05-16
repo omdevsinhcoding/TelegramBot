@@ -122,6 +122,14 @@ async def cmd_start(message: types.Message, state: FSMContext):
         first_line = support_text.split("\n")[0][:60]
         support_line = f"🆘 Support: _{escape_md(first_line)}_\n"
 
+    # Get wallet/reward balance
+    try:
+        wallet_bal = await db.get_wallet_balance(user.id)
+    except Exception:
+        wallet_bal = 0.0
+
+    wallet_line = f"💰 Reward Balance: *₹{escape_md(f'{wallet_bal:.2f}')}*\n"
+
     welcome = (
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"👋 *WELCOME, {first}\\!*\n"
@@ -131,6 +139,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
         f"✅ Verified Vouchers\n"
         f"⚡ Auto Payment Verification\n"
         f"📦 Available Stock: *{total_stock}* coupons\n"
+        f"{wallet_line}"
         f"{support_line}"
         f"━━━━━━━━━━━━━━━━━━"
         f"{referral_msg}"
