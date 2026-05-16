@@ -483,6 +483,20 @@ async def expire_stale_orders():
     return result
 
 
+async def expire_stale_orders_no_release():
+    """Expire pending orders past their timeout WITHOUT releasing stock.
+    
+    Used when reservation_enabled=False — stock was never decremented
+    during order creation, so there's nothing to release back.
+    """
+    pool = await get_pool()
+    result = await pool.execute("""
+        UPDATE orders SET status = 'expired', updated_at = NOW()
+        WHERE status = 'pending' AND expires_at < NOW()
+    """)
+    return result
+
+
 # ── TRANSACTION QUERIES ──────────────────────────────────
 
 async def create_transaction(txn_ref: str, order_id: str, user_id: int,

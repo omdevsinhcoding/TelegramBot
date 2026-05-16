@@ -371,10 +371,288 @@ async def cb_pay_wallet(callback: types.CallbackQuery):
     await callback.answer()
     logger.info(f"Wallet payment: user={user_id}, order={order_id}, amount={amount}, balance_left={new_balance}")
 
+# ══════════════════════════════════════════════════════════════
+# COMBO PAYMENT — Partial Wallet + Gateway
+# ══════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("pay_combo:"))
+@error_handler
+async def cb_pay_combo(callback: types.CallbackQuery, state: FSMContext):
+    """Partial wallet deduction + remaining via gateway (Paytm/BharatPe/Razorpay).
+    
+    Flow: Deduct wallet balance first → create gateway order for remaining amount.
+    On gateway payment success, complete the full order.
+    On cancel/expire, refund the wallet portion.
+    """
+    parts = callback.data.split(":")
+    gateway = parts[1]       # paytm / bharatpe / razorpay
+    coupon_id = int(parts[2])
+    qty = int(parts[3]) if len(parts) > 3 else 1
+    coupon = await get_coupon_detail(coupon_id)
+
+    if not coupon:
+        await callback.answer("Coupon not found.", show_alert=True)
+        return
+    if not await _check_stock_or_reserved(coupon, qty, callback.from_user.id, callback):
+        return
+
+    user_id = callback.from_user.id
+    total_amount = float(coupon["discounted_price"]) * qty
+
+    # Ensure user exists
+    await db.upsert_user(user_id, callback.from_user.username, callback.from_user.full_name)
+
+    wallet = await db.get_wallet_balance(user_id)
+    wallet_deduct = min(wallet, total_amount)
+    gateway_amount = round(total_amount - wallet_deduct, 2)
+
+    if gateway_amount <= 0:
+        # Wallet covers everything — redirect to full wallet payment
+        callback.data = f"pay_gateway:wallet:{coupon_id}:{qty}"
+        await cb_pay_wallet(callback)
+        return
+
+    if wallet_deduct <= 0:
+        # No wallet balance — redirect to normal gateway payment
+        callback.data = f"pay_gateway:{gateway}:{coupon_id}:{qty}"
+        if gateway == "paytm":
+            await cb_pay_paytm(callback)
+        elif gateway == "bharatpe":
+            await cb_pay_bharatpe(callback, state)
+        elif gateway == "razorpay":
+            await cb_pay_razorpay(callback)
+        return
+
+    # ── Step 1: Deduct wallet portion ──
+    old_balance = wallet
+    new_balance = wallet - wallet_deduct
+    await db.update_wallet_balance(user_id, new_balance)
+
+    try:
+        await db.add_wallet_transaction(
+            user_id, -wallet_deduct, "purchase",
+            bal_before=old_balance, bal_after=new_balance,
+            reference=f"combo_coupon_{coupon_id}_qty{qty}",
+            description=f"Partial payment: ₹{wallet_deduct:.1f} wallet + ₹{gateway_amount:.1f} {gateway}",
+        )
+    except Exception as e:
+        logger.warning(f"Wallet transaction log failed (non-critical): {e}")
+
+    # ── Step 2: Create order for TOTAL amount but gateway pays only remaining ──
+    try:
+        order_info = await create_purchase_order(user_id, coupon_id, total_amount, gateway, qty)
+    except OutOfStockError:
+        # Refund wallet
+        await db.update_wallet_balance(user_id, old_balance)
+        await callback.answer(
+            f"⚠️ Out of stock! Wallet refunded ₹{wallet_deduct:.1f}",
+            show_alert=True,
+        )
+        return
+
+    order_id = order_info["order_id"]
+    txn_ref = order_info["txn_ref"]
+
+    # Store combo info so we know to refund wallet on cancel
+    pool = await db.get_pool()
+    try:
+        # Store wallet deduction amount in order metadata
+        await pool.execute(
+            """UPDATE orders SET payment_method = $2 WHERE order_id = $1""",
+            order_id, f"combo_{gateway}"
+        )
+        # Also update transaction amount to reflect only the gateway portion
+        await pool.execute(
+            """UPDATE transactions SET amount = $2 WHERE txn_ref = $1""",
+            txn_ref, gateway_amount
+        )
+    except Exception as e:
+        logger.warning(f"Combo metadata update non-critical: {e}")
+
+    # ── Step 3: Show gateway-specific QR/link for remaining amount ──
+    wallet_esc = escape_md(f"₹{wallet_deduct:.1f}")
+    gateway_esc = escape_md(f"₹{gateway_amount:.1f}")
+
+    if gateway == "paytm":
+        upi_url = await generate_upi_intent_url(gateway_amount, txn_ref, f"Order {order_id}", "paytm")
+        bot_name = await db.get_bot_name()
+        qr_buf = create_qr_buffer(upi_url, gateway_amount, txn_ref, bot_name=bot_name)
+        dyn = await db.get_dynamic_config()
+        timeout_min = dyn["payment_timeout_seconds"] // 60
+        title = escape_md(coupon["title"])
+
+        caption = (
+            f"💳 *COMBO Payment — Paytm*\n\n"
+            f"🏷️ {title}\n"
+            f"💰 Total: *{escape_md(format_currency(total_amount))}*\n"
+            f"💰 Wallet Deducted: *{wallet_esc}*\n"
+            f"💳 Pay via Paytm: *{gateway_esc}*\n"
+            f"🧾 Order: `{escape_md(order_id)}`\n\n"
+            f"⏰ Expires in {timeout_min} minutes\n\n"
+            f"Scan the QR to pay *{gateway_esc}*\\.\n"
+            f"_Wallet ₹{escape_md(str(wallet_deduct))} will be refunded if you cancel\\._"
+        )
+
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+
+        msg = await callback.message.answer_photo(
+            photo=BufferedInputFile(qr_buf.read(), filename="payment_qr.png"),
+            caption=caption,
+            parse_mode="MarkdownV2",
+            reply_markup=payment_pending_kb(order_id),
+        )
+        await db.update_order_qr_message_id(order_id, msg.message_id)
+
+    elif gateway == "bharatpe":
+        dyn = await db.get_dynamic_config()
+        timeout_min = dyn["payment_timeout_seconds"] // 60
+        title = escape_md(coupon["title"])
+        ps = await db.get_payment_settings()
+        bp_upi = ps.get("bharatpe_upi_id", "")
+
+        upi_line = ""
+        if bp_upi:
+            upi_esc = escape_md(bp_upi)
+            upi_line = f"\n📱 UPI ID: `{upi_esc}` _\\(tap to copy\\)_\n"
+
+        caption = (
+            f"💳 *COMBO Payment — Bharat Pay*\n\n"
+            f"🏷️ {title}\n"
+            f"💰 Total: *{escape_md(format_currency(total_amount))}*\n"
+            f"💰 Wallet Deducted: *{wallet_esc}*\n"
+            f"🏦 Pay via BharatPe: *{gateway_esc}*\n"
+            f"🧾 Order: `{escape_md(order_id)}`\n"
+            f"{upi_line}\n"
+            f"📱 *Steps:*\n"
+            f"1️⃣ Scan the QR with any UPI app\n"
+            f"2️⃣ Pay *{gateway_esc}*\n"
+            f"3️⃣ Send your *UTR number* here\n\n"
+            f"⏰ Expires in {timeout_min} minutes\n\n"
+            f"_Wallet ₹{escape_md(str(wallet_deduct))} will be refunded if you cancel\\._"
+        )
+
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+
+        qr_path = ps.get("bharatpe_qr_path", "")
+        if qr_path and os.path.exists(qr_path):
+            photo = FSInputFile(qr_path)
+        else:
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            fallback = os.path.join(project_root, "bharatpe_qr.png")
+            if os.path.exists(fallback):
+                photo = FSInputFile(fallback)
+            else:
+                # Refund wallet — can't proceed without QR
+                await db.update_wallet_balance(user_id, old_balance)
+                await callback.message.answer("⚠️ BharatPe QR not configured\\. Wallet refunded\\.", parse_mode="MarkdownV2")
+                return
+
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Cancel Order", callback_data=f"cancel_order:{order_id}")],
+        ])
+        msg = await callback.message.answer_photo(photo=photo, caption=caption, parse_mode="MarkdownV2", reply_markup=kb)
+        await db.update_order_qr_message_id(order_id, msg.message_id)
+        await state.set_state(BharatPeStates.waiting_utr)
+        await state.update_data(order_id=order_id, coupon_id=coupon_id, amount=gateway_amount)
+
+    elif gateway == "razorpay":
+        from bot.payments.razorpay import create_payment_link
+        result = await create_payment_link(gateway_amount, order_id, f"Purchase: {coupon['title']}")
+
+        if "error" in result:
+            # Refund wallet
+            await db.update_wallet_balance(user_id, old_balance)
+            await callback.answer(f"❌ Razorpay error. Wallet refunded.", show_alert=True)
+            return
+
+        link_url = result["short_url"]
+        link_id = result["link_id"]
+
+        try:
+            await pool.execute("UPDATE transactions SET utr = $1 WHERE txn_ref = $2", link_id, txn_ref)
+        except Exception:
+            pass
+
+        dyn = await db.get_dynamic_config()
+        timeout_min = dyn["payment_timeout_seconds"] // 60
+        title = escape_md(coupon["title"])
+
+        text = (
+            f"💳 *COMBO Payment — Razorpay*\n\n"
+            f"🏷️ {title}\n"
+            f"💰 Total: *{escape_md(format_currency(total_amount))}*\n"
+            f"💰 Wallet Deducted: *{wallet_esc}*\n"
+            f"💳 Pay via Razorpay: *{gateway_esc}*\n"
+            f"🧾 Order: `{escape_md(order_id)}`\n\n"
+            f"Click Pay Now to pay *{gateway_esc}*\n"
+            f"⏰ Expires in {timeout_min} minutes\n\n"
+            f"_Wallet ₹{escape_md(str(wallet_deduct))} will be refunded if you cancel\\._"
+        )
+
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💳 Pay Now", url=link_url)],
+            [InlineKeyboardButton(text="🔄 Check Payment", callback_data=f"check_razorpay:{order_id}:{link_id}")],
+            [InlineKeyboardButton(text="❌ Cancel Order", callback_data=f"cancel_order:{order_id}")],
+        ])
+        await callback.message.answer(text, parse_mode="MarkdownV2", reply_markup=kb)
+
+    await callback.answer()
+    logger.info(f"Combo payment: user={user_id}, order={order_id}, wallet={wallet_deduct}, gateway={gateway}={gateway_amount}")
+
+
+# ══════════════════════════════════════════════════════════════
+# SKIP WALLET — Pay Full Amount via Gateway
+# ══════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("pay_skip_wallet:"))
+@error_handler
+async def cb_skip_wallet(callback: types.CallbackQuery):
+    """User chose to skip wallet and pay full amount. Show normal gateways."""
+    parts = callback.data.split(":")
+    coupon_id = int(parts[1])
+    qty = int(parts[2]) if len(parts) > 2 else 1
+
+    coupon = await get_coupon_detail(coupon_id)
+    if not coupon:
+        await callback.answer("Coupon not found.", show_alert=True)
+        return
+
+    total = float(coupon["discounted_price"]) * qty
+    title = escape_md(coupon["title"])
+    amt = escape_md(format_currency(total))
+    ps = await db.get_payment_settings()
+
+    from bot.keyboards.coupon_kb import gateway_selection_kb
+    text = (
+        f"💳 *Select Payment Gateway*\n\n"
+        f"🏷️ {title}\n"
+        f"📦 Quantity: *{qty}*\n"
+        f"💰 Total: *{amt}*\n\n"
+        f"Choose your preferred payment method:"
+    )
+    # Pass wallet_balance=0 to hide wallet options
+    await callback.message.edit_text(
+        text, parse_mode="MarkdownV2",
+        reply_markup=gateway_selection_kb(coupon_id, qty, wallet_balance=0, total=total, payment_settings=ps),
+    )
+    await callback.answer()
+
 
 # ══════════════════════════════════════════════════════════════
 # PAYTM GATEWAY — Dynamic QR + Auto-Poll
 # ══════════════════════════════════════════════════════════════
+
 
 @router.callback_query(F.data.startswith("pay_gateway:paytm:"))
 @error_handler

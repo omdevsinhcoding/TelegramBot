@@ -46,3 +46,6 @@ WHERE c.id = sub.coupon_id;
 -- Zero out coupons with no unsold codes
 UPDATE coupons SET stock = 0, updated_at = NOW()
 WHERE id NOT IN (SELECT DISTINCT coupon_id FROM coupon_codes WHERE is_sold = FALSE);
+
+-- 5. Reset all reserved_qty to 0 (fixes phantom reservations from stock inflation bug)
+UPDATE coupons SET reserved_qty = 0 WHERE COALESCE(reserved_qty, 0) != 0;

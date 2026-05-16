@@ -189,41 +189,71 @@ def gateway_selection_kb(coupon_id: int, qty: int = 1, wallet_balance: float = 0
                           payment_settings: dict | None = None) -> InlineKeyboardMarkup:
     """Show payment gateway options — only enabled gateways.
     
+    Supports three wallet states:
+    1. wallet >= total → Full wallet payment button
+    2. wallet > 0 but < total → "Wallet + Gateway" combo buttons (partial wallet)
+    3. wallet == 0 → Only gateway buttons
+    
     Args:
         payment_settings: dict from db.get_payment_settings() with gateway_*_enabled flags
     """
     buttons = []
     ps = payment_settings or {}
 
-    # Reward Wallet button — always visible (shows balance)
-    wallet_label = f"💰 Reward Wallet: ₹{wallet_balance:.1f}"
-    if wallet_balance >= total and total > 0:
-        # Enough balance — make it clickable to pay
+    has_wallet = wallet_balance > 0 and total > 0
+    can_full_pay = wallet_balance >= total
+    partial_amount = min(wallet_balance, total) if has_wallet else 0
+    remaining = total - partial_amount if has_wallet else total
+
+    if can_full_pay:
+        # Full wallet payment — enough balance
+        wallet_label = f"💰 Pay ₹{total:.0f} from Wallet (Bal: ₹{wallet_balance:.1f})"
         buttons.append([InlineKeyboardButton(
             text=wallet_label,
             callback_data=f"pay_gateway:wallet:{coupon_id}:{qty}"
         )])
-    else:
-        # Not enough — show balance info with proper callback
+    elif has_wallet and partial_amount > 0:
+        # Partial wallet — show info header
+        wallet_label = f"💰 Wallet: ₹{wallet_balance:.1f} (Use ₹{partial_amount:.0f}, Pay ₹{remaining:.0f})"
         buttons.append([InlineKeyboardButton(
             text=wallet_label,
-            callback_data="wallet_insufficient"
+            callback_data="noop"
         )])
 
     # Only show enabled gateways
     has_gateway = False
 
     if ps.get("gateway_paytm_enabled", True):
-        buttons.append([InlineKeyboardButton(text="✅ Pay via Paytm", callback_data=f"pay_gateway:paytm:{coupon_id}:{qty}")])
+        if has_wallet and not can_full_pay and partial_amount > 0:
+            # Combo button: wallet + paytm
+            label = f"✅ Wallet ₹{partial_amount:.0f} + Paytm ₹{remaining:.0f}"
+            buttons.append([InlineKeyboardButton(text=label, callback_data=f"pay_combo:paytm:{coupon_id}:{qty}")])
+        else:
+            buttons.append([InlineKeyboardButton(text="✅ Pay via Paytm", callback_data=f"pay_gateway:paytm:{coupon_id}:{qty}")])
         has_gateway = True
 
     if ps.get("gateway_bharatpe_enabled", True):
-        buttons.append([InlineKeyboardButton(text="🏦 Pay via BharatPe", callback_data=f"pay_gateway:bharatpe:{coupon_id}:{qty}")])
+        if has_wallet and not can_full_pay and partial_amount > 0:
+            label = f"🏦 Wallet ₹{partial_amount:.0f} + BharatPe ₹{remaining:.0f}"
+            buttons.append([InlineKeyboardButton(text=label, callback_data=f"pay_combo:bharatpe:{coupon_id}:{qty}")])
+        else:
+            buttons.append([InlineKeyboardButton(text="🏦 Pay via BharatPe", callback_data=f"pay_gateway:bharatpe:{coupon_id}:{qty}")])
         has_gateway = True
 
     if ps.get("gateway_razorpay_enabled", False):
-        buttons.append([InlineKeyboardButton(text="💳 Pay via Razorpay", callback_data=f"pay_gateway:razorpay:{coupon_id}:{qty}")])
+        if has_wallet and not can_full_pay and partial_amount > 0:
+            label = f"💳 Wallet ₹{partial_amount:.0f} + Razorpay ₹{remaining:.0f}"
+            buttons.append([InlineKeyboardButton(text=label, callback_data=f"pay_combo:razorpay:{coupon_id}:{qty}")])
+        else:
+            buttons.append([InlineKeyboardButton(text="💳 Pay via Razorpay", callback_data=f"pay_gateway:razorpay:{coupon_id}:{qty}")])
         has_gateway = True
+
+    # If wallet has partial balance, also show "Pay full via gateway (skip wallet)" option
+    if has_wallet and not can_full_pay and partial_amount > 0 and has_gateway:
+        buttons.append([InlineKeyboardButton(
+            text=f"💸 Skip Wallet — Pay Full ₹{total:.0f}",
+            callback_data=f"pay_skip_wallet:{coupon_id}:{qty}"
+        )])
 
     if not has_gateway:
         buttons.append([InlineKeyboardButton(text="⚠️ No payment options available", callback_data="noop")])

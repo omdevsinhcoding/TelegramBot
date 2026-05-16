@@ -88,8 +88,9 @@ async def create_purchase_order(user_id: int, coupon_id: int, amount: float,
 async def complete_order(order_id: str, txn_ref: str, user_id: int, bot=None) -> bool:
     """Mark order as paid and deliver coupon(s).
     
-    Stock was already reserved during order creation.
-    We just confirm the reservation and deliver codes.
+    Handles both reservation modes:
+    - reservation_enabled=True:  stock was pre-decremented → just clear reserved_qty
+    - reservation_enabled=False: stock NOT pre-decremented → decrement now via reduce_stock
     
     Args:
         bot: aiogram Bot instance for sending referral notifications.
@@ -100,9 +101,19 @@ async def complete_order(order_id: str, txn_ref: str, user_id: int, bot=None) ->
         return False
 
     qty = order.get("quantity", 1) or 1
+    coupon_id = order["coupon_id"]
 
-    # ── Confirm the reservation (clear reserved_qty, stock stays decremented) ──
-    await db.confirm_reservation(order["coupon_id"], qty)
+    # ── Handle stock based on reservation mode ──
+    dyn = await db.get_dynamic_config()
+    use_reservation = dyn.get("reservation_enabled", True)
+
+    if use_reservation:
+        # Stock was already decremented during reservation — just clear reserved_qty
+        await db.confirm_reservation(coupon_id, qty)
+    else:
+        # Stock was NOT decremented — decrement it now
+        for _ in range(qty):
+            await db.reduce_stock(coupon_id)
 
     # Mark order paid
     await db.update_order_status(order_id, "paid", txn_ref)
@@ -111,7 +122,7 @@ async def complete_order(order_id: str, txn_ref: str, user_id: int, bot=None) ->
     # Try to deliver coupon codes (one per qty)
     delivered = 0
     for _ in range(qty):
-        code_row = await db.get_available_code(order["coupon_id"])
+        code_row = await db.get_available_code(coupon_id)
         if code_row:
             await db.mark_code_sold(code_row["id"], user_id, order_id)
             delivered += 1
@@ -131,7 +142,10 @@ async def complete_order(order_id: str, txn_ref: str, user_id: int, bot=None) ->
 
 
 async def cancel_order(order_id: str, bot=None) -> bool:
-    """Cancel a pending order and RELEASE reserved stock back to pool.
+    """Cancel a pending order and release stock if it was reserved.
+    
+    Only releases stock back when reservation_enabled=True (stock was pre-decremented).
+    When reservation_enabled=False, stock was never taken so nothing to release.
     
     Args:
         bot: aiogram Bot instance for sending waitlist notifications.
@@ -143,11 +157,47 @@ async def cancel_order(order_id: str, bot=None) -> bool:
     qty = order.get("quantity", 1) or 1
     coupon_id = order["coupon_id"]
 
-    # ── Release reserved stock ──
-    await db.release_reservation(coupon_id, qty)
+    # ── Only release stock if reservation system is ON ──
+    dyn = await db.get_dynamic_config()
+    use_reservation = dyn.get("reservation_enabled", True)
+
+    if use_reservation:
+        # Stock was decremented during order creation → release it back
+        await db.release_reservation(coupon_id, qty)
+        logger.info(f"Order cancelled + stock released: {order_id} (qty={qty})")
+    else:
+        # Stock was NOT decremented → nothing to release
+        logger.info(f"Order cancelled (no-reserve mode): {order_id} (qty={qty})")
+
+    # ── Refund wallet portion for combo payments ──
+    payment_method = order.get("payment_method", "")
+    if payment_method and payment_method.startswith("combo_"):
+        user_id = order["user_id"]
+        try:
+            # Find the wallet deduction for this order
+            pool = await db.get_pool()
+            wt = await pool.fetchrow(
+                """SELECT ABS(amount) as amt, balance_after FROM wallet_transactions
+                   WHERE user_id = $1 AND reference LIKE $2 AND txn_type = 'purchase'
+                   ORDER BY created_at DESC LIMIT 1""",
+                user_id, f"combo_coupon_{coupon_id}%"
+            )
+            if wt:
+                refund_amt = float(wt["amt"])
+                current_bal = await db.get_wallet_balance(user_id)
+                new_bal = current_bal + refund_amt
+                await db.update_wallet_balance(user_id, new_bal)
+                await db.add_wallet_transaction(
+                    user_id, refund_amt, "refund",
+                    bal_before=current_bal, bal_after=new_bal,
+                    reference=f"cancel_{order_id}",
+                    description=f"Refund for cancelled combo order {order_id}",
+                )
+                logger.info(f"Combo wallet refund: user={user_id}, refund=₹{refund_amt}, order={order_id}")
+        except Exception as e:
+            logger.error(f"Failed to refund combo wallet for order {order_id}: {e}")
 
     await db.update_order_status(order_id, "cancelled")
-    logger.info(f"Order cancelled + stock released: {order_id} (qty={qty})")
 
     # ── Notify waitlisted users ──
     await _notify_waitlist(coupon_id, bot)
@@ -155,19 +205,61 @@ async def cancel_order(order_id: str, bot=None) -> bool:
 
 
 async def expire_orders(bot=None):
-    """Expire stale pending orders (also releases reservations via DB query).
+    """Expire stale pending orders.
     
-    After expiring, notify waitlisted users that coupons are available.
+    Only releases reserved stock if reservation system is enabled.
+    After expiring, notifies waitlisted users that coupons are available.
     """
+    # Check if reservation is enabled
+    dyn = await db.get_dynamic_config()
+    use_reservation = dyn.get("reservation_enabled", True)
+
     # Get coupon IDs that are about to expire (before the expire query runs)
     pool = await db.get_pool()
     expiring = await pool.fetch("""
         SELECT DISTINCT coupon_id FROM orders
         WHERE status = 'pending' AND expires_at < NOW()
     """)
+    # ── Refund wallet for combo orders that are expiring ──
+    try:
+        combo_orders = await pool.fetch("""
+            SELECT order_id, user_id, coupon_id, payment_method FROM orders
+            WHERE status = 'pending' AND expires_at < NOW()
+              AND payment_method LIKE 'combo_%'
+        """)
+        for co in combo_orders:
+            try:
+                wt = await pool.fetchrow(
+                    """SELECT ABS(amount) as amt FROM wallet_transactions
+                       WHERE user_id = $1 AND reference LIKE $2 AND txn_type = 'purchase'
+                       ORDER BY created_at DESC LIMIT 1""",
+                    co["user_id"], f"combo_coupon_{co['coupon_id']}%"
+                )
+                if wt:
+                    refund_amt = float(wt["amt"])
+                    current_bal = await db.get_wallet_balance(co["user_id"])
+                    new_bal = current_bal + refund_amt
+                    await db.update_wallet_balance(co["user_id"], new_bal)
+                    await db.add_wallet_transaction(
+                        co["user_id"], refund_amt, "refund",
+                        bal_before=current_bal, bal_after=new_bal,
+                        reference=f"expire_{co['order_id']}",
+                        description=f"Refund for expired combo order {co['order_id']}",
+                    )
+                    logger.info(f"Combo expire refund: user={co['user_id']}, ₹{refund_amt}, order={co['order_id']}")
+            except Exception as e:
+                logger.error(f"Combo expire refund failed for {co['order_id']}: {e}")
+    except Exception as e:
+        logger.warning(f"Combo expire refund scan failed: {e}")
+
+    if use_reservation:
+        # Stock was pre-decremented → release it back + expire orders
+        result = await db.expire_stale_orders()
+    else:
+        # Stock was NOT decremented → just expire orders WITHOUT releasing stock
+        result = await db.expire_stale_orders_no_release()
     
-    result = await db.expire_stale_orders()
-    logger.info(f"Expired stale orders: {result}")
+    logger.info(f"Expired stale orders ({'with-release' if use_reservation else 'no-release'}): {result}")
     
     # Notify waitlisted users for each affected coupon
     for row in expiring:
