@@ -1003,12 +1003,61 @@ async def cb_broadcast(callback: types.CallbackQuery, state: FSMContext):
         "📝 *Text* — Just type a message\n"
         "📸 *Photo* — Send an image \\(with optional caption\\)\n"
         "📎 *File* — Send any document\n\n"
-        "_You can add inline buttons in the next step_"
+        "💡 *Tip:* Don't send `/start` — use the button below to\n"
+        "broadcast a proper restart message with a button link\\."
     )
     await callback.message.edit_text(text, parse_mode="MarkdownV2",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[admin_cancel_button()]]))
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📲 Quick: Broadcast Restart Message", callback_data="bc_quick_restart")],
+            [admin_cancel_button()],
+        ]))
     await state.set_state(AdminStates.broadcast_message)
     await callback.answer()
+
+
+@router.callback_query(F.data == "bc_quick_restart")
+@admin_only
+@error_handler
+async def cb_bc_quick_restart(callback: types.CallbackQuery, state: FSMContext):
+    """Pre-fill a 'please restart your bot' broadcast with a /start button."""
+    # Get bot username to build the deep link
+    bot_me = await callback.message.bot.get_me()
+    bot_username = bot_me.username
+
+    restart_text = (
+        "🔄 *Bot Update!*\n\n"
+        "We've made improvements to the bot\\. "
+        "Please tap the button below to restart and get the latest experience\\! 🚀"
+    )
+    bc_data = {
+        "type": "text",
+        "text": restart_text,
+    }
+    bc_buttons = [
+        {"text": "🚀 Restart Bot", "url": f"https://t.me/{bot_username}?start=restart"}
+    ]
+    await state.clear()
+    await state.update_data(bc_data=bc_data, bc_buttons=bc_buttons)
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📤 Send Now", callback_data="bc_send_now")],
+        [InlineKeyboardButton(text="✏️ Edit Message", callback_data="admin_broadcast")],
+        [InlineKeyboardButton(text="❌ Cancel", callback_data="admin_panel")],
+    ])
+    await callback.message.edit_text(
+        "📲 *Quick Restart Broadcast*\n\n"
+        "This will send the following message to ALL users with a *\"Restart Bot\"* button:\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "🔄 *Bot Update\\!*\n\n"
+        "We've made improvements to the bot\\. "
+        "Please tap the button below to restart and get the latest experience\\! 🚀\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🔗 Button: *Restart Bot* → `t\.me/{escape_md(bot_username)}?start=restart`",
+        parse_mode="MarkdownV2",
+        reply_markup=kb,
+    )
+    await callback.answer()
+
 
 
 @router.message(AdminStates.broadcast_message)
@@ -1030,8 +1079,21 @@ async def msg_broadcast_content(message: types.Message, state: FSMContext):
         bc_data["file_id"] = message.video.file_id
         bc_data["caption"] = message.caption or ""
     elif message.text:
+        # ── Guard: block slash-commands from being treated as broadcast text ──
+        # e.g. if admin sends /start, it would trigger the start handler instead.
+        # We intercept it here and warn the admin.
+        raw_text = message.text.strip()
+        if raw_text.startswith("/"):
+            await message.answer(
+                "⚠️ <b>Cannot broadcast a bot command</b> (e.g. <code>/start</code>).\n\n"
+                "If you want to tell users to restart the bot, send a normal text message like:\n"
+                "<i>\"Please press /start or tap the button below to restart the bot!\"</i>\n\n"
+                "Then attach a button with the bot link if needed.",
+                parse_mode="HTML",
+            )
+            return
         bc_data["type"] = "text"
-        bc_data["text"] = message.text.strip()
+        bc_data["text"] = raw_text
     else:
         await message.answer("⚠️ Unsupported content type. Send text, photo, or file.")
         return
