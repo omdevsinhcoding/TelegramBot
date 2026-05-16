@@ -212,13 +212,6 @@ def gateway_selection_kb(coupon_id: int, qty: int = 1, wallet_balance: float = 0
             text=wallet_label,
             callback_data=f"pay_gateway:wallet:{coupon_id}:{qty}"
         )])
-    elif has_wallet and partial_amount > 0:
-        # Partial wallet — show info header
-        wallet_label = f"💰 Wallet: ₹{wallet_balance:.1f} (Use ₹{partial_amount:.0f}, Pay ₹{remaining:.0f})"
-        buttons.append([InlineKeyboardButton(
-            text=wallet_label,
-            callback_data="noop"
-        )])
 
     # Only show enabled gateways
     has_gateway = False
