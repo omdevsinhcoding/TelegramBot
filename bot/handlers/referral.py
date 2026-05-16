@@ -311,7 +311,7 @@ async def msg_ref_enter_code(message: types.Message, state: FSMContext):
 
     referrer_name = referrer.get("full_name") or str(referrer_id)
     await message.answer(
-        f"✅ Referral code applied! You were referred by *{escape_md(referrer_name)}*\\.\n"
+        f"✅ Referral code applied\\! You were referred by *{escape_md(referrer_name)}*\\.\n"
         f"🎁 Your friend has received their reward\\!",
         parse_mode="MarkdownV2"
     )
