@@ -21,7 +21,7 @@ from aiogram.fsm.state import StatesGroup, State
 
 from bot.services.coupon_service import get_coupon_detail
 from bot.services.order_service import (
-    create_purchase_order, cancel_order, get_delivered_code,
+    create_purchase_order, cancel_order,
     get_all_delivered_codes, complete_order, OutOfStockError,
 )
 from bot.payments.upi import generate_upi_intent_url, create_qr_buffer
@@ -1346,31 +1346,8 @@ async def cb_check_payment(callback: types.CallbackQuery):
         from bot.services.order_service import complete_order
         success = await complete_order(order_id, txn_ref, order["user_id"], bot=callback.bot)
         if success:
-            coupon = await get_coupon_detail(order["coupon_id"])
-            code_row = await get_delivered_code(order_id, order["coupon_id"])
-            code_text = ""
-            if code_row:
-                code_val = escape_md(code_row["code"])
-                code_text = f"\n\n🔑 Code: `{code_val}`"
-
-            coupon_title = escape_md(coupon["title"]) if coupon else "Coupon"
-            amt = escape_md(format_currency(float(order["amount"])))
-            oid = escape_md(order_id)
-            utr_text = ""
-            if details and details.get("utr"):
-                utr_text = f"\n🔖 *UTR:* `{escape_md(details['utr'])}`"
-
-            text = (
-                f"🎉 *WOOHOO\\! PAYMENT SUCCESSFUL\\!* 🎉\n\n"
-                f"🛍️ *Item:* {coupon_title}\n"
-                f"💸 *Amount Paid:* {amt}\n"
-                f"📦 *Order ID:* `{oid}`"
-                f"{utr_text}"
-                f"{code_text}\n\n"
-                f"💾 *Please save your Order ID for future reference:*\n"
-                f"`{oid}`\n\n"
-                f"🎊 *Thank you for your purchase\\! Enjoy\\!* 🎊"
-            )
+            paytm_utr = (details.get("utr", "") if details else "") or ""
+            text = await _build_success_message(order_id, order["coupon_id"], float(order["amount"]), paytm_utr)
 
             kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
             
@@ -1468,27 +1445,7 @@ async def cb_cancel_order(callback: types.CallbackQuery, state: FSMContext):
                         from bot.services.order_service import complete_order
                         success = await complete_order(order_id, txn_ref, order["user_id"], bot=callback.bot)
                         if success:
-                            coupon = await get_coupon_detail(order["coupon_id"])
-                            code_row = await get_delivered_code(order_id, order["coupon_id"])
-                            code_text = ""
-                            if code_row:
-                                code_val = escape_md(code_row["code"])
-                                code_text = f"\n\n🔑 Code: `{code_val}`"
-
-                            coupon_title = escape_md(coupon["title"]) if coupon else "Coupon"
-                            amt = escape_md(format_currency(float(order["amount"])))
-                            oid = escape_md(order_id)
-
-                            text = (
-                                f"✅ *Payment Already Received\\!*\n\n"
-                                f"🏷️ {coupon_title}\n"
-                                f"💰 Amount: {amt}\n"
-                                f"📦 Order: `{oid}`"
-                                f"{code_text}\n\n"
-                                f"💾 *Save this Order ID to recover your coupon later:*\n"
-                                f"`{oid}`\n\n"
-                                f"Your order has been placed\\! 🎉"
-                            )
+                            text = await _build_success_message(order_id, order["coupon_id"], float(order["amount"]))
 
                             try:
                                 await callback.message.delete()
