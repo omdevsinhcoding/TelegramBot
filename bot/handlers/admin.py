@@ -2165,14 +2165,15 @@ async def cb_admin_bot_settings(callback: types.CallbackQuery):
     
     dyn = await db.get_dynamic_config()
     
-    timeout_val = dyn["payment_timeout_seconds"]
-    min_recharge = dyn["bharatpe_min_recharge"]
-    poll_val = dyn["payment_poll_interval"]
+    timeout_val   = dyn["payment_timeout_seconds"]
+    res_timeout   = dyn.get("reservation_timeout_seconds", 900)
+    min_recharge  = dyn["bharatpe_min_recharge"]
+    poll_val      = dyn["payment_poll_interval"]
     reservation_on = dyn.get("reservation_enabled", True)
-    waitlist_on = dyn.get("waitlist_enabled", True)
+    waitlist_on    = dyn.get("waitlist_enabled", True)
     
     res_icon = "🟢 ON" if reservation_on else "🔴 OFF"
-    wl_icon = "🟢 ON" if waitlist_on else "🔴 OFF"
+    wl_icon  = "🟢 ON" if waitlist_on  else "🔴 OFF"
     
     text = (
         f"⚙️ *Bot Settings*\n"
@@ -2180,27 +2181,30 @@ async def cb_admin_bot_settings(callback: types.CallbackQuery):
         f"🏷️ *Bot Name:* `{escape_md(bot_name)}`\n\n"
         f"━━━ *Dynamic Config* ━━━\n"
         f"⏱️ Payment Timeout: *{timeout_val}s* \\({timeout_val // 60} min\\)\n"
+        f"🔒 Reservation Hold: *{res_timeout}s* \\({res_timeout // 60} min\\)\n"
+        f"   _How long stock stays locked per pending order_\n"
         f"💰 Min Recharge \\(BharatPe\\): *₹{min_recharge:.0f}*\n"
         f"🔄 Expiry Poll Interval: *{poll_val}s*\n\n"
         f"━━━ *System Controls* ━━━\n"
         f"🔒 Reservation System: *{res_icon}*\n"
         f"   _When ON: stock is locked per order \\(prevents overselling\\)_\n"
-        f"   _When OFF: first\\-paid\\-first\\-served, no locking_\n\n"
+        f"   _When OFF: all current reservations are released instantly_\n\n"
         f"📋 Waitlist System: *{wl_icon}*\n"
-        f"   _When ON: out\\-of\\-stock users join a queue & get notified_\n"
+        f"   _When ON: out\\-of\\-stock users join a queue \\& get notified_\n"
         f"   _When OFF: users see simple out\\-of\\-stock message_\n"
     )
     
     res_toggle_text = "🔴 Disable Reservation" if reservation_on else "🟢 Enable Reservation"
-    wl_toggle_text = "🔴 Disable Waitlist" if waitlist_on else "🟢 Enable Waitlist"
+    wl_toggle_text  = "🔴 Disable Waitlist"    if waitlist_on   else "🟢 Enable Waitlist"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"✏️ Bot Name: {bot_name}", callback_data="admin_change_bot_name")],
-        [InlineKeyboardButton(text="⏱️ Payment Timeout", callback_data="admin_dynconf:payment_timeout_seconds"),
-         InlineKeyboardButton(text="💰 Min Recharge", callback_data="admin_dynconf:bharatpe_min_recharge")],
-        [InlineKeyboardButton(text="🔄 Poll Interval", callback_data="admin_dynconf:payment_poll_interval")],
+        [InlineKeyboardButton(text="⏱️ Payment Timeout",   callback_data="admin_dynconf:payment_timeout_seconds"),
+         InlineKeyboardButton(text="💰 Min Recharge",       callback_data="admin_dynconf:bharatpe_min_recharge")],
+        [InlineKeyboardButton(text="🔒 Reservation Hold Time", callback_data="admin_dynconf:reservation_timeout_seconds"),
+         InlineKeyboardButton(text="🔄 Poll Interval",     callback_data="admin_dynconf:payment_poll_interval")],
         [InlineKeyboardButton(text=res_toggle_text, callback_data="admin_toggle_reservation")],
-        [InlineKeyboardButton(text=wl_toggle_text, callback_data="admin_toggle_waitlist")],
+        [InlineKeyboardButton(text=wl_toggle_text,  callback_data="admin_toggle_waitlist")],
         [InlineKeyboardButton(text="👮 Manage Admins", callback_data="admin_manage_admins")],
         [back_button("admin_panel")],
     ])
@@ -2217,7 +2221,11 @@ async def cb_admin_bot_settings(callback: types.CallbackQuery):
 @admin_only
 @error_handler
 async def cb_admin_toggle_reservation(callback: types.CallbackQuery):
-    """Toggle the stock reservation system on/off."""
+    """Toggle the stock reservation system on/off.
+
+    When turning OFF: immediately release ALL current reservations so stock
+    is restored to the pool without waiting for order timeouts.
+    """
     dyn = await db.get_dynamic_config()
     current = dyn.get("reservation_enabled", True)
     new_val = not current
@@ -2232,13 +2240,31 @@ async def cb_admin_toggle_reservation(callback: types.CallbackQuery):
             )
             return
         raise
+
+    released_count = 0
+    if not new_val:
+        # Reservation turned OFF → release all pending reservations instantly
+        try:
+            released_count = await db.release_all_reservations()
+            logger.info(
+                f"Admin {callback.from_user.id} disabled reservation: "
+                f"{released_count} pending order(s) expired, stock restored."
+            )
+        except Exception as e:
+            logger.error(f"release_all_reservations failed: {e}")
+
     status = "🟢 Enabled" if new_val else "🔴 Disabled"
     await db.add_admin_log(
         callback.from_user.id, "toggle_reservation", "bot_settings", "reservation_enabled",
         f"Reservation system {'enabled' if new_val else 'disabled'}"
+        + (f", {released_count} orders released" if released_count else "")
     )
     logger.info(f"Admin {callback.from_user.id} toggled reservation system: {status}")
-    await callback.answer(f"Reservation System: {status}", show_alert=True)
+
+    alert_msg = f"Reservation System: {status}"
+    if not new_val and released_count > 0:
+        alert_msg += f"\n✅ {released_count} pending order(s) expired & stock restored!"
+    await callback.answer(alert_msg, show_alert=True)
     await cb_admin_bot_settings(callback)
 
 
@@ -2546,9 +2572,27 @@ async def msg_bot_name_input(message: types.Message, state: FSMContext):
 # ══════════════════════════════════════════════════════════
 
 DYNCONF_LABELS = {
-    "payment_timeout_seconds": ("⏱️ Payment Timeout", "seconds", "How long to wait before expiring orders (in seconds). Example: 600 = 10 minutes"),
-    "bharatpe_min_recharge": ("💰 Min Recharge", "INR", "Minimum BharatPe payment amount in INR. Example: 10"),
-    "payment_poll_interval": ("🔄 Poll Interval", "seconds", "How often to check for expired orders (in seconds). Example: 30"),
+    "payment_timeout_seconds": (
+        "⏱️ Payment Timeout",
+        "seconds",
+        "How long a payment session stays open before expiring. Example: 600 = 10 min."
+    ),
+    "reservation_timeout_seconds": (
+        "🔒 Reservation Hold Time",
+        "seconds",
+        "How long stock is locked for a pending order when reservation is ON. "
+        "Example: 900 = 15 min. Stock is released automatically after this time."
+    ),
+    "bharatpe_min_recharge": (
+        "💰 Min Recharge",
+        "INR",
+        "Minimum BharatPe payment amount in INR. Example: 10"
+    ),
+    "payment_poll_interval": (
+        "🔄 Poll Interval",
+        "seconds",
+        "How often the bot checks for expired orders in the background. Example: 30"
+    ),
 }
 
 @router.callback_query(F.data.startswith("admin_dynconf:"))

@@ -43,16 +43,18 @@ async def create_purchase_order(user_id: int, coupon_id: int, amount: float,
         reserved = await db.reserve_stock(coupon_id, qty)
         if not reserved:
             raise OutOfStockError(f"Not enough stock for coupon {coupon_id} (requested {qty})")
+        # Use reservation_timeout so stock hold time is independent of payment window
+        timeout_sec = dyn.get("reservation_timeout_seconds", 900)
     else:
         # ── Step 1B: Just check stock without reserving ──
         coupon_row = await db.get_coupon(coupon_id)
         if not coupon_row or coupon_row["stock"] < qty:
             raise OutOfStockError(f"Not enough stock for coupon {coupon_id} (requested {qty})")
+        timeout_sec = dyn.get("payment_timeout_seconds", 600)
 
     # ── Step 2: Create order ──
     order_id = generate_order_id()           # human-readable: DX-xxxxx-XXXXXX
-    txn_ref = generate_unique_txn_id()       # Paytm ORDERID: TXN_{timestamp}_{random}
-    timeout_sec = dyn["payment_timeout_seconds"]
+    txn_ref  = generate_unique_txn_id()      # Paytm ORDERID: TXN_{timestamp}_{random}
 
     await db.create_order(order_id, user_id, coupon_id, amount, timeout_sec, qty)
 

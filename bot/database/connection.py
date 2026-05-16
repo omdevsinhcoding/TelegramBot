@@ -438,6 +438,16 @@ async def init_db() -> asyncpg.Pool:
         except Exception:
             pass
 
+        # Reservation hold duration — separate from payment session timeout
+        # Default 900s (15 min): how long stock stays locked while order is pending
+        try:
+            await conn.execute(
+                "ALTER TABLE bot_settings "
+                "ADD COLUMN IF NOT EXISTS reservation_timeout_seconds INTEGER DEFAULT 900;"
+            )
+        except Exception as e:
+            logger.warning(f"reservation_timeout_seconds migration (non-critical): {e}")
+
         # Waitlist for users wanting reserved coupons
         try:
             await conn.execute("""

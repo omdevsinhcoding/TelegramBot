@@ -195,6 +195,46 @@ async def confirm_reservation(coupon_id: int, qty: int = 1) -> bool:
     return result == "UPDATE 1"
 
 
+async def release_all_reservations() -> int:
+    """Release ALL currently pending-order reservations instantly.
+
+    Called when the admin disables the reservation system.
+    Restores stock for every pending order and then expires those orders so
+    no ghost reservations remain in the queue.
+
+    Returns the number of orders that were expired.
+    """
+    pool = await get_pool()
+
+    # 1. Add reserved stock back to the coupons pool (batch — no N+1)
+    await pool.execute("""
+        UPDATE coupons
+        SET stock       = stock + sub.total_qty,
+            reserved_qty = 0,
+            updated_at  = NOW()
+        FROM (
+            SELECT coupon_id, SUM(COALESCE(quantity, 1)) AS total_qty
+            FROM orders
+            WHERE status = 'pending'
+            GROUP BY coupon_id
+        ) sub
+        WHERE coupons.id = sub.coupon_id
+    """)
+
+    # 2. Expire all pending orders that held those reservations
+    result = await pool.execute("""
+        UPDATE orders
+        SET status = 'expired', updated_at = NOW()
+        WHERE status = 'pending'
+    """)
+
+    try:
+        count = int(result.split()[-1])
+    except (IndexError, ValueError):
+        count = 0
+    return count
+
+
 async def get_reservation_info(coupon_id: int) -> dict:
     """Get stock + reservation details in a SINGLE query.
     
@@ -1079,15 +1119,12 @@ async def get_dynamic_config() -> dict:
     """Get dynamic settings from bot_settings (admin-managed).
     
     Returns dict with:
-        payment_timeout_seconds: int (default 600)
+        payment_timeout_seconds: int (default 600) — payment session expiry
+        reservation_timeout_seconds: int (default 900) — how long stock stays held
         bharatpe_min_recharge: float (default 10)
         payment_poll_interval: int (default 30)
         reservation_enabled: bool (default True) — stock reservation system on/off
         waitlist_enabled: bool (default True) — waitlist on/off
-
-    NOTE: reservation_enabled and waitlist_enabled require migration_v3.sql to be
-    applied. If the columns are missing this function returns safe defaults instead
-    of crashing, so the bot stays operational until the migration is run.
     """
     try:
         settings = await get_bot_settings()
@@ -1104,21 +1141,22 @@ async def get_dynamic_config() -> dict:
 
         return {
             "payment_timeout_seconds": int(_safe_get("payment_timeout_seconds", 600)),
+            "reservation_timeout_seconds": int(_safe_get("reservation_timeout_seconds", 900)),
             "bharatpe_min_recharge": float(_safe_get("bharatpe_min_recharge", 10)),
             "payment_poll_interval": int(_safe_get("payment_poll_interval", 30)),
             "reservation_enabled": bool(_safe_get("reservation_enabled", True)),
             "waitlist_enabled": bool(_safe_get("waitlist_enabled", True)),
         }
     except Exception:
-        # Column(s) missing (migration_v3.sql not yet applied) — return safe defaults
+        # Column(s) missing — return safe defaults
         import logging as _log
         _log.getLogger("dreamx_bot").warning(
-            "get_dynamic_config: Could not read reservation_enabled/waitlist_enabled "
-            "— columns may be missing. Run sql/migration_v3.sql on your database. "
-            "Using safe defaults (both systems ON) until then."
+            "get_dynamic_config: Could not read all columns. "
+            "Run sql/migration_v3.sql + migration_v4.sql. Using safe defaults."
         )
         return {
             "payment_timeout_seconds": 600,
+            "reservation_timeout_seconds": 900,
             "bharatpe_min_recharge": 10.0,
             "payment_poll_interval": 30,
             "reservation_enabled": True,
