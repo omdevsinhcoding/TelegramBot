@@ -3218,38 +3218,56 @@ async def cb_admin_payments(callback: types.CallbackQuery):
     rp_key = escape_md(ps.get("razorpay_key_id") or "Not Set")
     rp_secret = escape_md("•••••" if ps.get("razorpay_key_secret") else "Not Set")
 
+    # Gateway display names (admin-customizable)
+    paytm_name = escape_md(ps.get("gateway_paytm_name", "Paytm"))
+    bp_name = escape_md(ps.get("gateway_bharatpe_name", "BharatPe"))
+    rp_name = escape_md(ps.get("gateway_razorpay_name", "Razorpay"))
+
     text = (
         f"💳 *Payment Settings*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"*Gateway Status:*\n"
-        f"  ✅ Paytm: *{paytm_status}*\n"
-        f"  🏦 BharatPe: *{bp_status}*\n"
-        f"  💳 Razorpay: *{rp_status}*\n\n"
-        f"━━━ *Paytm* ━━━\n"
+        f"  ✅ {paytm_name}: *{paytm_status}*\n"
+        f"  🏦 {bp_name}: *{bp_status}*\n"
+        f"  💳 {rp_name}: *{rp_status}*\n\n"
+        f"*Display Names \\(shown to users\\):*\n"
+        f"  ✅ Paytm → `{paytm_name}`\n"
+        f"  🏦 BharatPe → `{bp_name}`\n"
+        f"  💳 Razorpay → `{rp_name}`\n\n"
+        f"━━━ *{paytm_name}* ━━━\n"
         f"🏢 MID: `{paytm_mid}`\n"
         f"📱 UPI ID: `{paytm_upi}`\n\n"
-        f"━━━ *BharatPe* ━━━\n"
+        f"━━━ *{bp_name}* ━━━\n"
         f"🏢 Merchant ID: `{bp_mid}`\n"
         f"🔑 Token: `{bp_token}`\n"
         f"📱 UPI ID: `{bp_upi}`\n"
         f"📷 QR Image: {bp_qr}\n\n"
-        f"━━━ *Razorpay* ━━━\n"
+        f"━━━ *{rp_name}* ━━━\n"
         f"🔑 Key ID: `{rp_key}`\n"
         f"🔐 Secret: `{rp_secret}`\n\n"
         f"━━━ *General* ━━━\n"
         f"👤 Payee Name: `{payee}`\n"
     )
 
+    # Use raw names for toggle labels
+    paytm_raw = ps.get("gateway_paytm_name", "Paytm")
+    bp_raw = ps.get("gateway_bharatpe_name", "BharatPe")
+    rp_raw = ps.get("gateway_razorpay_name", "Razorpay")
+
     # Toggle buttons
-    paytm_toggle = "🔴 Disable Paytm" if paytm_on else "🟢 Enable Paytm"
-    bp_toggle = "🔴 Disable BharatPe" if bp_on else "🟢 Enable BharatPe"
-    rp_toggle = "🔴 Disable Razorpay" if rp_on else "🟢 Enable Razorpay"
+    paytm_toggle = f"🔴 Disable {paytm_raw}" if paytm_on else f"🟢 Enable {paytm_raw}"
+    bp_toggle = f"🔴 Disable {bp_raw}" if bp_on else f"🟢 Enable {bp_raw}"
+    rp_toggle = f"🔴 Disable {rp_raw}" if rp_on else f"🟢 Enable {rp_raw}"
 
     buttons = [
         # Gateway toggles
         [InlineKeyboardButton(text=paytm_toggle, callback_data="admin_gw_toggle:gateway_paytm_enabled"),
          InlineKeyboardButton(text=bp_toggle, callback_data="admin_gw_toggle:gateway_bharatpe_enabled")],
         [InlineKeyboardButton(text=rp_toggle, callback_data="admin_gw_toggle:gateway_razorpay_enabled")],
+        # Gateway name customization
+        [InlineKeyboardButton(text=f"✏️ Rename {paytm_raw}", callback_data="admin_pay_edit:gateway_paytm_name"),
+         InlineKeyboardButton(text=f"✏️ Rename {bp_raw}", callback_data="admin_pay_edit:gateway_bharatpe_name")],
+        [InlineKeyboardButton(text=f"✏️ Rename {rp_raw}", callback_data="admin_pay_edit:gateway_razorpay_name")],
         # Paytm settings
         [InlineKeyboardButton(text="🏢 Paytm MID", callback_data="admin_pay_edit:paytm_mid"),
          InlineKeyboardButton(text="📱 Paytm UPI", callback_data="admin_pay_edit:paytm_upi_id")],
@@ -3280,6 +3298,10 @@ PAYMENT_FIELD_LABELS = {
     "upi_payee_name": "UPI Payee Name",
     "razorpay_key_id": "Razorpay Key ID",
     "razorpay_key_secret": "Razorpay Key Secret",
+    # Gateway display names
+    "gateway_paytm_name": "Paytm Display Name",
+    "gateway_bharatpe_name": "BharatPe Display Name",
+    "gateway_razorpay_name": "Razorpay Display Name",
 }
 
 

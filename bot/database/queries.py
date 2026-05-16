@@ -1193,22 +1193,35 @@ async def get_payment_settings():
     """Get payment settings from DB (admin-managed)."""
     settings = await get_bot_settings()
 
+    # Helper: safely read a column that may not exist yet in the schema.
+    # Uses this for ALL fields so a missing column never raises KeyError.
+    def _safe_get(key, default):
+        try:
+            val = settings[key]
+            return val if val is not None else default
+        except (KeyError, Exception):
+            return default
+
     return {
-        "paytm_mid": settings.get("paytm_mid") or "",
-        "paytm_upi_id": settings.get("paytm_upi_id") or "",
-        "paytm_qr_code": settings.get("paytm_qr_code") or "",
-        "bharatpe_merchant_id": settings.get("bharatpe_merchant_id") or "",
-        "bharatpe_token": settings.get("bharatpe_token") or "",
-        "bharatpe_upi_id": settings.get("bharatpe_upi_id") or "",
-        "bharatpe_qr_path": settings.get("bharatpe_qr_path") or "",
-        "upi_payee_name": settings.get("upi_payee_name") or "",
+        "paytm_mid":              _safe_get("paytm_mid", ""),
+        "paytm_upi_id":           _safe_get("paytm_upi_id", ""),
+        "paytm_qr_code":          _safe_get("paytm_qr_code", ""),
+        "bharatpe_merchant_id":   _safe_get("bharatpe_merchant_id", ""),
+        "bharatpe_token":         _safe_get("bharatpe_token", ""),
+        "bharatpe_upi_id":        _safe_get("bharatpe_upi_id", ""),
+        "bharatpe_qr_path":       _safe_get("bharatpe_qr_path", ""),
+        "upi_payee_name":         _safe_get("upi_payee_name", ""),
         # Gateway visibility toggles
-        "gateway_paytm_enabled": settings.get("gateway_paytm_enabled", True),
-        "gateway_bharatpe_enabled": settings.get("gateway_bharatpe_enabled", True),
-        "gateway_razorpay_enabled": settings.get("gateway_razorpay_enabled", False),
+        "gateway_paytm_enabled":    _safe_get("gateway_paytm_enabled", True),
+        "gateway_bharatpe_enabled": _safe_get("gateway_bharatpe_enabled", True),
+        "gateway_razorpay_enabled": _safe_get("gateway_razorpay_enabled", False),
         # Razorpay credentials
-        "razorpay_key_id": settings.get("razorpay_key_id") or "",
-        "razorpay_key_secret": settings.get("razorpay_key_secret") or "",
+        "razorpay_key_id":     _safe_get("razorpay_key_id", ""),
+        "razorpay_key_secret": _safe_get("razorpay_key_secret", ""),
+        # Custom gateway display names — added in migration v6
+        "gateway_paytm_name":    _safe_get("gateway_paytm_name", "Paytm"),
+        "gateway_bharatpe_name": _safe_get("gateway_bharatpe_name", "BharatPe"),
+        "gateway_razorpay_name": _safe_get("gateway_razorpay_name", "Razorpay"),
     }
 
 

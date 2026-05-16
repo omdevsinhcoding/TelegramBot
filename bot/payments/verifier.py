@@ -202,16 +202,24 @@ async def fetch_bharatpe_transactions() -> list:
         return []
 
 
-async def verify_bharatpe_utr(utr: str, expected_amount: float) -> tuple[bool, dict | None]:
+async def verify_bharatpe_utr(utr: str, expected_amount: float = 0) -> tuple[bool, dict | None]:
     """
     Verify payment by matching UTR against BharatPe transactions.
-    Mirrors user's upi.php logic:
+    Mirrors user's upi.php logic exactly:
       foreach($transactions as $transaction) {
           if($transaction->bankReferenceNo == $txn_id) {
               $amount = $transaction->amount;
-              // verify amount >= min, credit balance
+              // credit balance
           }
       }
+
+    The PHP code does NOT do strict amount matching — it accepts the
+    payment if the UTR is found in BharatPe API, and uses the amount
+    from the API as the actual paid amount.
+
+    expected_amount is now optional and only used for informational
+    logging, NOT for rejection.  The caller is responsible for any
+    minimum-amount checks.
     """
     transactions = await fetch_bharatpe_transactions()
 
@@ -220,16 +228,14 @@ async def verify_bharatpe_utr(utr: str, expected_amount: float) -> tuple[bool, d
 
         if bank_ref == utr:
             amount = float(txn.get("amount", 0))
-
-            if not _amounts_match(amount, expected_amount):
-                logger.warning(
-                    f"BharatPe UTR {utr}: amount mismatch "
-                    f"(expected {expected_amount}, got {amount})"
-                )
-                return False, None
-
             payer_name = txn.get("payerName", "N/A")
             payer_handle = txn.get("payerHandle", "N/A")
+
+            if expected_amount and not _amounts_match(amount, expected_amount):
+                logger.info(
+                    f"BharatPe UTR {utr}: paid {amount}, expected {expected_amount} "
+                    f"(accepting — amount check is caller's job)"
+                )
 
             logger.info(
                 f"BharatPe VERIFIED: UTR={utr}, amount={amount}, "
@@ -244,7 +250,7 @@ async def verify_bharatpe_utr(utr: str, expected_amount: float) -> tuple[bool, d
                 "payer_handle": payer_handle,
             }
 
-    logger.debug(f"BharatPe UTR {utr} not found in transactions")
+    logger.debug(f"BharatPe UTR {utr} not found in {len(transactions)} BharatPe transactions")
     return False, None
 
 

@@ -278,7 +278,21 @@ async def init_db() -> asyncpg.Pool:
 
         # Referral system
         try:
-            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code VARCHAR(16) UNIQUE;")
+            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code VARCHAR(32) UNIQUE;")
+            # Widen referral_code if it was created with the old VARCHAR(16) definition
+            await conn.execute("""
+                DO $$ BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name='users'
+                          AND column_name='referral_code'
+                          AND character_maximum_length IS NOT NULL
+                          AND character_maximum_length < 32
+                    ) THEN
+                        ALTER TABLE users ALTER COLUMN referral_code TYPE VARCHAR(32);
+                    END IF;
+                END $$;
+            """)
             await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT;")
             await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_earnings NUMERIC(12,2) DEFAULT 0.00;")
             await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS wallet_balance NUMERIC(12,2) DEFAULT 0.00;")
@@ -516,7 +530,63 @@ async def init_db() -> asyncpg.Pool:
             logger.warning(f"referral_claims FK change (non-critical): {e}")
         # ──────────────────────────────────────────────────────────────────
 
-    logger.info("Database pool ready.")
+        # ── MIGRATION V5: payment_method column on orders ─────────────────
+        try:
+            await conn.execute(
+                "ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_method VARCHAR(64) DEFAULT 'gateway';"
+            )
+        except Exception as e:
+            logger.warning(f"v5 payment_method migration (non-critical): {e}")
+
+        # ── MIGRATION V6: configurable gateway display names ──────────────
+        # Admin can rename "Paytm" → "UPI Gateway", etc.
+        try:
+            await conn.execute(
+                "ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS gateway_paytm_name VARCHAR(64) DEFAULT 'Paytm';"
+            )
+            await conn.execute(
+                "ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS gateway_bharatpe_name VARCHAR(64) DEFAULT 'BharatPe';"
+            )
+            await conn.execute(
+                "ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS gateway_razorpay_name VARCHAR(64) DEFAULT 'Razorpay';"
+            )
+            # Clean up stale UTRs that were stored on failed/pending verifications
+            # (only wipe rows that are still pending — keep successful ones)
+            await conn.execute("""
+                UPDATE transactions SET utr = NULL
+                WHERE utr IS NOT NULL
+                  AND status IN ('initiated', 'pending')
+                  AND order_id IN (SELECT order_id FROM orders WHERE status = 'pending');
+            """)
+            logger.info("Migration V6 applied: gateway name columns + stale UTR cleanup.")
+        except Exception as e:
+            logger.warning(f"Migration V6 (non-critical): {e}")
+
+        # ── MIGRATION V7: UTR dedup index + razorpay collision fix ────────
+        try:
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_txn_utr_status_gw
+                    ON transactions (utr, status, gateway)
+                    WHERE utr IS NOT NULL;
+            """)
+            # Razorpay stores payment_link_id in utr column — clear non-success ones
+            # to prevent collision with real BharatPe UTR numbers.
+            await conn.execute("""
+                UPDATE transactions
+                SET utr = NULL
+                WHERE gateway = 'razorpay'
+                  AND status IN ('initiated', 'pending', 'failed', 'expired');
+            """)
+            # Clear any empty-string UTRs that might cause phantom matches
+            await conn.execute("""
+                UPDATE transactions SET utr = NULL WHERE utr = '';
+            """)
+            logger.info("Migration V7 applied: UTR index + razorpay/empty UTR cleanup.")
+        except Exception as e:
+            logger.warning(f"Migration V7 (non-critical): {e}")
+        # ──────────────────────────────────────────────────────────────────
+
+    logger.info("Database pool ready — all migrations applied.")
     _last_health_check = time.monotonic()
     _db_ready.set()
     return _pool

@@ -414,12 +414,14 @@ async def cb_pay_combo(callback: types.CallbackQuery, state: FSMContext):
 
     if wallet_deduct <= 0:
         # No wallet balance — redirect to normal gateway payment
-        callback.data = f"pay_gateway:{gateway}:{coupon_id}:{qty}"
         if gateway == "paytm":
+            callback.data = f"pay_gateway:paytm:{coupon_id}:{qty}"
             await cb_pay_paytm(callback)
         elif gateway == "bharatpe":
+            callback.data = f"pay_gateway:bharatpe:{coupon_id}:{qty}"
             await cb_pay_bharatpe(callback, state)
         elif gateway == "razorpay":
+            callback.data = f"pay_gateway:razorpay:{coupon_id}:{qty}"
             await cb_pay_razorpay(callback)
         return
 
@@ -473,6 +475,9 @@ async def cb_pay_combo(callback: types.CallbackQuery, state: FSMContext):
     wallet_esc = escape_md(f"₹{wallet_deduct:.1f}")
     gateway_esc = escape_md(f"₹{gateway_amount:.1f}")
 
+    # Fetch payment settings for gateway names
+    ps = await db.get_payment_settings()
+
     if gateway == "paytm":
         upi_url = await generate_upi_intent_url(gateway_amount, txn_ref, f"Order {order_id}", "paytm")
         bot_name = await db.get_bot_name()
@@ -481,12 +486,13 @@ async def cb_pay_combo(callback: types.CallbackQuery, state: FSMContext):
         timeout_min = dyn["payment_timeout_seconds"] // 60
         title = escape_md(coupon["title"])
 
+        paytm_gw = escape_md(ps.get("gateway_paytm_name", "Paytm"))
         caption = (
-            f"💳 *COMBO Payment — Paytm*\n\n"
+            f"💳 *COMBO Payment — {paytm_gw}*\n\n"
             f"🏷️ {title}\n"
             f"💰 Total: *{escape_md(format_currency(total_amount))}*\n"
             f"💰 Wallet Deducted: *{wallet_esc}*\n"
-            f"💳 Pay via Paytm: *{gateway_esc}*\n"
+            f"💳 Pay via {paytm_gw}: *{gateway_esc}*\n"
             f"🧾 Order: `{escape_md(order_id)}`\n\n"
             f"⏰ Expires in {timeout_min} minutes\n\n"
             f"Scan the QR to pay *{gateway_esc}*\\.\n"
@@ -510,7 +516,6 @@ async def cb_pay_combo(callback: types.CallbackQuery, state: FSMContext):
         dyn = await db.get_dynamic_config()
         timeout_min = dyn["payment_timeout_seconds"] // 60
         title = escape_md(coupon["title"])
-        ps = await db.get_payment_settings()
         bp_upi = ps.get("bharatpe_upi_id", "")
 
         upi_line = ""
@@ -518,12 +523,13 @@ async def cb_pay_combo(callback: types.CallbackQuery, state: FSMContext):
             upi_esc = escape_md(bp_upi)
             upi_line = f"\n📱 UPI ID: `{upi_esc}` _\\(tap to copy\\)_\n"
 
+        bp_gw = escape_md(ps.get("gateway_bharatpe_name", "BharatPe"))
         caption = (
-            f"💳 *COMBO Payment — Bharat Pay*\n\n"
+            f"💳 *COMBO Payment — {bp_gw}*\n\n"
             f"🏷️ {title}\n"
             f"💰 Total: *{escape_md(format_currency(total_amount))}*\n"
             f"💰 Wallet Deducted: *{wallet_esc}*\n"
-            f"🏦 Pay via BharatPe: *{gateway_esc}*\n"
+            f"🏦 Pay via {bp_gw}: *{gateway_esc}*\n"
             f"🧾 Order: `{escape_md(order_id)}`\n"
             f"{upi_line}\n"
             f"📱 *Steps:*\n"
@@ -583,12 +589,13 @@ async def cb_pay_combo(callback: types.CallbackQuery, state: FSMContext):
         timeout_min = dyn["payment_timeout_seconds"] // 60
         title = escape_md(coupon["title"])
 
+        rp_gw = escape_md(ps.get("gateway_razorpay_name", "Razorpay"))
         text = (
-            f"💳 *COMBO Payment — Razorpay*\n\n"
+            f"💳 *COMBO Payment — {rp_gw}*\n\n"
             f"🏷️ {title}\n"
             f"💰 Total: *{escape_md(format_currency(total_amount))}*\n"
             f"💰 Wallet Deducted: *{wallet_esc}*\n"
-            f"💳 Pay via Razorpay: *{gateway_esc}*\n"
+            f"💳 Pay via {rp_gw}: *{gateway_esc}*\n"
             f"🧾 Order: `{escape_md(order_id)}`\n\n"
             f"Click Pay Now to pay *{gateway_esc}*\n"
             f"⏰ Expires in {timeout_min} minutes\n\n"
@@ -701,9 +708,11 @@ async def cb_pay_paytm(callback: types.CallbackQuery):
     amt = escape_md(format_currency(amount))
     oid = escape_md(order_id)
     ref = escape_md(txn_ref)
+    ps = await db.get_payment_settings()
+    gw_name = escape_md(ps.get("gateway_paytm_name", "Paytm"))
 
     caption = (
-        f"💳 *Payment Required — Paytm*\n\n"
+        f"💳 *Payment Required — {gw_name}*\n\n"
         f"🏷️ {title}\n"
         f"💰 Amount: *{amt}*\n"
         f"🧾 Order: `{oid}`\n"
@@ -785,8 +794,10 @@ async def cb_pay_bharatpe(callback: types.CallbackQuery, state: FSMContext):
         upi_esc = escape_md(bp_upi)
         upi_line = f"\n📱 UPI ID: `{upi_esc}` _\\(tap to copy\\)_\n"
 
+    bp_gw_name = escape_md(ps.get("gateway_bharatpe_name", "BharatPe"))
+
     caption = (
-        f"💳 *Payment Required — Bharat Pay*\n\n"
+        f"💳 *Payment Required — {bp_gw_name}*\n\n"
         f"🏷️ {title}\n"
         f"💰 Amount: *{amt}*\n"
         f"🧾 Order: `{oid}`\n"
@@ -846,7 +857,14 @@ async def cb_pay_bharatpe(callback: types.CallbackQuery, state: FSMContext):
 @router.message(BharatPeStates.waiting_utr)
 @error_handler
 async def msg_bharatpe_utr(message: types.Message, state: FSMContext):
-    """User submitted UTR number — verify against BharatPe API."""
+    """User submitted UTR number — verify against BharatPe API.
+    
+    FIXED: UTR is NOT stored in DB until verification succeeds.
+    This allows the user to retry the same UTR if BharatPe API is slow.
+    Automatic retry with delay is also implemented.
+    """
+    import asyncio
+
     data = await state.get_data()
     order_id = data.get("order_id")
     coupon_id = data.get("coupon_id")
@@ -875,12 +893,14 @@ async def msg_bharatpe_utr(message: types.Message, state: FSMContext):
         await message.answer("⚠️ This order is no longer pending\\. Please create a new order\\.", parse_mode="MarkdownV2")
         return
 
-    # Check if UTR was already used (ANY status — prevents reuse even if admin gave account manually)
+    # Check if UTR was already used by a DIFFERENT order (prevents cross-order reuse)
+    # But allow the SAME order to resubmit the same UTR (retry scenario)
+    # IMPORTANT: Only check bharatpe/paytm gateway txns — Razorpay stores link_id in utr column
     pool = await db.get_pool()
     existing = await pool.fetchrow(
-        "SELECT order_id, status FROM transactions WHERE utr = $1", utr
+        "SELECT order_id, status FROM transactions WHERE utr = $1 AND status = 'success' AND gateway IN ('bharatpe', 'paytm')", utr
     )
-    if existing:
+    if existing and existing["order_id"] != order_id:
         oid_esc = escape_md(existing["order_id"])
         await message.answer(
             f"🚫 *Already Claimed\\!*\n\n"
@@ -893,27 +913,43 @@ async def msg_bharatpe_utr(message: types.Message, state: FSMContext):
 
     # Show "checking" message
     checking_msg = await message.answer(
-        "🔄 *Checking your payment\\.\\.\\.*\n\nPlease wait while we verify your UTR\\.",
+        "🔄 *Checking your payment\\.\\.\\.*\n\nPlease wait while we verify your UTR\\.\n"
+        "_BharatPe may take a moment to process\\._",
         parse_mode="MarkdownV2",
     )
 
-    # Store the UTR immediately in the transaction record (prevents reuse even if verification fails)
-    try:
-        await pool.execute(
-            "UPDATE transactions SET utr = $1 WHERE order_id = $2 AND utr IS NULL",
-            utr, order_id,
-        )
-    except Exception as e:
-        logger.warning(f"Non-critical: could not store UTR early for {order_id}: {e}")
+    # DO NOT store UTR in DB yet — only store after successful verification
+    # This allows the user to retry the same UTR if BharatPe API is slow
 
-    # Verify UTR against BharatPe API
-    is_paid, details = await verify_bharatpe_utr(utr, amount)
+    # Verify UTR against BharatPe API — with automatic retry
+    # BharatPe API can take 10-30 seconds to reflect a new payment
+    MAX_RETRIES = 3
+    RETRY_DELAY = 5  # seconds between retries
+    is_paid = False
+    details = None
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        is_paid, details = await verify_bharatpe_utr(utr, amount)
+        if is_paid:
+            break
+        if attempt < MAX_RETRIES:
+            logger.info(f"BharatPe UTR {utr} attempt {attempt}/{MAX_RETRIES} failed, retrying in {RETRY_DELAY}s...")
+            try:
+                await checking_msg.edit_text(
+                    f"🔄 *Checking your payment\\.\\.\\.*\n\n"
+                    f"Attempt {attempt}/{MAX_RETRIES} — payment not found yet\\.\n"
+                    f"_Retrying in {RETRY_DELAY} seconds\\.\\.\\._",
+                    parse_mode="MarkdownV2",
+                )
+            except Exception:
+                pass
+            await asyncio.sleep(RETRY_DELAY)
 
     if is_paid:
         # Payment verified! Clear FSM state
         await state.clear()
 
-        # Update transaction with verification details
+        # NOW store UTR in DB (only after verification succeeds)
         txn_ref = utr
         try:
             txn_row = await pool.fetchrow(
@@ -965,7 +1001,7 @@ async def msg_bharatpe_utr(message: types.Message, state: FSMContext):
                 parse_mode="MarkdownV2",
             )
     else:
-        # UTR not found or amount mismatch
+        # UTR not found or amount mismatch after all retries
         try:
             await checking_msg.delete()
         except Exception:
@@ -1054,15 +1090,17 @@ async def cb_pay_razorpay(callback: types.CallbackQuery):
     title = escape_md(coupon["title"])
     amt = escape_md(format_currency(amount))
     oid = escape_md(order_id)
+    rp_ps = await db.get_payment_settings()
+    rp_gw_name = escape_md(rp_ps.get("gateway_razorpay_name", "Razorpay"))
 
     text = (
-        f"💳 *Payment Required — Razorpay*\n\n"
+        f"💳 *Payment Required — {rp_gw_name}*\n\n"
         f"🏷️ {title}\n"
         f"💰 Amount: *{amt}*\n"
         f"🧾 Order: `{oid}`\n\n"
         f"📱 *Steps:*\n"
         f"1️⃣ Click the payment button below\n"
-        f"2️⃣ Complete payment on Razorpay page\n"
+        f"2️⃣ Complete payment on {rp_gw_name} page\n"
         f"3️⃣ Come back and click 'Check Payment'\n\n"
         f"⏰ Expires in {timeout_min} minutes\n\n"
         f"_After payment, click Check Payment below\\._"
