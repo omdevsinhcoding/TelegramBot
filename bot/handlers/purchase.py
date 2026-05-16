@@ -45,13 +45,23 @@ async def _build_success_message(order_id: str, coupon_id: int, amount: float, u
     amt = escape_md(format_currency(amount))
     oid = escape_md(order_id)
 
-    # Build codes section
+    # Build codes section — limit inline display to avoid Telegram 4096 char limit
+    MAX_INLINE_CODES = 10
     if codes:
         if len(codes) == 1:
             codes_section = f"\n🔑 *Your Coupon Code:*\n`{escape_md(codes[0])}`"
-        else:
+        elif len(codes) <= MAX_INLINE_CODES:
             codes_list = "\n".join(f"`{escape_md(c)}`" for c in codes)
             codes_section = f"\n🔑 *Your Coupon Codes \\({len(codes)}\\):*\n{codes_list}"
+        else:
+            # Too many codes — show first few + direct to My Orders
+            preview = "\n".join(f"`{escape_md(c)}`" for c in codes[:MAX_INLINE_CODES])
+            remaining = len(codes) - MAX_INLINE_CODES
+            codes_section = (
+                f"\n🔑 *Your Coupon Codes \\({len(codes)}\\):*\n{preview}\n"
+                f"\n_\\.\\.\\.and {remaining} more_\n"
+                f"📦 *Go to My Orders → View Codes to see all {len(codes)} codes*"
+            )
     else:
         codes_section = "\n⚠️ _Codes will be available in your order history_"
 
@@ -1621,35 +1631,77 @@ async def cb_my_orders(callback: types.CallbackQuery):
 @router.callback_query(F.data.startswith("view_codes:"))
 @error_handler
 async def cb_view_codes(callback: types.CallbackQuery):
-    """View coupon codes for a specific order."""
-    order_id = callback.data.split(":")[1]
+    """View coupon codes for a specific order.
+    
+    Handles large quantities by splitting codes into multiple messages
+    of CODES_PER_PAGE each to stay within Telegram's 4096 char limit.
+    """
+    parts = callback.data.split(":")
+    order_id = parts[1]
+    page = int(parts[2]) if len(parts) > 2 else 1
 
     pool = await db.get_pool()
-    codes = await pool.fetch(
-        "SELECT code FROM coupon_codes WHERE order_id = $1 AND is_sold = TRUE", order_id
+    total_codes = await pool.fetchval(
+        "SELECT COUNT(*) FROM coupon_codes WHERE order_id = $1 AND is_sold = TRUE", order_id
     )
 
-    if not codes:
+    if not total_codes:
         await callback.answer("No codes found for this order.", show_alert=True)
         return
 
+    CODES_PER_PAGE = 50
+    total_pages = (total_codes + CODES_PER_PAGE - 1) // CODES_PER_PAGE
+    page = max(1, min(page, total_pages))  # clamp to valid range
+    offset = (page - 1) * CODES_PER_PAGE
+
+    codes = await pool.fetch(
+        "SELECT code FROM coupon_codes WHERE order_id = $1 AND is_sold = TRUE ORDER BY id LIMIT $2 OFFSET $3",
+        order_id, CODES_PER_PAGE, offset
+    )
+
     oid_esc = escape_md(order_id)
-    lines = [
-        f"🔑 *Codes for Order* `{oid_esc}`\n",
-        "━━━━━━━━━━━━━━━━━━━━",
-    ]
-    for i, c in enumerate(codes, 1):
+    if total_pages > 1:
+        lines = [
+            f"🔑 *Codes for Order* `{oid_esc}`",
+            f"📄 Page {page}/{total_pages} \\(Total: {total_codes} codes\\)\n",
+            "━━━━━━━━━━━━━━━━━━━━",
+        ]
+    else:
+        lines = [
+            f"🔑 *Codes for Order* `{oid_esc}`\n",
+            "━━━━━━━━━━━━━━━━━━━━",
+        ]
+
+    for i, c in enumerate(codes, start=offset + 1):
         code_esc = escape_md(c["code"])
         lines.append(f"{i}\\. `{code_esc}`")
 
     lines.append("━━━━━━━━━━━━━━━━━━━━")
     lines.append(f"\n_💾 Save these codes\\!_")
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="◀️ Back to Orders", callback_data="my_orders")],
-        [back_button("back_home")],
-    ])
-    await callback.message.edit_text("\n".join(lines), parse_mode="MarkdownV2", reply_markup=kb)
+    # Build navigation buttons
+    nav_buttons = []
+    if page > 1:
+        nav_buttons.append(InlineKeyboardButton(text="⬅️ Prev", callback_data=f"view_codes:{order_id}:{page-1}"))
+    if page < total_pages:
+        nav_buttons.append(InlineKeyboardButton(text="Next ➡️", callback_data=f"view_codes:{order_id}:{page+1}"))
+
+    buttons = []
+    if nav_buttons:
+        buttons.append(nav_buttons)
+    buttons.append([InlineKeyboardButton(text="◀️ Back to Orders", callback_data="my_orders")])
+    buttons.append([back_button("back_home")])
+
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    try:
+        await callback.message.edit_text("\n".join(lines), parse_mode="MarkdownV2", reply_markup=kb)
+    except Exception as e:
+        if "message is not modified" not in str(e).lower():
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+            await callback.message.answer("\n".join(lines), parse_mode="MarkdownV2", reply_markup=kb)
     await callback.answer()
 
 
