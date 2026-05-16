@@ -1924,31 +1924,72 @@ async def cb_admin_manage_referrals(callback: types.CallbackQuery, state: FSMCon
 @admin_only
 @error_handler
 async def msg_manage_referral_user_input(message: types.Message, state: FSMContext):
-    """Show all referrals made by the entered user ID."""
+    """Show all referral relationships for the entered user (BOTH directions)."""
     await state.clear()
     text = message.text.strip()
     try:
-        referrer_id = int(text)
+        user_id = int(text)
     except ValueError:
         await message.answer(
-            "❌ Invalid ID. Send a numeric Telegram user ID.",
+            "\u274c Invalid ID. Send a numeric Telegram user ID.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [back_button("admin_manage_referrals")]
             ])
         )
         return
 
-    refs = await db.get_referrals_for_user(referrer_id)
-    referrer_row = await db.get_user(referrer_id)
-    referrer_name = ""
-    if referrer_row:
-        referrer_name = referrer_row.get("full_name") or referrer_row.get("username") or str(referrer_id)
+    user_row = await db.get_user(user_id)
+    user_name = ""
+    if user_row:
+        user_name = user_row.get("full_name") or user_row.get("username") or str(user_id)
     else:
-        referrer_name = str(referrer_id)
+        user_name = str(user_id)
 
-    if not refs:
+    lines = []
+    buttons = []
+
+    # ── SECTION 1: Who referred THIS user (incoming) ──
+    referrer_of = await db.get_referrer_of(user_id)
+    if referrer_of:
+        ref_id = referrer_of["telegram_id"]
+        ref_name = escape_md(str(referrer_of.get("full_name") or referrer_of.get("username") or ref_id)[:25])
+        lines.append(f"\U0001f4e5 *Referred by:* `{ref_id}` \\({ref_name}\\)")
+        buttons.append([InlineKeyboardButton(
+            text=f"\U0001f5d1\ufe0f Remove referrer ({ref_id}) \u2014 let user re-refer",
+            callback_data=f"admin_del_ref:{ref_id}:{user_id}"
+        )])
+    else:
+        lines.append("\U0001f4e5 *Referred by:* _None \u2014 can enter a referral code_")
+
+    lines.append("")
+
+    # ── SECTION 2: People THIS user referred (outgoing) ──
+    refs = await db.get_referrals_for_user(user_id)
+    if refs:
+        lines.append(f"\U0001f4e4 *Referred {len(refs)} user\\(s\\):*")
+        for r in refs:
+            name = escape_md(str(r["referred_name"])[:25])
+            rid = r["referred_id"]
+            status = r["status"]
+            commission = float(r["commission"] or 0)
+            lines.append(f"  \u2022 `{rid}` *{name}* \u2014 {status}, comm\\=\u20b9{commission:.1f}")
+            buttons.append([InlineKeyboardButton(
+                text=f"\U0001f5d1\ufe0f Remove {str(r['referred_name'])[:20]} ({rid})",
+                callback_data=f"admin_del_ref:{user_id}:{rid}"
+            )])
+        buttons.append([InlineKeyboardButton(
+            text="\U0001f5d1\ufe0f Remove ALL outgoing referrals (reset)",
+            callback_data=f"admin_del_ref_all:{user_id}"
+        )])
+    else:
+        lines.append("\U0001f4e4 *Referred:* _No one_")
+
+    # Nothing at all
+    if not referrer_of and not refs:
         await message.answer(
-            f"ℹ️ User *{escape_md(referrer_name)}* `{referrer_id}` has no referrals\\.",
+            f"\u2139\ufe0f User *{escape_md(user_name)}* `{user_id}` has no referral relationships\\.\n\n"
+            f"\U0001f4e5 Not referred by anyone\n"
+            f"\U0001f4e4 Has not referred anyone",
             parse_mode="MarkdownV2",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [back_button("admin_referral_settings")]
@@ -1956,33 +1997,18 @@ async def msg_manage_referral_user_input(message: types.Message, state: FSMConte
         )
         return
 
-    lines = []
-    buttons = []
-    for r in refs:
-        name = escape_md(str(r["referred_name"])[:25])
-        rid  = r["referred_id"]
-        status = r["status"]
-        commission = float(r["commission"] or 0)
-        lines.append(f"• `{rid}` *{name}* — {status}, comm=₹{commission:.1f}")
-        buttons.append([InlineKeyboardButton(
-            text=f"🗑️ Remove {str(r['referred_name'])[:20]} ({rid})",
-            callback_data=f"admin_del_ref:{referrer_id}:{rid}"
-        )])
-
     text_body = (
-        f"🗑️ *Referrals by* `{referrer_id}` \\({escape_md(referrer_name)}\\)\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"\U0001f464 *Referrals for* `{user_id}` \\({escape_md(user_name)}\\)\n"
+        f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
         + "\n".join(lines)
-        + f"\n\n_Removing a referral reverses the wallet credit and lets the referred user rejoin via another link\\._"
+        + f"\n\n_Removing a referral reverses wallet credit and lets the user re\\-refer\\._"
     )
-    buttons.append([InlineKeyboardButton(
-        text="🗑️ Remove ALL referrals (reset)",
-        callback_data=f"admin_del_ref_all:{referrer_id}"
-    )])
+
     buttons.append([back_button("admin_referral_settings")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
 
     await message.answer(text_body, parse_mode="MarkdownV2", reply_markup=kb)
+
 
 
 @router.callback_query(F.data.startswith("admin_del_ref:"))
