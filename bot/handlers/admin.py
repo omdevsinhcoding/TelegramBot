@@ -2223,8 +2223,11 @@ async def cb_admin_bot_settings(callback: types.CallbackQuery):
 async def cb_admin_toggle_reservation(callback: types.CallbackQuery):
     """Toggle the stock reservation system on/off.
 
-    When turning OFF: immediately release ALL current reservations so stock
-    is restored to the pool without waiting for order timeouts.
+    When turning OFF:
+      - ALL pending orders are instantly expired in the DB.
+      - Stock is restored to the available pool immediately.
+      - Every user whose order was cancelled receives a push message
+        automatically — no /start or any action needed on their side.
     """
     dyn = await db.get_dynamic_config()
     current = dyn.get("reservation_enabled", True)
@@ -2242,28 +2245,60 @@ async def cb_admin_toggle_reservation(callback: types.CallbackQuery):
         raise
 
     released_count = 0
+    notified = 0
+
     if not new_val:
-        # Reservation turned OFF → release all pending reservations instantly
+        # ── Reservation turned OFF ─────────────────────────────────────
+        # 1. Release stock + expire pending orders, get list of affected users
         try:
-            released_count = await db.release_all_reservations()
+            released_count, affected_orders = await db.release_all_reservations()
             logger.info(
                 f"Admin {callback.from_user.id} disabled reservation: "
                 f"{released_count} pending order(s) expired, stock restored."
             )
         except Exception as e:
             logger.error(f"release_all_reservations failed: {e}")
+            affected_orders = []
+
+        # 2. Push a cancellation message to every affected user automatically
+        for order in affected_orders:
+            try:
+                title_esc = escape_md(order.get("coupon_title") or "your coupon")
+                oid_esc   = escape_md(order["order_id"])
+                await callback.bot.send_message(
+                    order["user_id"],
+                    f"⚠️ *Order Cancelled*\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"Your order `{oid_esc}` for *{title_esc}* has been "
+                    f"cancelled because the admin switched the store to "
+                    f"*first\\-come, first\\-served* mode\\.\n\n"
+                    f"🛒 You can place a new order anytime — no reservation "
+                    f"needed now\\!\n"
+                    f"💡 _First to pay gets the coupon\\._",
+                    parse_mode="MarkdownV2",
+                )
+                notified += 1
+            except Exception as notify_err:
+                logger.warning(
+                    f"Could not notify user {order['user_id']} "
+                    f"(order {order['order_id']}): {notify_err}"
+                )
+        # ──────────────────────────────────────────────────────────────
 
     status = "🟢 Enabled" if new_val else "🔴 Disabled"
     await db.add_admin_log(
         callback.from_user.id, "toggle_reservation", "bot_settings", "reservation_enabled",
-        f"Reservation system {'enabled' if new_val else 'disabled'}"
-        + (f", {released_count} orders released" if released_count else "")
+        f"Reservation {'enabled' if new_val else 'disabled'}"
+        + (f", {released_count} orders released, {notified} users notified" if released_count else "")
     )
     logger.info(f"Admin {callback.from_user.id} toggled reservation system: {status}")
 
     alert_msg = f"Reservation System: {status}"
-    if not new_val and released_count > 0:
-        alert_msg += f"\n✅ {released_count} pending order(s) expired & stock restored!"
+    if not new_val:
+        if released_count > 0:
+            alert_msg += f"\n✅ {released_count} order(s) cancelled & stock restored!"
+        if notified > 0:
+            alert_msg += f"\n📨 {notified} user(s) notified automatically."
     await callback.answer(alert_msg, show_alert=True)
     await cb_admin_bot_settings(callback)
 

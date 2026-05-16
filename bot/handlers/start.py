@@ -69,12 +69,33 @@ async def cmd_start(message: types.Message):
                         ref_settings = await db.get_referral_settings()
                         mode = ref_settings["mode"] if ref_settings else "commission"
 
-                        # Grant wallet_reward immediately if channels joined
+                        # Grant wallet_reward IMMEDIATELY on join (if channels joined)
                         reward_msg = ""
                         if mode == "wallet_reward" and channel_joined and ref_settings:
                             reward_amt = float(ref_settings.get("reward_amount", 10.0) or 10.0)
-                            await db.add_referral_earnings(referrer_id, reward_amt)
-                            reward_msg = f"\n💵 ₹{reward_amt} added to your wallet\\!"
+                            try:
+                                await db.add_referral_earnings(referrer_id, reward_amt)
+                                reward_msg = f"\n💵 ₹{reward_amt} added to your wallet\\!"
+                                logger.info(
+                                    f"[REFERRAL] wallet_reward ₹{reward_amt} credited: "
+                                    f"referrer={referrer_id}, new_user={user.id}"
+                                )
+                                # Log wallet transaction
+                                try:
+                                    bal = await db.get_wallet_balance(referrer_id)
+                                    await db.add_wallet_transaction(
+                                        referrer_id, reward_amt, "topup",
+                                        bal_before=bal - reward_amt,
+                                        bal_after=bal,
+                                        reference=f"ref_join_reward_from_{user.id}",
+                                    )
+                                except Exception as wt_err:
+                                    logger.warning(f"[REFERRAL] wallet_txn log failed: {wt_err}")
+                            except Exception as credit_err:
+                                logger.error(
+                                    f"[REFERRAL] wallet_reward credit FAILED: "
+                                    f"referrer={referrer_id}, amount={reward_amt}, err={credit_err}"
+                                )
 
                         # Notify the REFERRER
                         try:
@@ -85,7 +106,11 @@ async def cmd_start(message: types.Message):
                             )
                             if mode == "wallet_reward" and channel_joined:
                                 reward_amt = float(ref_settings.get("reward_amount", 10.0) or 10.0)
-                                notify_text += f"\n💵 *₹{escape_md(str(reward_amt))}* added to your wallet\\!"
+                                bal = await db.get_wallet_balance(referrer_id)
+                                notify_text += (
+                                    f"\n💵 *₹{escape_md(str(reward_amt))}* added to your wallet\\!"
+                                    f"\n💰 Balance: *₹{escape_md(str(round(float(bal), 2)))}*"
+                                )
                             elif mode == "commission":
                                 pct = ref_settings.get("commission_percent", 10)
                                 notify_text += f"\n💰 You'll earn {escape_md(str(pct))}% on their purchases\\!"
@@ -99,8 +124,8 @@ async def cmd_start(message: types.Message):
                             await message.bot.send_message(
                                 referrer_id, notify_text, parse_mode="MarkdownV2",
                             )
-                        except Exception:
-                            pass
+                        except Exception as notify_err:
+                            logger.warning(f"[REFERRAL] referrer notification failed: {notify_err}")
     except Exception as e:
         logger.warning(f"Referral processing error (non-critical): {e}")
 

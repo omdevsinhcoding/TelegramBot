@@ -195,23 +195,35 @@ async def confirm_reservation(coupon_id: int, qty: int = 1) -> bool:
     return result == "UPDATE 1"
 
 
-async def release_all_reservations() -> int:
+async def release_all_reservations() -> tuple[int, list]:
     """Release ALL currently pending-order reservations instantly.
 
     Called when the admin disables the reservation system.
-    Restores stock for every pending order and then expires those orders so
-    no ghost reservations remain in the queue.
+    Restores stock for every pending order, expires those orders, and
+    returns the list of affected orders so the caller can notify users.
 
-    Returns the number of orders that were expired.
+    Returns:
+        (count, affected_orders)
+        count          — number of orders expired
+        affected_orders — list of dicts: {order_id, user_id, coupon_title}
     """
     pool = await get_pool()
 
-    # 1. Add reserved stock back to the coupons pool (batch — no N+1)
+    # 0. Snapshot all pending orders BEFORE expiring (we need user_id for notifications)
+    affected_rows = await pool.fetch("""
+        SELECT o.order_id, o.user_id, COALESCE(c.title, 'your coupon') AS coupon_title
+        FROM orders o
+        LEFT JOIN coupons c ON o.coupon_id = c.id
+        WHERE o.status = 'pending'
+    """)
+    affected = [dict(r) for r in affected_rows]
+
+    # 1. Restore stock in one batch UPDATE (no N+1)
     await pool.execute("""
         UPDATE coupons
-        SET stock       = stock + sub.total_qty,
+        SET stock        = stock + sub.total_qty,
             reserved_qty = 0,
-            updated_at  = NOW()
+            updated_at   = NOW()
         FROM (
             SELECT coupon_id, SUM(COALESCE(quantity, 1)) AS total_qty
             FROM orders
@@ -221,7 +233,7 @@ async def release_all_reservations() -> int:
         WHERE coupons.id = sub.coupon_id
     """)
 
-    # 2. Expire all pending orders that held those reservations
+    # 2. Expire all pending orders
     result = await pool.execute("""
         UPDATE orders
         SET status = 'expired', updated_at = NOW()
@@ -231,8 +243,9 @@ async def release_all_reservations() -> int:
     try:
         count = int(result.split()[-1])
     except (IndexError, ValueError):
-        count = 0
-    return count
+        count = len(affected)
+
+    return count, affected
 
 
 async def get_reservation_info(coupon_id: int) -> dict:
