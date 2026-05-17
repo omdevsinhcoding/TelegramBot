@@ -23,10 +23,10 @@ async def get_coupon_detail(coupon_id: int) -> dict | None:
 
 
 async def add_coupon(title: str, description: str, original_price: float,
-                      discounted_price: float, stock: int) -> int:
+                      discounted_price: float, stock: int, created_by: int = None) -> int:
     cid = await db.create_coupon(title, description, original_price,
-                                   discounted_price, stock)
-    logger.info(f"Coupon created: id={cid}, title={title}")
+                                   discounted_price, stock, created_by)
+    logger.info(f"Coupon created: id={cid}, title={title}, by={created_by}")
     return cid
 
 

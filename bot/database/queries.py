@@ -99,12 +99,12 @@ async def get_wallet_history(telegram_id: int, limit: int = 10):
 # ── COUPON QUERIES ────────────────────────────────────────
 
 async def create_coupon(title: str, description: str, original_price: float,
-                         discounted_price: float, stock: int):
+                         discounted_price: float, stock: int, created_by: int = None):
     pool = await get_pool()
     row = await pool.fetchrow("""
-        INSERT INTO coupons (title, description, original_price, discounted_price, stock)
-        VALUES ($1, $2, $3, $4, $5) RETURNING id
-    """, title, description, original_price, discounted_price, stock)
+        INSERT INTO coupons (title, description, original_price, discounted_price, stock, created_by)
+        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
+    """, title, description, original_price, discounted_price, stock, created_by)
     return row["id"]
 
 
@@ -700,6 +700,90 @@ async def get_sales_stats():
             COUNT(*) as total_orders
         FROM orders
     """)
+
+
+async def get_admin_sales_analytics() -> list:
+    """Per-admin sales analytics: how much revenue each admin's products generated."""
+    pool = await get_pool()
+    return await pool.fetch("""
+        SELECT
+            c.created_by AS admin_id,
+            COUNT(DISTINCT c.id) AS products_added,
+            COUNT(o.order_id) FILTER (WHERE o.status IN ('paid', 'delivered')) AS total_sold,
+            COALESCE(SUM(o.amount) FILTER (WHERE o.status IN ('paid', 'delivered')), 0) AS total_revenue,
+            COUNT(o.order_id) FILTER (WHERE o.status = 'pending') AS pending_orders,
+            COALESCE(SUM(o.amount) FILTER (WHERE o.status = 'pending'), 0) AS pending_revenue
+        FROM coupons c
+        LEFT JOIN orders o ON o.coupon_id = c.id
+        WHERE c.created_by IS NOT NULL
+        GROUP BY c.created_by
+        ORDER BY total_revenue DESC
+    """)
+
+
+async def get_product_analytics() -> list:
+    """Product-level analytics with admin attribution."""
+    pool = await get_pool()
+    return await pool.fetch("""
+        SELECT
+            c.id AS coupon_id,
+            c.title,
+            c.discounted_price AS price,
+            c.stock,
+            c.is_active,
+            c.created_by AS admin_id,
+            c.created_at,
+            COUNT(o.order_id) FILTER (WHERE o.status IN ('paid', 'delivered')) AS sold_count,
+            COALESCE(SUM(o.amount) FILTER (WHERE o.status IN ('paid', 'delivered')), 0) AS revenue,
+            COUNT(o.order_id) FILTER (WHERE o.status = 'pending') AS pending_count,
+            (SELECT COUNT(*) FROM coupon_codes cc WHERE cc.coupon_id = c.id AND cc.is_sold = TRUE) AS codes_sold,
+            (SELECT COUNT(*) FROM coupon_codes cc WHERE cc.coupon_id = c.id AND cc.is_sold = FALSE) AS codes_available
+        FROM coupons c
+        LEFT JOIN orders o ON o.coupon_id = c.id
+        GROUP BY c.id, c.title, c.discounted_price, c.stock, c.is_active, c.created_by, c.created_at
+        ORDER BY revenue DESC
+    """)
+
+
+async def get_recent_sales(limit: int = 50) -> list:
+    """Recent paid/delivered orders with product and admin info."""
+    pool = await get_pool()
+    return await pool.fetch("""
+        SELECT
+            o.order_id,
+            o.user_id,
+            o.amount,
+            o.quantity,
+            o.status,
+            o.paid_at,
+            o.created_at,
+            c.title AS coupon_title,
+            c.created_by AS admin_id,
+            u.full_name AS buyer_name,
+            u.username AS buyer_username
+        FROM orders o
+        LEFT JOIN coupons c ON o.coupon_id = c.id
+        LEFT JOIN users u ON o.user_id = u.telegram_id
+        WHERE o.status IN ('paid', 'delivered')
+        ORDER BY o.paid_at DESC NULLS LAST
+        LIMIT $1
+    """, limit)
+
+
+async def get_daily_revenue(days: int = 30) -> list:
+    """Daily revenue for chart data."""
+    pool = await get_pool()
+    return await pool.fetch("""
+        SELECT
+            DATE(paid_at) AS day,
+            COUNT(*) AS order_count,
+            COALESCE(SUM(amount), 0) AS revenue
+        FROM orders
+        WHERE status IN ('paid', 'delivered')
+          AND paid_at >= NOW() - interval '1 day' * $1
+        GROUP BY DATE(paid_at)
+        ORDER BY day ASC
+    """, days)
 
 
 # ── FREE COUPON / GIVEAWAY QUERIES (MULTI-CODE) ──────────

@@ -614,6 +614,22 @@ async def init_db() -> asyncpg.Pool:
             logger.warning(f"Migration V7 (non-critical): {e}")
         # ──────────────────────────────────────────────────────────────────
 
+        # ── MIGRATION V8: Analytics — track which admin created coupons ───
+        try:
+            await conn.execute(
+                "ALTER TABLE coupons ADD COLUMN IF NOT EXISTS created_by BIGINT;"
+            )
+            await conn.execute(
+                "ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS webapp_port INTEGER DEFAULT 8443;"
+            )
+            await conn.execute(
+                "ALTER TABLE bot_settings ADD COLUMN IF NOT EXISTS webapp_url TEXT DEFAULT '';"
+            )
+            logger.info("Migration V8 applied: coupons.created_by + webapp settings.")
+        except Exception as e:
+            logger.warning(f"Migration V8 (non-critical): {e}")
+        # ──────────────────────────────────────────────────────────────────
+
     logger.info("Database pool ready — all migrations applied.")
     _last_health_check = time.monotonic()
     _db_ready.set()

@@ -323,7 +323,8 @@ async def msg_add_coupon_codes(message: types.Message, state: FSMContext):
 
     # Create the coupon first
     coupon_id = await add_coupon(
-        title, description, original_price, discounted_price, stock
+        title, description, original_price, discounted_price, stock,
+        created_by=message.from_user.id
     )
 
     # Add coupon codes if provided
@@ -1220,6 +1221,8 @@ async def msg_broadcast_content(message: types.Message, state: FSMContext):
         return
 
     await state.update_data(bc_data=bc_data)
+    # Clear state so subsequent text input doesn't re-trigger content handler
+    await state.set_state(None)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📤 Send Now (No Buttons)", callback_data="bc_send_now")],
@@ -4039,16 +4042,56 @@ async def cb_admin_analytics(callback: types.CallbackQuery):
 
     revenue = escape_md(format_currency(float(stats["total_revenue"])))
     text = (
-        f"📊 *Analytics Dashboard*\n\n"
+        f"📊 *Analytics Dashboard*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"👥 Total Users: *{user_count}*\n"
         f"📦 Total Orders: *{escape_md(str(stats['total_orders']))}*\n"
         f"💰 Total Revenue: *{revenue}*\n\n"
         f"✅ Paid: *{escape_md(str(stats['total_paid']))}*\n"
         f"🟡 Pending: *{escape_md(str(stats['total_pending']))}*\n"
-        f"⏰ Expired: *{escape_md(str(stats['total_expired']))}*\n"
+        f"⏰ Expired: *{escape_md(str(stats['total_expired']))}*\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📱 Tap below to open the *full analytics*\n"
+        f"dashboard with admin\\-wise sales breakdown\\!"
     )
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_panel")]])
+    # Build WebApp URL for the analytics Mini App
+    from aiogram.types import WebAppInfo
+    try:
+        settings = await db.get_bot_settings()
+        webapp_port = int(settings.get("webapp_port") or 8443)
+    except Exception:
+        webapp_port = 8443
+
+    # Get the bot's webapp URL from env or construct it
+    # For production, you need HTTPS — set WEBAPP_URL in .env or bot_settings
+    import os
+    webapp_url = os.getenv("WEBAPP_URL", "")
+    if not webapp_url:
+        # Fallback: use the server's public URL if configured
+        try:
+            webapp_url = settings.get("webapp_url") or ""
+        except Exception:
+            webapp_url = ""
+
+    buttons = []
+    if webapp_url:
+        buttons.append([
+            InlineKeyboardButton(
+                text="📊 Open Full Analytics",
+                web_app=WebAppInfo(url=f"{webapp_url}?uid={callback.from_user.id}")
+            )
+        ])
+    else:
+        buttons.append([
+            InlineKeyboardButton(
+                text="📊 Open Analytics Dashboard",
+                url=f"https://t.me/{(await callback.message.bot.get_me()).username}?startapp=analytics"
+            )
+        ])
+    buttons.append([back_button("admin_panel")])
+
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
     await callback.answer()
 
