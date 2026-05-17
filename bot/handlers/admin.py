@@ -4041,57 +4041,116 @@ async def cb_admin_analytics(callback: types.CallbackQuery):
     user_count = await db.get_user_count()
 
     revenue = escape_md(format_currency(float(stats["total_revenue"])))
-    text = (
-        f"📊 *Analytics Dashboard*\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"👥 Total Users: *{user_count}*\n"
-        f"📦 Total Orders: *{escape_md(str(stats['total_orders']))}*\n"
-        f"💰 Total Revenue: *{revenue}*\n\n"
-        f"✅ Paid: *{escape_md(str(stats['total_paid']))}*\n"
-        f"🟡 Pending: *{escape_md(str(stats['total_pending']))}*\n"
-        f"⏰ Expired: *{escape_md(str(stats['total_expired']))}*\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"📱 Tap below to open the *full analytics*\n"
-        f"dashboard with admin\\-wise sales breakdown\\!"
-    )
 
-    # Build WebApp URL for the analytics Mini App
-    from aiogram.types import WebAppInfo
-    try:
-        settings = await db.get_bot_settings()
-        webapp_port = int(settings.get("webapp_port") or 8443)
-    except Exception:
-        webapp_port = 8443
-
-    # Get the bot's webapp URL from env or construct it
-    # For production, you need HTTPS — set WEBAPP_URL in .env or bot_settings
+    # Check if WebApp URL is configured
     import os
+    from aiogram.types import WebAppInfo
     webapp_url = os.getenv("WEBAPP_URL", "")
     if not webapp_url:
-        # Fallback: use the server's public URL if configured
         try:
-            webapp_url = settings.get("webapp_url") or ""
+            settings = await db.get_bot_settings()
+            webapp_url = (settings.get("webapp_url") or "") if settings else ""
         except Exception:
             webapp_url = ""
 
-    buttons = []
     if webapp_url:
-        buttons.append([
-            InlineKeyboardButton(
+        # ── WebApp mode: show summary + open button ──
+        text = (
+            f"📊 *Analytics Dashboard*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"👥 Total Users: *{user_count}*\n"
+            f"📦 Total Orders: *{escape_md(str(stats['total_orders']))}*\n"
+            f"💰 Total Revenue: *{revenue}*\n\n"
+            f"✅ Paid: *{escape_md(str(stats['total_paid']))}*\n"
+            f"🟡 Pending: *{escape_md(str(stats['total_pending']))}*\n"
+            f"⏰ Expired: *{escape_md(str(stats['total_expired']))}*\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📱 Tap below for *detailed admin\\-wise*\n"
+            f"sales breakdown dashboard\\!"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
                 text="📊 Open Full Analytics",
                 web_app=WebAppInfo(url=f"{webapp_url}?uid={callback.from_user.id}")
-            )
+            )],
+            [back_button("admin_panel")],
         ])
     else:
-        buttons.append([
-            InlineKeyboardButton(
-                text="📊 Open Analytics Dashboard",
-                url=f"https://t.me/{(await callback.message.bot.get_me()).username}?startapp=analytics"
-            )
-        ])
-    buttons.append([back_button("admin_panel")])
+        # ── Inline mode: show full analytics directly ──
+        admin_sales = await db.get_admin_sales_analytics()
+        product_stats = await db.get_product_analytics()
 
-    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+        text = (
+            f"📊 *Analytics Dashboard*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"👥 Total Users: *{user_count}*\n"
+            f"📦 Total Orders: *{escape_md(str(stats['total_orders']))}*\n"
+            f"💰 Total Revenue: *{revenue}*\n\n"
+            f"✅ Paid: *{escape_md(str(stats['total_paid']))}*\n"
+            f"🟡 Pending: *{escape_md(str(stats['total_pending']))}*\n"
+            f"⏰ Expired: *{escape_md(str(stats['total_expired']))}*\n"
+        )
+
+        # ── Admin-wise sales breakdown ──
+        if admin_sales:
+            text += f"\n━━━━━━━━━━━━━━━━━━━━\n"
+            text += f"👑 *Admin\\-wise Sales*\n\n"
+            pool = await db.get_pool()
+            rank_emojis = ["🥇", "🥈", "🥉"]
+            for i, a in enumerate(admin_sales):
+                # Get admin name
+                admin_name = str(a["admin_id"])
+                try:
+                    u = await pool.fetchrow(
+                        "SELECT full_name, username FROM users WHERE telegram_id = $1",
+                        a["admin_id"]
+                    )
+                    if u:
+                        admin_name = u["full_name"] or u["username"] or str(a["admin_id"])
+                except Exception:
+                    pass
+                rank = rank_emojis[i] if i < 3 else f"\\#{i+1}"
+                rev = escape_md(format_currency(float(a["total_revenue"])))
+                text += (
+                    f"{rank} *{escape_md(admin_name)}*\n"
+                    f"   📦 Products: *{a['products_added']}*\n"
+                    f"   🛒 Sold: *{a['total_sold']}*\n"
+                    f"   💰 Revenue: *{rev}*\n\n"
+                )
+        else:
+            text += f"\n_No admin\\-attributed products yet\\._\n"
+
+        # ── Top products ──
+        if product_stats:
+            text += f"━━━━━━━━━━━━━━━━━━━━\n"
+            text += f"📦 *Top Products*\n\n"
+            for p in product_stats[:8]:
+                status = "🟢" if p["is_active"] else "🔴"
+                rev = escape_md(format_currency(float(p["revenue"])))
+                title = escape_md(str(p["title"])[:25])
+                admin_name = "Unknown"
+                if p["admin_id"]:
+                    try:
+                        u = await pool.fetchrow(
+                            "SELECT full_name, username FROM users WHERE telegram_id = $1",
+                            p["admin_id"]
+                        )
+                        if u:
+                            admin_name = u["full_name"] or u["username"] or str(p["admin_id"])
+                    except Exception:
+                        admin_name = str(p["admin_id"])
+                text += (
+                    f"{status} *{title}*\n"
+                    f"   💰 {rev} \\| 🛒 {p['sold_count']} sold \\| 📦 {p['codes_available']} left\n"
+                    f"   👤 _{escape_md(admin_name)}_\n\n"
+                )
+
+        buttons = [
+            [InlineKeyboardButton(text="🔄 Refresh", callback_data="admin_analytics")],
+            [back_button("admin_panel")],
+        ]
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+
     await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
     await callback.answer()
 
