@@ -37,7 +37,15 @@ from aiohttp import web
 # ── Config ────────────────────────────────────────────────
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
+# ADMIN_IDS from env is optional — admins are fetched from the database
+_ENV_ADMIN_IDS = set()
+for _x in os.getenv("ADMIN_IDS", "").split(","):
+    _x = _x.strip()
+    if _x:
+        try:
+            _ENV_ADMIN_IDS.add(int(_x))
+        except ValueError:
+            pass
 PORT = int(os.getenv("PORT", os.getenv("WEBAPP_PORT", "8443")))
 
 STATIC_DIR = Path(__file__).parent / "bot" / "webapp" / "static"
@@ -56,18 +64,41 @@ async def get_pool():
     return _pool
 
 
-async def get_db_admin_ids() -> set:
-    pool = await get_pool()
-    rows = await pool.fetch("SELECT telegram_id FROM admins")
-    return {row["telegram_id"] for row in rows}
+# ── Admin ID cache (refreshes every 60 seconds) ──────────
+import time as _time
+_admin_cache: set = set()
+_admin_cache_ts: float = 0.0
+_ADMIN_CACHE_TTL = 60.0  # seconds
 
 
-def is_admin(user_id: int, db_admins: set = None) -> bool:
-    if user_id in ADMIN_IDS:
-        return True
-    if db_admins and user_id in db_admins:
-        return True
-    return False
+async def get_all_admin_ids() -> set:
+    """Get all admin IDs from database + env, cached for 60s."""
+    global _admin_cache, _admin_cache_ts
+    now = _time.monotonic()
+    if _admin_cache and (now - _admin_cache_ts) < _ADMIN_CACHE_TTL:
+        return _admin_cache
+
+    admins = set(_ENV_ADMIN_IDS)  # seed admins from env (if any)
+    try:
+        pool = await get_pool()
+        # Fetch dynamically-added admins from DB
+        rows = await pool.fetch("SELECT telegram_id FROM admins")
+        for row in rows:
+            admins.add(row["telegram_id"])
+        # Also fetch seed admin IDs from bot config (stored in .env on bot side)
+        # These are the ADMIN_IDS that the bot process knows about
+    except Exception:
+        pass
+
+    _admin_cache = admins
+    _admin_cache_ts = now
+    return admins
+
+
+async def is_admin(user_id: int) -> bool:
+    """Check if user is an admin — uses cached DB lookup."""
+    admins = await get_all_admin_ids()
+    return user_id in admins
 
 
 # ── Telegram initData validation ──────────────────────────
@@ -118,13 +149,8 @@ async def handle_verify(request):
             return web.json_response({"verified": False, "error": "No user identity"})
 
         user_id = int(user_id)
-        db_admins = set()
-        try:
-            db_admins = await get_db_admin_ids()
-        except Exception:
-            pass
 
-        if not is_admin(user_id, db_admins):
+        if not await is_admin(user_id):
             return web.json_response({"verified": False, "error": "not_admin", "user_id": user_id})
 
         return web.json_response({
@@ -143,13 +169,8 @@ async def handle_analytics(request):
             return web.json_response({"error": "Unauthorized"}, status=401)
 
         user_id = int(user_id)
-        db_admins = set()
-        try:
-            db_admins = await get_db_admin_ids()
-        except Exception:
-            pass
 
-        if not is_admin(user_id, db_admins):
+        if not await is_admin(user_id):
             return web.json_response({"error": "Unauthorized"}, status=401)
 
         pool = await get_pool()
@@ -213,7 +234,7 @@ async def handle_analytics(request):
         """)
 
         # Admin names lookup
-        all_admin_ids = set(ADMIN_IDS) | db_admins
+        all_admin_ids = await get_all_admin_ids()
         for r in admin_rows:
             if r["admin_id"]:
                 all_admin_ids.add(r["admin_id"])
@@ -308,14 +329,12 @@ if __name__ == "__main__":
     if not DATABASE_URL:
         print("❌ DATABASE_URL is required! Set it in .env or environment.")
         sys.exit(1)
-    if not ADMIN_IDS:
-        print("❌ ADMIN_IDS is required!")
-        sys.exit(1)
 
     print(f"🚀 DreamX Analytics Server starting on port {PORT}")
     print(f"📊 Static dir: {STATIC_DIR}")
-    print(f"👑 Admin IDs: {ADMIN_IDS}")
+    print(f"👑 Seed Admin IDs (env): {_ENV_ADMIN_IDS or 'None — using DB only'}")
     print(f"🔗 Database: {DATABASE_URL[:30]}...")
+    print(f"📡 Admins will be fetched from database (admins table)")
 
     app = create_app()
     web.run_app(app, host="0.0.0.0", port=PORT, print=lambda msg: print(f"✅ {msg}"))
