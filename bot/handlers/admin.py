@@ -93,6 +93,8 @@ class AdminStates(StatesGroup):
     channels_input = State()
     # Bot name
     bot_name_input = State()
+    # WebApp URL
+    webapp_url_input = State()
 
 
 # ── Universal Cancel — inline ❌ button + /cancel fallback ──
@@ -2500,6 +2502,15 @@ async def cb_admin_bot_settings(callback: types.CallbackQuery):
     settings = await db.get_bot_settings()
     bot_name = (settings.get("bot_name") or "DreamX Store") if settings else "DreamX Store"
     
+    # Get webapp URL
+    import os
+    webapp_url = os.getenv("WEBAPP_URL", "")
+    if not webapp_url:
+        try:
+            webapp_url = (settings.get("webapp_url") or "") if settings else ""
+        except Exception:
+            webapp_url = ""
+    
     dyn = await db.get_dynamic_config()
     
     timeout_val   = dyn["payment_timeout_seconds"]
@@ -2511,6 +2522,12 @@ async def cb_admin_bot_settings(callback: types.CallbackQuery):
     
     res_icon = "🟢 ON" if reservation_on else "🔴 OFF"
     wl_icon  = "🟢 ON" if waitlist_on  else "🔴 OFF"
+    
+    # WebApp URL display
+    if webapp_url:
+        webapp_display = f"🟢 `{escape_md(webapp_url)}`"
+    else:
+        webapp_display = "🔴 _Not configured_"
     
     text = (
         f"⚙️ *Bot Settings*\n"
@@ -2528,11 +2545,20 @@ async def cb_admin_bot_settings(callback: types.CallbackQuery):
         f"   _When OFF: all current reservations are released instantly_\n\n"
         f"📋 Waitlist System: *{wl_icon}*\n"
         f"   _When ON: out\\-of\\-stock users join a queue \\& get notified_\n"
-        f"   _When OFF: users see simple out\\-of\\-stock message_\n"
+        f"   _When OFF: users see simple out\\-of\\-stock message_\n\n"
+        f"━━━ *Analytics WebApp* ━━━\n"
+        f"🌐 URL: {webapp_display}\n"
+        f"   _HTTPS URL for the analytics Mini App_\n"
     )
     
     res_toggle_text = "🔴 Disable Reservation" if reservation_on else "🟢 Enable Reservation"
     wl_toggle_text  = "🔴 Disable Waitlist"    if waitlist_on   else "🟢 Enable Waitlist"
+    
+    # WebApp URL button label
+    if webapp_url:
+        webapp_btn_text = "🌐 Change WebApp URL"
+    else:
+        webapp_btn_text = "🌐 Set WebApp URL"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"✏️ Bot Name: {bot_name}", callback_data="admin_change_bot_name")],
@@ -2542,6 +2568,7 @@ async def cb_admin_bot_settings(callback: types.CallbackQuery):
          InlineKeyboardButton(text="🔄 Poll Interval",     callback_data="admin_dynconf:payment_poll_interval")],
         [InlineKeyboardButton(text=res_toggle_text, callback_data="admin_toggle_reservation")],
         [InlineKeyboardButton(text=wl_toggle_text,  callback_data="admin_toggle_waitlist")],
+        [InlineKeyboardButton(text=webapp_btn_text, callback_data="admin_set_webapp_url")],
         [InlineKeyboardButton(text="👮 Manage Admins", callback_data="admin_manage_admins")],
         [back_button("admin_panel")],
     ])
@@ -2550,6 +2577,91 @@ async def cb_admin_bot_settings(callback: types.CallbackQuery):
         text, parse_mode="MarkdownV2", reply_markup=kb
     )
     await callback.answer()
+
+
+# ── WebApp URL Setting ────────────────────────────────────
+
+@router.callback_query(F.data == "admin_set_webapp_url")
+@admin_only
+@error_handler
+async def cb_admin_set_webapp_url(callback: types.CallbackQuery, state: FSMContext):
+    """Prompt admin to enter the WebApp URL for analytics Mini App."""
+    import os
+    settings = await db.get_bot_settings()
+    current_url = os.getenv("WEBAPP_URL", "")
+    if not current_url:
+        try:
+            current_url = (settings.get("webapp_url") or "") if settings else ""
+        except Exception:
+            current_url = ""
+
+    if current_url:
+        current_display = f"\n\nCurrent URL: `{escape_md(current_url)}`"
+    else:
+        current_display = ""
+
+    await state.set_state(AdminStates.webapp_url_input)
+    await callback.message.edit_text(
+        f"🌐 *Set Analytics WebApp URL*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n{current_display}\n\n"
+        f"Send the *HTTPS URL* where your analytics\n"
+        f"webapp is hosted\\.\n\n"
+        f"Example:\n"
+        f"`https://omdevsinh\\.alwaysdata\\.net`\n"
+        f"`https://your\\-vps\\.com:8443`\n\n"
+        f"⚠️ *Must be HTTPS* for Telegram Mini Apps\n\n"
+        f"Send *clear* to remove the current URL\\.",
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [back_button("admin_bot_settings"), admin_cancel_button()]
+        ]),
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.webapp_url_input)
+@error_handler
+async def msg_webapp_url_input(message: types.Message, state: FSMContext):
+    """Process the WebApp URL input."""
+    text = message.text.strip() if message.text else ""
+    await state.clear()
+
+    if not text:
+        await message.answer("⚠️ URL cannot be empty.")
+        return
+
+    if text.lower() == "clear":
+        await db.update_bot_settings(webapp_url="")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_bot_settings")]])
+        await message.answer(
+            "✅ WebApp URL cleared\\! Analytics will show inline text mode\\.",
+            parse_mode="MarkdownV2", reply_markup=kb
+        )
+        logger.info(f"Admin {message.from_user.id} cleared webapp URL")
+        return
+
+    # Basic validation
+    if not text.startswith("https://"):
+        await message.answer(
+            "⚠️ URL must start with `https://`\n"
+            "Telegram Mini Apps require HTTPS.",
+            parse_mode="MarkdownV2"
+        )
+        return
+
+    # Remove trailing slash for consistency
+    url = text.rstrip("/")
+
+    await db.update_bot_settings(webapp_url=url)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_bot_settings")]])
+    await message.answer(
+        f"✅ WebApp URL set\\!\n\n"
+        f"🌐 `{escape_md(url)}`\n\n"
+        f"📊 The *Analytics* button will now open\n"
+        f"the Mini App dashboard\\!",
+        parse_mode="MarkdownV2", reply_markup=kb
+    )
+    logger.info(f"Admin {message.from_user.id} set webapp URL: {url}")
 
 
 # ── Reservation System Toggle ─────────────────────────────
