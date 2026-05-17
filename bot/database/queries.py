@@ -690,20 +690,25 @@ async def update_broadcast(broadcast_id: int, sent: int, failed: int, status: st
 # ── ANALYTICS ─────────────────────────────────────────────
 
 async def get_sales_stats():
+    """Aggregate order stats. Revenue includes both 'paid' and 'delivered' orders."""
     pool = await get_pool()
     return await pool.fetchrow("""
         SELECT
-            COUNT(*) FILTER (WHERE status = 'paid') as total_paid,
+            COUNT(*) FILTER (WHERE status IN ('paid', 'delivered')) as total_paid,
             COUNT(*) FILTER (WHERE status = 'pending') as total_pending,
             COUNT(*) FILTER (WHERE status = 'expired') as total_expired,
-            COALESCE(SUM(amount) FILTER (WHERE status = 'paid'), 0) as total_revenue,
+            COALESCE(SUM(amount) FILTER (WHERE status IN ('paid', 'delivered')), 0) as total_revenue,
             COUNT(*) as total_orders
         FROM orders
     """)
 
 
 async def get_admin_sales_analytics() -> list:
-    """Per-admin sales analytics: how much revenue each admin's products generated."""
+    """Per-admin sales analytics: how much revenue each admin's products generated.
+
+    Revenue is weighted per admin so 'loss per admin' can be calculated
+    proportionally based on each admin's share of total revenue.
+    """
     pool = await get_pool()
     return await pool.fetch("""
         SELECT
@@ -712,7 +717,8 @@ async def get_admin_sales_analytics() -> list:
             COUNT(o.order_id) FILTER (WHERE o.status IN ('paid', 'delivered')) AS total_sold,
             COALESCE(SUM(o.amount) FILTER (WHERE o.status IN ('paid', 'delivered')), 0) AS total_revenue,
             COUNT(o.order_id) FILTER (WHERE o.status = 'pending') AS pending_orders,
-            COALESCE(SUM(o.amount) FILTER (WHERE o.status = 'pending'), 0) AS pending_revenue
+            COALESCE(SUM(o.amount) FILTER (WHERE o.status = 'pending'), 0) AS pending_revenue,
+            COUNT(DISTINCT c.id) FILTER (WHERE c.is_active = TRUE) AS active_products
         FROM coupons c
         LEFT JOIN orders o ON o.coupon_id = c.id
         WHERE c.created_by IS NOT NULL
@@ -771,19 +777,122 @@ async def get_recent_sales(limit: int = 50) -> list:
 
 
 async def get_daily_revenue(days: int = 30) -> list:
-    """Daily revenue for chart data."""
+    """Daily revenue for chart data — includes 'delivered' orders."""
     pool = await get_pool()
     return await pool.fetch("""
         SELECT
-            DATE(paid_at) AS day,
+            DATE(COALESCE(paid_at, updated_at)) AS day,
             COUNT(*) AS order_count,
             COALESCE(SUM(amount), 0) AS revenue
         FROM orders
         WHERE status IN ('paid', 'delivered')
-          AND paid_at >= NOW() - interval '1 day' * $1
-        GROUP BY DATE(paid_at)
+          AND COALESCE(paid_at, updated_at) >= NOW() - interval '1 day' * $1
+        GROUP BY DATE(COALESCE(paid_at, updated_at))
         ORDER BY day ASC
     """, days)
+
+
+async def get_wallet_usage_stats() -> dict:
+    """Get total wallet/referral reward usage across all purchases."""
+    pool = await get_pool()
+    row = await pool.fetchrow("""
+        SELECT
+            COUNT(*) FILTER (WHERE txn_type = 'purchase' AND amount < 0) AS wallet_purchases,
+            COALESCE(SUM(ABS(amount)) FILTER (WHERE txn_type = 'purchase' AND amount < 0), 0) AS total_wallet_spent,
+            COUNT(*) FILTER (WHERE txn_type IN ('referral_reward', 'referral_commission') AND amount > 0) AS total_rewards_given,
+            COALESCE(SUM(amount) FILTER (WHERE txn_type IN ('referral_reward', 'referral_commission') AND amount > 0), 0) AS total_rewards_amount
+        FROM wallet_transactions
+    """)
+    return dict(row) if row else {
+        "wallet_purchases": 0, "total_wallet_spent": 0,
+        "total_rewards_given": 0, "total_rewards_amount": 0
+    }
+
+
+async def get_payment_method_stats() -> list:
+    """Breakdown of orders by payment method."""
+    pool = await get_pool()
+    return await pool.fetch("""
+        SELECT
+            COALESCE(payment_method, 'gateway') AS method,
+            COUNT(*) AS order_count,
+            COALESCE(SUM(amount), 0) AS total_amount
+        FROM orders
+        WHERE status IN ('paid', 'delivered')
+        GROUP BY COALESCE(payment_method, 'gateway')
+        ORDER BY total_amount DESC
+    """)
+
+
+async def get_total_referral_rewards_given() -> float:
+    """Total referral reward money that was given out (this is the 'loss' pool)."""
+    pool = await get_pool()
+    # Sum all positive wallet transactions that are referral rewards
+    val = await pool.fetchval("""
+        SELECT COALESCE(SUM(amount), 0)
+        FROM wallet_transactions
+        WHERE amount > 0
+          AND txn_type IN ('referral_reward', 'referral_commission')
+    """)
+    return float(val or 0)
+
+
+async def get_total_wallet_used_in_purchases() -> float:
+    """Total wallet balance used to pay for orders (the actual loss realized in sales)."""
+    pool = await get_pool()
+    val = await pool.fetchval("""
+        SELECT COALESCE(SUM(ABS(amount)), 0)
+        FROM wallet_transactions
+        WHERE amount < 0
+          AND txn_type = 'purchase'
+    """)
+    return float(val or 0)
+
+
+async def get_admin_names_map(admin_ids: set) -> dict:
+    """Get admin_id -> display_name mapping in a single bulk query (no N+1)."""
+    if not admin_ids:
+        return {}
+    pool = await get_pool()
+    rows = await pool.fetch(
+        "SELECT telegram_id, full_name, username FROM users WHERE telegram_id = ANY($1::bigint[])",
+        list(admin_ids)
+    )
+    names = {}
+    for u in rows:
+        names[u["telegram_id"]] = u["full_name"] or u["username"] or str(u["telegram_id"])
+    # Fill in any missing IDs (admin not in users table)
+    for aid in admin_ids:
+        if aid not in names:
+            names[aid] = str(aid)
+    return names
+
+
+async def get_recent_sales_detailed(limit: int = 20) -> list:
+    """Recent sales with full details including payment method and admin info."""
+    pool = await get_pool()
+    return await pool.fetch("""
+        SELECT
+            o.order_id,
+            o.user_id,
+            o.amount,
+            o.quantity,
+            o.status,
+            o.paid_at,
+            o.created_at,
+            COALESCE(o.payment_method, 'gateway') AS payment_method,
+            c.title AS coupon_title,
+            c.discounted_price AS unit_price,
+            c.created_by AS admin_id,
+            u.full_name AS buyer_name,
+            u.username AS buyer_username
+        FROM orders o
+        LEFT JOIN coupons c ON o.coupon_id = c.id
+        LEFT JOIN users u ON o.user_id = u.telegram_id
+        WHERE o.status IN ('paid', 'delivered')
+        ORDER BY o.paid_at DESC NULLS LAST
+        LIMIT $1
+    """, limit)
 
 
 # ── FREE COUPON / GIVEAWAY QUERIES (MULTI-CODE) ──────────
@@ -854,31 +963,63 @@ async def get_coupon_unsold_codes(coupon_id: int, limit: int = 100):
     )
 
 async def get_active_free_coupons() -> list:
+    """Get active giveaways with code counts in a single aggregate query."""
     pool = await get_pool()
-    rows = await pool.fetch("SELECT * FROM free_coupons WHERE is_active = TRUE ORDER BY created_at DESC")
-    result = []
-    for r in rows:
-        unclaimed = await pool.fetchval("SELECT COUNT(*) FROM free_coupon_codes WHERE free_coupon_id = $1 AND is_claimed = FALSE", r["id"])
-        result.append({**dict(r), "unclaimed_codes": unclaimed})
-    return result
+    rows = await pool.fetch("""
+        SELECT fc.*,
+               COALESCE(agg.total_codes, 0)    AS total_codes,
+               COALESCE(agg.unclaimed_codes, 0) AS unclaimed_codes
+        FROM free_coupons fc
+        LEFT JOIN (
+            SELECT free_coupon_id,
+                   COUNT(*) AS total_codes,
+                   COUNT(*) FILTER (WHERE is_claimed = FALSE) AS unclaimed_codes
+            FROM free_coupon_codes
+            GROUP BY free_coupon_id
+        ) agg ON agg.free_coupon_id = fc.id
+        WHERE fc.is_active = TRUE
+        ORDER BY fc.created_at DESC
+    """)
+    return [dict(r) for r in rows]
 
 async def get_all_free_coupons() -> list:
+    """Get all giveaways with code counts in a single aggregate query (no N+1)."""
     pool = await get_pool()
-    rows = await pool.fetch("SELECT * FROM free_coupons ORDER BY created_at DESC")
-    result = []
-    for r in rows:
-        total = await pool.fetchval("SELECT COUNT(*) FROM free_coupon_codes WHERE free_coupon_id = $1", r["id"])
-        unclaimed = await pool.fetchval("SELECT COUNT(*) FROM free_coupon_codes WHERE free_coupon_id = $1 AND is_claimed = FALSE", r["id"])
-        result.append({**dict(r), "total_codes": total, "unclaimed_codes": unclaimed})
-    return result
+    rows = await pool.fetch("""
+        SELECT fc.*,
+               COALESCE(agg.total_codes, 0)    AS total_codes,
+               COALESCE(agg.unclaimed_codes, 0) AS unclaimed_codes
+        FROM free_coupons fc
+        LEFT JOIN (
+            SELECT free_coupon_id,
+                   COUNT(*) AS total_codes,
+                   COUNT(*) FILTER (WHERE is_claimed = FALSE) AS unclaimed_codes
+            FROM free_coupon_codes
+            GROUP BY free_coupon_id
+        ) agg ON agg.free_coupon_id = fc.id
+        ORDER BY fc.created_at DESC
+    """)
+    return [dict(r) for r in rows]
 
 async def get_free_coupon(fc_id: int):
+    """Get single giveaway with code counts in one query."""
     pool = await get_pool()
-    r = await pool.fetchrow("SELECT * FROM free_coupons WHERE id = $1", fc_id)
-    if not r: return None
-    total = await pool.fetchval("SELECT COUNT(*) FROM free_coupon_codes WHERE free_coupon_id = $1", fc_id)
-    unclaimed = await pool.fetchval("SELECT COUNT(*) FROM free_coupon_codes WHERE free_coupon_id = $1 AND is_claimed = FALSE", fc_id)
-    return {**dict(r), "total_codes": total, "unclaimed_codes": unclaimed}
+    row = await pool.fetchrow("""
+        SELECT fc.*,
+               COALESCE(agg.total_codes, 0)    AS total_codes,
+               COALESCE(agg.unclaimed_codes, 0) AS unclaimed_codes
+        FROM free_coupons fc
+        LEFT JOIN (
+            SELECT free_coupon_id,
+                   COUNT(*) AS total_codes,
+                   COUNT(*) FILTER (WHERE is_claimed = FALSE) AS unclaimed_codes
+            FROM free_coupon_codes
+            WHERE free_coupon_id = $1
+            GROUP BY free_coupon_id
+        ) agg ON agg.free_coupon_id = fc.id
+        WHERE fc.id = $1
+    """, fc_id)
+    return dict(row) if row else None
 
 async def claim_free_coupon(fc_id: int, user_id: int) -> list | None:
     pool = await get_pool()

@@ -93,8 +93,7 @@ class AdminStates(StatesGroup):
     channels_input = State()
     # Bot name
     bot_name_input = State()
-    # WebApp URL
-    webapp_url_input = State()
+
 
 
 # ── Universal Cancel — inline ❌ button + /cancel fallback ──
@@ -2502,15 +2501,6 @@ async def cb_admin_bot_settings(callback: types.CallbackQuery):
     settings = await db.get_bot_settings()
     bot_name = (settings.get("bot_name") or "DreamX Store") if settings else "DreamX Store"
     
-    # Get webapp URL
-    import os
-    webapp_url = os.getenv("WEBAPP_URL", "")
-    if not webapp_url:
-        try:
-            webapp_url = (settings.get("webapp_url") or "") if settings else ""
-        except Exception:
-            webapp_url = ""
-    
     dyn = await db.get_dynamic_config()
     
     timeout_val   = dyn["payment_timeout_seconds"]
@@ -2522,12 +2512,6 @@ async def cb_admin_bot_settings(callback: types.CallbackQuery):
     
     res_icon = "🟢 ON" if reservation_on else "🔴 OFF"
     wl_icon  = "🟢 ON" if waitlist_on  else "🔴 OFF"
-    
-    # WebApp URL display
-    if webapp_url:
-        webapp_display = f"🟢 `{escape_md(webapp_url)}`"
-    else:
-        webapp_display = "🔴 _Not configured_"
     
     text = (
         f"⚙️ *Bot Settings*\n"
@@ -2545,20 +2529,11 @@ async def cb_admin_bot_settings(callback: types.CallbackQuery):
         f"   _When OFF: all current reservations are released instantly_\n\n"
         f"📋 Waitlist System: *{wl_icon}*\n"
         f"   _When ON: out\\-of\\-stock users join a queue \\& get notified_\n"
-        f"   _When OFF: users see simple out\\-of\\-stock message_\n\n"
-        f"━━━ *Analytics WebApp* ━━━\n"
-        f"🌐 URL: {webapp_display}\n"
-        f"   _HTTPS URL for the analytics Mini App_\n"
+        f"   _When OFF: users see simple out\\-of\\-stock message_\n"
     )
     
     res_toggle_text = "🔴 Disable Reservation" if reservation_on else "🟢 Enable Reservation"
     wl_toggle_text  = "🔴 Disable Waitlist"    if waitlist_on   else "🟢 Enable Waitlist"
-    
-    # WebApp URL button label
-    if webapp_url:
-        webapp_btn_text = "🌐 Change WebApp URL"
-    else:
-        webapp_btn_text = "🌐 Set WebApp URL"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"✏️ Bot Name: {bot_name}", callback_data="admin_change_bot_name")],
@@ -2568,7 +2543,6 @@ async def cb_admin_bot_settings(callback: types.CallbackQuery):
          InlineKeyboardButton(text="🔄 Poll Interval",     callback_data="admin_dynconf:payment_poll_interval")],
         [InlineKeyboardButton(text=res_toggle_text, callback_data="admin_toggle_reservation")],
         [InlineKeyboardButton(text=wl_toggle_text,  callback_data="admin_toggle_waitlist")],
-        [InlineKeyboardButton(text=webapp_btn_text, callback_data="admin_set_webapp_url")],
         [InlineKeyboardButton(text="👮 Manage Admins", callback_data="admin_manage_admins")],
         [back_button("admin_panel")],
     ])
@@ -2577,91 +2551,6 @@ async def cb_admin_bot_settings(callback: types.CallbackQuery):
         text, parse_mode="MarkdownV2", reply_markup=kb
     )
     await callback.answer()
-
-
-# ── WebApp URL Setting ────────────────────────────────────
-
-@router.callback_query(F.data == "admin_set_webapp_url")
-@admin_only
-@error_handler
-async def cb_admin_set_webapp_url(callback: types.CallbackQuery, state: FSMContext):
-    """Prompt admin to enter the WebApp URL for analytics Mini App."""
-    import os
-    settings = await db.get_bot_settings()
-    current_url = os.getenv("WEBAPP_URL", "")
-    if not current_url:
-        try:
-            current_url = (settings.get("webapp_url") or "") if settings else ""
-        except Exception:
-            current_url = ""
-
-    if current_url:
-        current_display = f"\n\nCurrent URL: `{escape_md(current_url)}`"
-    else:
-        current_display = ""
-
-    await state.set_state(AdminStates.webapp_url_input)
-    await callback.message.edit_text(
-        f"🌐 *Set Analytics WebApp URL*\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n{current_display}\n\n"
-        f"Send the *HTTPS URL* where your analytics\n"
-        f"webapp is hosted\\.\n\n"
-        f"Example:\n"
-        f"`https://omdevsinh\\.alwaysdata\\.net`\n"
-        f"`https://your\\-vps\\.com:8443`\n\n"
-        f"⚠️ *Must be HTTPS* for Telegram Mini Apps\n\n"
-        f"Send *clear* to remove the current URL\\.",
-        parse_mode="MarkdownV2",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [back_button("admin_bot_settings"), admin_cancel_button()]
-        ]),
-    )
-    await callback.answer()
-
-
-@router.message(AdminStates.webapp_url_input)
-@error_handler
-async def msg_webapp_url_input(message: types.Message, state: FSMContext):
-    """Process the WebApp URL input."""
-    text = message.text.strip() if message.text else ""
-    await state.clear()
-
-    if not text:
-        await message.answer("⚠️ URL cannot be empty.")
-        return
-
-    if text.lower() == "clear":
-        await db.update_bot_settings(webapp_url="")
-        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_bot_settings")]])
-        await message.answer(
-            "✅ WebApp URL cleared\\! Analytics will show inline text mode\\.",
-            parse_mode="MarkdownV2", reply_markup=kb
-        )
-        logger.info(f"Admin {message.from_user.id} cleared webapp URL")
-        return
-
-    # Basic validation
-    if not text.startswith("https://"):
-        await message.answer(
-            "⚠️ URL must start with `https://`\n"
-            "Telegram Mini Apps require HTTPS.",
-            parse_mode="MarkdownV2"
-        )
-        return
-
-    # Remove trailing slash for consistency
-    url = text.rstrip("/")
-
-    await db.update_bot_settings(webapp_url=url)
-    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_bot_settings")]])
-    await message.answer(
-        f"✅ WebApp URL set\\!\n\n"
-        f"🌐 `{escape_md(url)}`\n\n"
-        f"📊 The *Analytics* button will now open\n"
-        f"the Mini App dashboard\\!",
-        parse_mode="MarkdownV2", reply_markup=kb
-    )
-    logger.info(f"Admin {message.from_user.id} set webapp URL: {url}")
 
 
 # ── Reservation System Toggle ─────────────────────────────
@@ -4142,131 +4031,435 @@ async def msg_admin_wallet_edit(message: types.Message, state: FSMContext):
 
     logger.info(f"Admin {message.from_user.id} adjusted wallet for {user_id}: {delta:+.1f}, new={new_balance:.1f}")
 
+# ══════════════════════════════════════════════════════════════
+# 📊 ANALYTICS DASHBOARD — Multi-page Telegram Interactive
+# ══════════════════════════════════════════════════════════════
 
-# ── Analytics ────────────────────────────────────────────
+def _analytics_nav_kb(current_page: str) -> InlineKeyboardMarkup:
+    """Navigation keyboard for analytics pages."""
+    pages = [
+        ("📊 Overview", "admin_analytics"),
+        ("👑 Admins", "analytics_admins"),
+        ("📦 Products", "analytics_products:1"),
+        ("🧾 Sales", "analytics_sales:1"),
+        ("📈 Trends", "analytics_trends"),
+    ]
+    row1 = []
+    row2 = []
+    for i, (label, data) in enumerate(pages):
+        base = data.split(":")[0]
+        if base == current_page:
+            label = f"• {label} •"
+        btn = InlineKeyboardButton(text=label, callback_data=data)
+        if i < 3:
+            row1.append(btn)
+        else:
+            row2.append(btn)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        row1, row2,
+        [InlineKeyboardButton(text="🔄 Refresh", callback_data=current_page)],
+        [back_button("admin_panel")],
+    ])
+
+
+# ── Page 1: Overview Dashboard ────────────────────────────
 
 @router.callback_query(F.data == "admin_analytics")
 @admin_only
 @error_handler
 async def cb_admin_analytics(callback: types.CallbackQuery):
+    """Main analytics overview — key metrics at a glance."""
     stats = await db.get_sales_stats()
     user_count = await db.get_user_count()
+    total_stock = await db.get_total_stock()
 
-    revenue = escape_md(format_currency(float(stats["total_revenue"])))
+    revenue = float(stats["total_revenue"])
+    revenue_str = escape_md(format_currency(revenue))
 
-    # Check if WebApp URL is configured
-    import os
-    from aiogram.types import WebAppInfo
-    webapp_url = os.getenv("WEBAPP_URL", "")
-    if not webapp_url:
-        try:
-            settings = await db.get_bot_settings()
-            webapp_url = (settings.get("webapp_url") or "") if settings else ""
-        except Exception:
-            webapp_url = ""
+    # Wallet / referral reward stats
+    wallet_used = await db.get_total_wallet_used_in_purchases()
+    rewards_given = await db.get_total_referral_rewards_given()
+    gateway_revenue = revenue - wallet_used  # actual money received
 
-    if webapp_url:
-        # ── WebApp mode: show summary + open button ──
-        text = (
-            f"📊 *Analytics Dashboard*\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"👥 Total Users: *{user_count}*\n"
-            f"📦 Total Orders: *{escape_md(str(stats['total_orders']))}*\n"
-            f"💰 Total Revenue: *{revenue}*\n\n"
-            f"✅ Paid: *{escape_md(str(stats['total_paid']))}*\n"
-            f"🟡 Pending: *{escape_md(str(stats['total_pending']))}*\n"
-            f"⏰ Expired: *{escape_md(str(stats['total_expired']))}*\n\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"📱 Tap below for *detailed admin\\-wise*\n"
-            f"sales breakdown dashboard\\!"
+    # Admin count
+    admin_sales = await db.get_admin_sales_analytics()
+    admin_count = len(admin_sales)
+
+    # Per-admin referral loss (equally split among all admins who have products)
+    loss_per_admin = (wallet_used / admin_count) if admin_count > 0 else 0
+
+    # Payment method breakdown
+    pay_methods = await db.get_payment_method_stats()
+    method_lines = []
+    method_icons = {"wallet": "💰", "paytm": "📱", "bharatpe": "🏦", "razorpay": "💳",
+                    "combo_paytm": "🔀", "combo_bharatpe": "🔀", "combo_razorpay": "🔀", "gateway": "💳"}
+    for pm in pay_methods:
+        m = pm["method"]
+        icon = method_icons.get(m, "💳")
+        amt = escape_md(format_currency(float(pm["total_amount"])))
+        method_lines.append(f"   {icon} {escape_md(m)}: *{pm['order_count']}* orders \\\\| *{amt}*")
+
+    methods_text = "\n".join(method_lines) if method_lines else "   _No paid orders yet_"
+
+    text = (
+        f"📊 *ANALYTICS DASHBOARD*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🏪 *STORE OVERVIEW*\n"
+        f"┌──────────────────\n"
+        f"│ 👥 Users: *{user_count}*\n"
+        f"│ 📦 Total Stock: *{total_stock}*\n"
+        f"│ 👑 Active Admins: *{admin_count}*\n"
+        f"└──────────────────\n\n"
+        f"💵 *REVENUE BREAKDOWN*\n"
+        f"┌──────────────────\n"
+        f"│ 💰 Gross Revenue: *{revenue_str}*\n"
+        f"│ 🏦 Gateway Income: *{escape_md(format_currency(gateway_revenue))}*\n"
+        f"│ 🎁 Wallet Payments: *{escape_md(format_currency(wallet_used))}*\n"
+        f"│ 🔻 Referral Rewards Pool: *{escape_md(format_currency(rewards_given))}*\n"
+    )
+    if admin_count > 0 and wallet_used > 0:
+        text += f"│ 📉 Loss/Admin: *{escape_md(format_currency(loss_per_admin))}*\n"
+    text += (
+        f"└──────────────────\n\n"
+        f"📋 *ORDER STATUS*\n"
+        f"┌──────────────────\n"
+        f"│ 📊 Total: *{escape_md(str(stats['total_orders']))}*\n"
+        f"│ ✅ Paid: *{escape_md(str(stats['total_paid']))}*\n"
+        f"│ 🟡 Pending: *{escape_md(str(stats['total_pending']))}*\n"
+        f"│ ⏰ Expired: *{escape_md(str(stats['total_expired']))}*\n"
+        f"└──────────────────\n\n"
+        f"💳 *PAYMENT METHODS*\n"
+        f"┌──────────────────\n"
+        f"{methods_text}\n"
+        f"└──────────────────\n\n"
+        f"_Navigate below for detailed breakdowns_ ⬇️"
+    )
+
+    try:
+        await callback.message.edit_text(
+            text, parse_mode="MarkdownV2",
+            reply_markup=_analytics_nav_kb("admin_analytics")
         )
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text="📊 Open Full Analytics",
-                web_app=WebAppInfo(url=f"{webapp_url}?uid={callback.from_user.id}")
-            )],
-            [back_button("admin_panel")],
-        ])
+    except Exception:
+        pass
+    await callback.answer()
+
+
+# ── Page 2: Admin-wise Sales & Referral Loss ──────────────
+
+@router.callback_query(F.data == "analytics_admins")
+@admin_only
+@error_handler
+async def cb_analytics_admins(callback: types.CallbackQuery):
+    """Per-admin sales breakdown with referral loss distribution."""
+    admin_sales = await db.get_admin_sales_analytics()
+
+    # Collect admin IDs and get names
+    admin_ids = {a["admin_id"] for a in admin_sales if a["admin_id"]}
+    admin_names = await db.get_admin_names_map(admin_ids)
+
+    # Calculate referral loss split
+    wallet_used = await db.get_total_wallet_used_in_purchases()
+    admin_count = len(admin_sales) if admin_sales else 1
+    loss_per_admin = wallet_used / admin_count if admin_count > 0 else 0
+
+    text = (
+        f"👑 *ADMIN SALES REPORT*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+    )
+
+    if not admin_sales:
+        text += "_No admin\\-attributed products yet\\._\n\n"
+        text += "_Add products with the admin panel to see analytics here\\._"
     else:
-        # ── Inline mode: show full analytics directly ──
-        admin_sales = await db.get_admin_sales_analytics()
-        product_stats = await db.get_product_analytics()
+        # Global loss info
+        if wallet_used > 0:
+            text += (
+                f"⚠️ *Referral Reward Loss Distribution*\n"
+                f"┌──────────────────\n"
+                f"│ 🎁 Total Rewards Used: *{escape_md(format_currency(wallet_used))}*\n"
+                f"│ 👥 Split Among: *{admin_count}* admins\n"
+                f"│ 📉 Loss Per Admin: *{escape_md(format_currency(loss_per_admin))}*\n"
+                f"└──────────────────\n\n"
+            )
 
-        text = (
-            f"📊 *Analytics Dashboard*\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"👥 Total Users: *{user_count}*\n"
-            f"📦 Total Orders: *{escape_md(str(stats['total_orders']))}*\n"
-            f"💰 Total Revenue: *{revenue}*\n\n"
-            f"✅ Paid: *{escape_md(str(stats['total_paid']))}*\n"
-            f"🟡 Pending: *{escape_md(str(stats['total_pending']))}*\n"
-            f"⏰ Expired: *{escape_md(str(stats['total_expired']))}*\n"
+        rank_emojis = ["🥇", "🥈", "🥉"]
+        for i, a in enumerate(admin_sales):
+            name = admin_names.get(a["admin_id"], str(a["admin_id"]))
+            rank = rank_emojis[i] if i < 3 else f"\\#{i+1}"
+
+            gross_rev = float(a["total_revenue"])
+            net_rev = gross_rev - loss_per_admin
+            rev_str = escape_md(format_currency(gross_rev))
+            net_str = escape_md(format_currency(max(0, net_rev)))
+            pending_str = escape_md(format_currency(float(a["pending_revenue"])))
+
+            text += (
+                f"{rank} *{escape_md(name)}*\n"
+                f"┌──────────────────\n"
+                f"│ 📦 Products Added: *{a['products_added']}*\n"
+                f"│ 🛒 Total Sold: *{a['total_sold']}*\n"
+                f"│ 💰 Gross Revenue: *{rev_str}*\n"
+            )
+            if wallet_used > 0:
+                text += f"│ 📉 Referral Loss: *\\-{escape_md(format_currency(loss_per_admin))}*\n"
+                text += f"│ 💵 Net Revenue: *{net_str}*\n"
+            if a["pending_orders"] > 0:
+                text += f"│ 🟡 Pending: *{a['pending_orders']}* orders \\\\({pending_str}\\\\)\n"
+            text += f"└──────────────────\n\n"
+
+    try:
+        await callback.message.edit_text(
+            text, parse_mode="MarkdownV2",
+            reply_markup=_analytics_nav_kb("analytics_admins")
         )
+    except Exception:
+        pass
+    await callback.answer()
 
-        # ── Admin-wise sales breakdown ──
-        if admin_sales:
-            text += f"\n━━━━━━━━━━━━━━━━━━━━\n"
-            text += f"👑 *Admin\\-wise Sales*\n\n"
-            pool = await db.get_pool()
-            rank_emojis = ["🥇", "🥈", "🥉"]
-            for i, a in enumerate(admin_sales):
-                # Get admin name
-                admin_name = str(a["admin_id"])
-                try:
-                    u = await pool.fetchrow(
-                        "SELECT full_name, username FROM users WHERE telegram_id = $1",
-                        a["admin_id"]
-                    )
-                    if u:
-                        admin_name = u["full_name"] or u["username"] or str(a["admin_id"])
-                except Exception:
-                    pass
-                rank = rank_emojis[i] if i < 3 else f"\\#{i+1}"
-                rev = escape_md(format_currency(float(a["total_revenue"])))
-                text += (
-                    f"{rank} *{escape_md(admin_name)}*\n"
-                    f"   📦 Products: *{a['products_added']}*\n"
-                    f"   🛒 Sold: *{a['total_sold']}*\n"
-                    f"   💰 Revenue: *{rev}*\n\n"
-                )
-        else:
-            text += f"\n_No admin\\-attributed products yet\\._\n"
 
-        # ── Top products ──
-        if product_stats:
-            text += f"━━━━━━━━━━━━━━━━━━━━\n"
-            text += f"📦 *Top Products*\n\n"
-            for p in product_stats[:8]:
-                status = "🟢" if p["is_active"] else "🔴"
-                rev = escape_md(format_currency(float(p["revenue"])))
-                title = escape_md(str(p["title"])[:25])
-                admin_name = "Unknown"
-                if p["admin_id"]:
-                    try:
-                        u = await pool.fetchrow(
-                            "SELECT full_name, username FROM users WHERE telegram_id = $1",
-                            p["admin_id"]
-                        )
-                        if u:
-                            admin_name = u["full_name"] or u["username"] or str(p["admin_id"])
-                    except Exception:
-                        admin_name = str(p["admin_id"])
-                text += (
-                    f"{status} *{title}*\n"
-                    f"   💰 {rev} \\| 🛒 {p['sold_count']} sold \\| 📦 {p['codes_available']} left\n"
-                    f"   👤 _{escape_md(admin_name)}_\n\n"
-                )
+# ── Page 3: Product Analytics (Paginated) ─────────────────
 
-        buttons = [
-            [InlineKeyboardButton(text="🔄 Refresh", callback_data="admin_analytics")],
-            [back_button("admin_panel")],
-        ]
-        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+@router.callback_query(F.data.regexp(r"^analytics_products(:\d+)?$"))
+@admin_only
+@error_handler
+async def cb_analytics_products(callback: types.CallbackQuery):
+    """Product-level analytics with pagination."""
+    parts = callback.data.split(":")
+    page = int(parts[1]) if len(parts) > 1 else 1
+    PER_PAGE = 6
+
+    product_stats = await db.get_product_analytics()
+
+    # Collect admin names
+    admin_ids = {p["admin_id"] for p in product_stats if p["admin_id"]}
+    admin_names = await db.get_admin_names_map(admin_ids)
+
+    total = len(product_stats)
+    total_pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * PER_PAGE
+    end = min(start + PER_PAGE, total)
+    page_items = product_stats[start:end]
+
+    text = (
+        f"📦 *PRODUCT ANALYTICS*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📄 Page *{page}* / *{total_pages}* \\\\| Total: *{total}* products\n\n"
+    )
+
+    if not page_items:
+        text += "_No products found\\._"
+    else:
+        for p in page_items:
+            status = "🟢" if p["is_active"] else "🔴"
+            title = escape_md(str(p["title"])[:30])
+            price = escape_md(format_currency(float(p["price"])))
+            rev = escape_md(format_currency(float(p["revenue"])))
+            admin_name = admin_names.get(p["admin_id"], "Unknown") if p["admin_id"] else "Unknown"
+
+            text += (
+                f"{status} *{title}*\n"
+                f"┌──────────────────\n"
+                f"│ 💰 Price: *{price}* \\\\| Revenue: *{rev}*\n"
+                f"│ 🛒 Sold: *{p['sold_count']}* \\\\| 📦 Stock: *{p['codes_available']}*\n"
+                f"│ 🔑 Codes: *{p['codes_sold']}* sold / *{p['codes_sold'] + p['codes_available']}* total\n"
+                f"│ 👤 By: _{escape_md(admin_name)}_\n"
+                f"└──────────────────\n\n"
+            )
+
+    # Build navigation with product pagination
+    pages_nav = [
+        ("📊 Overview", "admin_analytics"),
+        ("👑 Admins", "analytics_admins"),
+        ("• 📦 Products •", f"analytics_products:{page}"),
+        ("🧾 Sales", "analytics_sales:1"),
+        ("📈 Trends", "analytics_trends"),
+    ]
+    row1 = [InlineKeyboardButton(text=l, callback_data=d) for l, d in pages_nav[:3]]
+    row2 = [InlineKeyboardButton(text=l, callback_data=d) for l, d in pages_nav[3:]]
+
+    # Pagination row
+    nav_row = []
+    if page > 1:
+        nav_row.append(InlineKeyboardButton(text="◀️ Prev", callback_data=f"analytics_products:{page-1}"))
+    nav_row.append(InlineKeyboardButton(text=f"📄 {page}/{total_pages}", callback_data="noop"))
+    if page < total_pages:
+        nav_row.append(InlineKeyboardButton(text="Next ▶️", callback_data=f"analytics_products:{page+1}"))
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        row1, row2, nav_row,
+        [InlineKeyboardButton(text="🔄 Refresh", callback_data=f"analytics_products:{page}")],
+        [back_button("admin_panel")],
+    ])
 
     try:
         await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
     except Exception:
-        pass  # Message not modified — data unchanged
+        pass
+    await callback.answer()
+
+
+# ── Page 4: Recent Sales (Paginated) ──────────────────────
+
+@router.callback_query(F.data.regexp(r"^analytics_sales(:\d+)?$"))
+@admin_only
+@error_handler
+async def cb_analytics_sales(callback: types.CallbackQuery):
+    """Recent sales with buyer details and payment method."""
+    parts = callback.data.split(":")
+    page = int(parts[1]) if len(parts) > 1 else 1
+    PER_PAGE = 8
+
+    recent = await db.get_recent_sales_detailed(100)
+
+    # Admin names
+    admin_ids = {r["admin_id"] for r in recent if r["admin_id"]}
+    admin_names = await db.get_admin_names_map(admin_ids)
+
+    total = len(recent)
+    total_pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * PER_PAGE
+    end = min(start + PER_PAGE, total)
+    page_items = recent[start:end]
+
+    text = (
+        f"🧾 *RECENT SALES*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📄 Page *{page}* / *{total_pages}* \\\\| Total: *{total}* sales\n\n"
+    )
+
+    if not page_items:
+        text += "_No sales yet\\._"
+    else:
+        method_icons = {"wallet": "💰", "paytm": "📱", "bharatpe": "🏦", "razorpay": "💳",
+                        "combo_paytm": "🔀", "combo_bharatpe": "🔀", "combo_razorpay": "🔀", "gateway": "💳"}
+        for i, r in enumerate(page_items, start + 1):
+            buyer = escape_md((r["buyer_name"] or "Unknown")[:20])
+            title = escape_md((r["coupon_title"] or "N/A")[:20])
+            amt = escape_md(format_currency(float(r["amount"])))
+            method = r["payment_method"]
+            m_icon = method_icons.get(method, "💳")
+            admin_name = admin_names.get(r["admin_id"], "—") if r["admin_id"] else "—"
+            uid = r["user_id"]
+
+            # Format date
+            paid_str = ""
+            if r["paid_at"]:
+                paid_str = r["paid_at"].strftime("%d/%m %H:%M")
+
+            text += (
+                f"*{i}\\.* 🛍️ *{title}*\n"
+                f"   👤 {buyer} \\\\(`{uid}`\\\\)\n"
+                f"   💸 *{amt}* × {r['quantity']} \\\\| {m_icon} {escape_md(method)}\n"
+                f"   👑 _{escape_md(admin_name)}_ \\\\| 🕐 {escape_md(paid_str)}\n\n"
+            )
+
+    # Navigation
+    pages_nav = [
+        ("📊 Overview", "admin_analytics"),
+        ("👑 Admins", "analytics_admins"),
+        ("📦 Products", "analytics_products:1"),
+        ("• 🧾 Sales •", f"analytics_sales:{page}"),
+        ("📈 Trends", "analytics_trends"),
+    ]
+    row1 = [InlineKeyboardButton(text=l, callback_data=d) for l, d in pages_nav[:3]]
+    row2 = [InlineKeyboardButton(text=l, callback_data=d) for l, d in pages_nav[3:]]
+
+    nav_row = []
+    if page > 1:
+        nav_row.append(InlineKeyboardButton(text="◀️ Prev", callback_data=f"analytics_sales:{page-1}"))
+    nav_row.append(InlineKeyboardButton(text=f"📄 {page}/{total_pages}", callback_data="noop"))
+    if page < total_pages:
+        nav_row.append(InlineKeyboardButton(text="Next ▶️", callback_data=f"analytics_sales:{page+1}"))
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        row1, row2, nav_row,
+        [InlineKeyboardButton(text="🔄 Refresh", callback_data=f"analytics_sales:{page}")],
+        [back_button("admin_panel")],
+    ])
+
+    try:
+        await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    except Exception:
+        pass
+    await callback.answer()
+
+
+# ── Page 5: Revenue Trends ────────────────────────────────
+
+@router.callback_query(F.data == "analytics_trends")
+@admin_only
+@error_handler
+async def cb_analytics_trends(callback: types.CallbackQuery):
+    """Text-based revenue trends — last 14 days."""
+    daily = await db.get_daily_revenue(14)
+
+    text = (
+        f"📈 *REVENUE TRENDS*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"_Last 14 days_\n\n"
+    )
+
+    if not daily:
+        text += "_No revenue data yet\\._"
+    else:
+        # Find max revenue for bar chart scaling
+        max_rev = max(float(d["revenue"]) for d in daily) if daily else 1
+        max_rev = max(max_rev, 1)  # prevent division by zero
+
+        total_period_rev = sum(float(d["revenue"]) for d in daily)
+        total_period_orders = sum(d["order_count"] for d in daily)
+
+        text += (
+            f"💰 Period Total: *{escape_md(format_currency(total_period_rev))}*\n"
+            f"🛒 Total Orders: *{total_period_orders}*\n\n"
+        )
+
+        # Text bar chart
+        for d in daily:
+            day_str = d["day"].strftime("%d/%m")
+            rev = float(d["revenue"])
+            orders = d["order_count"]
+            bar_len = int((rev / max_rev) * 12) if max_rev > 0 else 0
+            bar = "█" * bar_len + "░" * (12 - bar_len)
+            rev_str = escape_md(format_currency(rev))
+
+            text += f"`{day_str}` {bar} *{rev_str}* \\\\({orders}\\\\)\n"
+
+        text += (
+            f"\n━━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 *Daily Average:*\n"
+        )
+        avg_rev = total_period_rev / len(daily) if daily else 0
+        avg_orders = total_period_orders / len(daily) if daily else 0
+        text += (
+            f"   💰 Revenue: *{escape_md(format_currency(avg_rev))}*\n"
+            f"   🛒 Orders: *{avg_orders:.1f}*"
+        )
+
+    # Navigation
+    pages_nav = [
+        ("📊 Overview", "admin_analytics"),
+        ("👑 Admins", "analytics_admins"),
+        ("📦 Products", "analytics_products:1"),
+        ("🧾 Sales", "analytics_sales:1"),
+        ("• 📈 Trends •", "analytics_trends"),
+    ]
+    row1 = [InlineKeyboardButton(text=l, callback_data=d) for l, d in pages_nav[:3]]
+    row2 = [InlineKeyboardButton(text=l, callback_data=d) for l, d in pages_nav[3:]]
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        row1, row2,
+        [InlineKeyboardButton(text="🔄 Refresh", callback_data="analytics_trends")],
+        [back_button("admin_panel")],
+    ])
+
+    try:
+        await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    except Exception:
+        pass
     await callback.answer()
 
 

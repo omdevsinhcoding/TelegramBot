@@ -55,20 +55,6 @@ async def on_startup(bot: Bot):
     # Start lightweight order expiry task (NO payment API polling)
     asyncio.create_task(expire_orders_loop(bot))
 
-    # Start analytics web server (Telegram Mini App)
-    try:
-        from bot.webapp.server import start_webapp
-        webapp_port = 8443
-        try:
-            from bot.database import queries as db
-            settings = await db.get_bot_settings()
-            webapp_port = int(settings.get("webapp_port") or 8443)
-        except Exception:
-            pass
-        await start_webapp(webapp_port)
-    except Exception as e:
-        logger.warning(f"Analytics webapp failed to start (non-critical): {e}")
-
     me = await bot.get_me()
     logger.info(f"Bot started: @{me.username} (ID: {me.id})")
 
