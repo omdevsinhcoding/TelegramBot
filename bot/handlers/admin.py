@@ -4151,7 +4151,10 @@ async def cb_admin_analytics(callback: types.CallbackQuery):
         ]
         kb = InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    try:
+        await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    except Exception:
+        pass  # Message not modified — data unchanged
     await callback.answer()
 
 
