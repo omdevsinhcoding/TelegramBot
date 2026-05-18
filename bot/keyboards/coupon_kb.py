@@ -1,6 +1,6 @@
 """
 DreamX Coupon Bot — Coupon Keyboards
-Supports categorized view, pagination, free coupons, and stock status.
+Clean folder-style category system with product browsing inside categories.
 """
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -11,99 +11,52 @@ ITEMS_PER_PAGE = 8  # Max items before showing pagination
 
 def buying_menu_kb(coupons: list, free_coupon_count: int = 0, page: int = 0,
                     categorized_data: dict = None) -> InlineKeyboardMarkup:
-    """Build the buying menu shown on /start or Buy Vouchers.
+    """Build the shop menu — shows ONLY category folders.
 
-    If categorized_data is provided, shows categories as folders + uncategorized items directly.
-    Otherwise falls back to flat list mode (backward compat).
+    Categories are displayed as clean folder buttons.
+    No stock info, no sold-out labels on folders.
+    User clicks a folder → opens it → sees products inside.
     """
     buttons = []
 
     if categorized_data:
-        # ── Category Folder View ──
-        # Show each category as a clickable folder with stock count
+        # ── Pure Folder View ──
         for cat in categorized_data.get("categories", []):
             cat_name = cat["name"]
-            total_stock = cat.get("total_stock", 0)
             coupon_count = cat.get("coupon_count", 0)
-            if total_stock > 0:
-                label = f"📁 {cat_name} • {coupon_count} items • 📦 {total_stock}"
+
+            # Clean folder label — just name and product count
+            if coupon_count > 0:
+                label = f"📁 {cat_name} ({coupon_count})"
             else:
-                label = f"📁 {cat_name} • {coupon_count} items • ❌ Sold Out"
+                label = f"📁 {cat_name}"
+
             buttons.append([
                 InlineKeyboardButton(
                     text=label,
-                    callback_data=f"browse_cat:{cat['id']}" if total_stock > 0 else "noop"
+                    callback_data=f"browse_cat:{cat['id']}"
                 )
             ])
-
-        # Show uncategorized coupons directly
-        uncategorized = categorized_data.get("uncategorized", [])
-        if uncategorized:
-            if categorized_data.get("categories"):
-                buttons.append([InlineKeyboardButton(
-                    text="━━ 🏷️ Other Products ━━",
-                    callback_data="noop"
-                )])
-            for c in uncategorized:
-                stock = c["stock"]
-                disc = c.get("discounted_price", 0)
-                if stock <= 0:
-                    label = f"🛍️ {c['title']} | ₹{disc} | ❌ Sold Out"
-                else:
-                    label = f"🛍️ {c['title']} | ₹{disc} | 📦 {stock}"
-                buttons.append([
-                    InlineKeyboardButton(
-                        text=label,
-                        callback_data=f"coupon_detail:{c['id']}" if stock > 0 else "noop"
-                    )
-                ])
     else:
-        # ── Fallback: Flat list with category headers ──
-        from collections import OrderedDict
-        grouped = OrderedDict()
-        for c in coupons:
-            cat = c.get("category") or ""
-            grouped.setdefault(cat, []).append(c)
-
-        ordered_items = []
-        for cat_name, cat_coupons in grouped.items():
-            if cat_name:
-                ordered_items.append(("header", cat_name))
-            for c in cat_coupons:
-                ordered_items.append(("coupon", c))
-
-        coupon_items = [x for x in ordered_items if x[0] == "coupon"]
-        total_items = len(coupon_items)
+        # ── Fallback: Flat product list (no categories) ──
+        total_items = len(coupons)
         start = page * ITEMS_PER_PAGE
         end = start + ITEMS_PER_PAGE
+        page_items = coupons[start:end]
 
-        page_coupon_ids = set(id(x[1]) for x in coupon_items[start:end])
-        shown_categories = set()
-        for item_type, data in ordered_items:
-            if item_type == "header":
-                continue
-            if item_type == "coupon" and id(data) in page_coupon_ids:
-                coupon_cat = data.get("category") or ""
-                if coupon_cat and coupon_cat not in shown_categories:
-                    buttons.append([InlineKeyboardButton(
-                        text=f"━━ 🏷️ {coupon_cat} ━━",
-                        callback_data="noop"
-                    )])
-                    shown_categories.add(coupon_cat)
-
-                stock = data["stock"]
-                disc = data.get("discounted_price", 0)
-                if stock <= 0:
-                    label = f"🛍️ {data['title']} | ₹{disc} | ❌ Sold Out"
-                else:
-                    label = f"🛍️ {data['title']} | ₹{disc} | 📦 {stock}"
-
-                buttons.append([
-                    InlineKeyboardButton(
-                        text=label,
-                        callback_data=f"coupon_detail:{data['id']}" if stock > 0 else "noop"
-                    )
-                ])
+        for c in page_items:
+            stock = c["stock"]
+            disc = c.get("discounted_price", 0)
+            if stock > 0:
+                label = f"🛍️ {c['title']} | ₹{disc:.1f} | 📦 {stock}"
+            else:
+                label = f"🛍️ {c['title']} | ₹{disc:.1f} | ❌ Sold Out"
+            buttons.append([
+                InlineKeyboardButton(
+                    text=label,
+                    callback_data=f"coupon_detail:{c['id']}" if stock > 0 else "noop"
+                )
+            ])
 
         nav_row = []
         if page > 0:
@@ -131,7 +84,11 @@ def buying_menu_kb(coupons: list, free_coupon_count: int = 0, page: int = 0,
 
 
 def category_coupons_kb(coupons: list, category_name: str, page: int = 0) -> InlineKeyboardMarkup:
-    """Show coupons inside a specific category for user browsing."""
+    """Show products inside a specific category folder.
+
+    Products show their individual price and stock status.
+    Sold-out products are visible but not clickable.
+    """
     buttons = []
 
     total_items = len(coupons)
@@ -142,15 +99,14 @@ def category_coupons_kb(coupons: list, category_name: str, page: int = 0) -> Inl
     for c in page_items:
         stock = c["stock"]
         disc = c.get("discounted_price", 0)
-        if stock <= 0:
-            label = f"🛍️ {c['title']} | ₹{disc} | ❌ Sold Out"
+        if stock > 0:
+            label = f"🛍️ {c['title']} | ₹{disc:.1f} | 📦 {stock}"
+            cb = f"coupon_detail:{c['id']}"
         else:
-            label = f"🛍️ {c['title']} | ₹{disc} | 📦 {stock}"
+            label = f"🛍️ {c['title']} | ₹{disc:.1f} | ❌ Sold Out"
+            cb = "noop"
         buttons.append([
-            InlineKeyboardButton(
-                text=label,
-                callback_data=f"coupon_detail:{c['id']}" if stock > 0 else "noop"
-            )
+            InlineKeyboardButton(text=label, callback_data=cb)
         ])
 
     # Pagination

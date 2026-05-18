@@ -89,16 +89,16 @@ async def cmd_id_channel(message: types.Message):
 @router.message(F.text == "🛍️ Buy Vouchers")
 @error_handler
 async def text_buy_vouchers(message: types.Message):
-    """Route 'Buy Vouchers' button press — show categorized buying menu."""
+    """Route 'Buy Vouchers' button press — show category folders."""
     from bot.keyboards.coupon_kb import buying_menu_kb
 
     categorized = await db.get_active_coupons_categorized()
     free_coupons = await db.get_active_free_coupons()
     free_count = len(free_coupons)
 
-    has_items = bool(categorized["categories"]) or bool(categorized["uncategorized"])
+    has_categories = bool(categorized["categories"])
 
-    if not has_items and free_count == 0:
+    if not has_categories and free_count == 0:
         await message.answer(
             "📭 *No coupons available right now\\.*\n\nCheck back later\\!",
             parse_mode="MarkdownV2",
@@ -106,10 +106,9 @@ async def text_buy_vouchers(message: types.Message):
         return
 
     text = (
-        "━━━━━━━━━━━━━━━━━━━━\n"
         "🛍️ *VOUCHER SHOP*\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "👉 *Select a category or product below:*"
+        "👉 *Select a category:*"
     )
     await message.answer(
         text,

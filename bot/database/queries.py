@@ -2194,43 +2194,34 @@ async def get_full_analytics() -> dict:
 # ── CATEGORY-AWARE COUPON BROWSING ───────────────────────
 
 async def get_active_coupons_categorized() -> dict:
-    """Get active coupons grouped by category for user browsing.
+    """Get all visible categories for the shop folder view.
+    
+    Categories are pure folders — always shown if visible, regardless
+    of whether they have products or stock. Individual product stock
+    is only relevant when browsing inside a category.
     
     Returns dict:
         {
-            "categories": [{"id": ..., "name": ..., "coupon_count": ..., "total_stock": ...}],
-            "uncategorized": [coupon_dicts],
+            "categories": [{"id", "name", "coupon_count", "total_stock"}],
         }
     """
     pool = await get_pool()
     
-    # Get visible categories that have active coupons with stock
+    # Get ALL visible categories with their product counts
+    # LEFT JOIN ensures empty categories still appear
     categories = await pool.fetch("""
         SELECT cc.id, cc.name, cc.sort_order,
-               COUNT(c.id) as coupon_count,
-               COALESCE(SUM(c.stock), 0) as total_stock
+               COUNT(c.id) FILTER (WHERE c.is_active = TRUE) as coupon_count,
+               COALESCE(SUM(c.stock) FILTER (WHERE c.is_active = TRUE), 0) as total_stock
         FROM coupon_categories cc
-        JOIN coupons c ON c.category = cc.name AND c.is_active = TRUE
+        LEFT JOIN coupons c ON c.category = cc.name
         WHERE cc.is_visible = TRUE
         GROUP BY cc.id, cc.name, cc.sort_order
-        HAVING COUNT(c.id) > 0
         ORDER BY cc.sort_order, cc.name
-    """)
-    
-    # Get uncategorized active coupons (shown directly, not in any category)
-    uncategorized = await pool.fetch("""
-        SELECT * FROM coupons 
-        WHERE is_active = TRUE 
-          AND (category IS NULL OR category = ''
-               OR category NOT IN (
-                   SELECT name FROM coupon_categories WHERE is_visible = TRUE
-               ))
-        ORDER BY id DESC
     """)
     
     return {
         "categories": [dict(c) for c in categories],
-        "uncategorized": [dict(c) for c in uncategorized],
     }
 
 

@@ -17,16 +17,15 @@ router = Router()
 @router.callback_query(F.data == "browse_coupons")
 @error_handler
 async def cb_browse(callback: types.CallbackQuery):
-    """Show the main buying menu with categories as folders + uncategorized items."""
+    """Show the shop — categories as clickable folders."""
 
-    # Use category-aware browsing for proper navigation
     categorized = await db.get_active_coupons_categorized()
     free_coupons = await db.get_active_free_coupons()
     free_count = len(free_coupons)
 
-    has_items = bool(categorized["categories"]) or bool(categorized["uncategorized"])
+    has_categories = bool(categorized["categories"])
 
-    if not has_items and free_count == 0:
+    if not has_categories and free_count == 0:
         from aiogram.types import InlineKeyboardMarkup
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
         await callback.message.edit_text(
@@ -38,10 +37,9 @@ async def cb_browse(callback: types.CallbackQuery):
         return
 
     text = (
-        "━━━━━━━━━━━━━━━━━━━━\n"
         "🛍️ *VOUCHER SHOP*\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "👉 *Select a category or product below:*"
+        "👉 *Select a category:*"
     )
     await callback.message.edit_text(
         text,
@@ -54,7 +52,7 @@ async def cb_browse(callback: types.CallbackQuery):
 @router.callback_query(F.data.startswith("browse_cat:"))
 @error_handler
 async def cb_browse_category(callback: types.CallbackQuery):
-    """User clicked a category folder — show coupons inside that category."""
+    """User clicked a category folder — show products inside."""
     cat_id = int(callback.data.split(":")[1])
     cat = await db.get_category(cat_id)
     if not cat:
@@ -62,17 +60,28 @@ async def cb_browse_category(callback: types.CallbackQuery):
         return
 
     coupons = await db.get_active_coupons_in_category(cat["name"])
+
     if not coupons:
-        await callback.answer("No products available in this category.", show_alert=True)
+        # Empty category — show a clean empty state, not an error
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Back to Shop", callback_data="browse_coupons")]
+        ])
+        await callback.message.edit_text(
+            f"📁 *{escape_md(cat['name'])}*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📭 *This category is currently empty\\.*\n\n"
+            f"_No products available here yet\\._",
+            parse_mode="MarkdownV2",
+            reply_markup=kb,
+        )
+        await callback.answer()
         return
 
     from bot.keyboards.coupon_kb import category_coupons_kb
-    total_stock = sum(c["stock"] for c in coupons)
     text = (
-        f"━━━━━━━━━━━━━━━━━━━━\n"
         f"📁 *{escape_md(cat['name'])}*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"📦 {len(coupons)} products • {total_stock} total stock\n\n"
         f"👉 *Select a product:*"
     )
     await callback.message.edit_text(
@@ -97,12 +106,9 @@ async def cb_category_page(callback: types.CallbackQuery):
         return
 
     from bot.keyboards.coupon_kb import category_coupons_kb
-    total_stock = sum(c["stock"] for c in coupons)
     text = (
-        f"━━━━━━━━━━━━━━━━━━━━\n"
         f"📁 *{escape_md(cat_name)}*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"📦 {len(coupons)} products • {total_stock} total stock\n\n"
         f"👉 *Select a product:*"
     )
     await callback.message.edit_text(
