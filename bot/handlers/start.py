@@ -85,6 +85,18 @@ async def cmd_start(message: types.Message, state: FSMContext):
                                         except Exception as wt_err:
                                             logger.warning(f"[REFERRAL] wallet txn log failed: {wt_err}")
 
+                                        # Track promotional loss
+                                        try:
+                                            await db.record_promotional_loss(
+                                                loss_type="wallet_reward",
+                                                amount=reward_amt,
+                                                user_id=referrer_id,
+                                                reference=f"referral_reward_from_{user.id}",
+                                                details={"referred_user": user.id, "mode": "wallet_reward"}
+                                            )
+                                        except Exception:
+                                            pass
+
                                         # Notify referrer
                                         try:
                                             ref_name = escape_md(user.first_name or "Someone")

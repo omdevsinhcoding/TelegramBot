@@ -403,6 +403,52 @@ CREATE TABLE IF NOT EXISTS admin_extractions (
 CREATE INDEX IF NOT EXISTS idx_admin_extractions_admin ON admin_extractions (admin_id);
 CREATE INDEX IF NOT EXISTS idx_admin_extractions_coupon ON admin_extractions (coupon_id);
 
+-- ────────────────────────────────────────────────────────────
+-- 20. PROMOTIONAL LOSSES (tracks all platform/promotional losses)
+-- ────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS promotional_losses (
+    id              SERIAL PRIMARY KEY,
+    loss_type       VARCHAR(64) NOT NULL,
+    -- Types: referral_reward, wallet_reward, coupon_reward,
+    --        giveaway, manual_distribution, promotional_discount,
+    --        free_coupon, extraction
+    amount          NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    admin_id        BIGINT,              -- admin who caused/executed the loss
+    coupon_owner_admin_id BIGINT,        -- admin who owns the stock (for giveaways)
+    user_id         BIGINT,              -- user who benefited
+    coupon_id       INTEGER,             -- related coupon if applicable
+    order_id        VARCHAR(64),         -- related order if applicable
+    reference       TEXT,                -- human-readable reference
+    details         JSONB,               -- extra details (coupon codes, quantities, etc.)
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_promo_losses_admin ON promotional_losses (admin_id);
+CREATE INDEX IF NOT EXISTS idx_promo_losses_type ON promotional_losses (loss_type);
+CREATE INDEX IF NOT EXISTS idx_promo_losses_created ON promotional_losses (created_at);
+
+-- ────────────────────────────────────────────────────────────
+-- 21. GIVEAWAY LOGS (ownership tracking for giveaway distributions)
+-- ────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS giveaway_logs (
+    id                  SERIAL PRIMARY KEY,
+    giveaway_id         INTEGER,                    -- free_coupons.id
+    executor_admin_id   BIGINT NOT NULL,            -- admin who executed the giveaway
+    coupon_owner_admin_id BIGINT,                   -- admin who owns the source coupons
+    source_coupon_id    INTEGER,                    -- source coupon product
+    coupon_category     VARCHAR(64),                -- category of the source coupon
+    codes_distributed   TEXT,                       -- newline-separated codes given away
+    quantity            INTEGER NOT NULL DEFAULT 0,
+    total_value         NUMERIC(12, 2) DEFAULT 0.00,-- estimated promotional value
+    is_self_stock       BOOLEAN DEFAULT FALSE,      -- true if executor == owner
+    loss_absorbed_by    BIGINT,                     -- admin who absorbs the loss
+    created_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_giveaway_logs_executor ON giveaway_logs (executor_admin_id);
+CREATE INDEX IF NOT EXISTS idx_giveaway_logs_owner ON giveaway_logs (coupon_owner_admin_id);
+CREATE INDEX IF NOT EXISTS idx_giveaway_logs_created ON giveaway_logs (created_at);
+
 -- ============================================================
 -- END OF SCHEMA — All tables and indexes defined above.
 -- ============================================================

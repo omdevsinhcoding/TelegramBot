@@ -17,13 +17,16 @@ router = Router()
 @router.callback_query(F.data == "browse_coupons")
 @error_handler
 async def cb_browse(callback: types.CallbackQuery):
-    """Show the main buying menu with categories, products, and free coupons."""
+    """Show the main buying menu with categories as folders + uncategorized items."""
 
-    coupons = await list_active_coupons()
+    # Use category-aware browsing for proper navigation
+    categorized = await db.get_active_coupons_categorized()
     free_coupons = await db.get_active_free_coupons()
     free_count = len(free_coupons)
 
-    if not coupons and free_count == 0:
+    has_items = bool(categorized["categories"]) or bool(categorized["uncategorized"])
+
+    if not has_items and free_count == 0:
         from aiogram.types import InlineKeyboardMarkup
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
         await callback.message.edit_text(
@@ -38,15 +41,76 @@ async def cb_browse(callback: types.CallbackQuery):
         "━━━━━━━━━━━━━━━━━━━━\n"
         "🛍️ *VOUCHER SHOP*\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "👉 *Select a product below:*"
+        "👉 *Select a category or product below:*"
     )
     await callback.message.edit_text(
         text,
         parse_mode="MarkdownV2",
-        reply_markup=buying_menu_kb(coupons, free_count),
+        reply_markup=buying_menu_kb([], free_count, categorized_data=categorized),
     )
     await callback.answer()
 
+
+@router.callback_query(F.data.startswith("browse_cat:"))
+@error_handler
+async def cb_browse_category(callback: types.CallbackQuery):
+    """User clicked a category folder — show coupons inside that category."""
+    cat_id = int(callback.data.split(":")[1])
+    cat = await db.get_category(cat_id)
+    if not cat:
+        await callback.answer("Category not found.", show_alert=True)
+        return
+
+    coupons = await db.get_active_coupons_in_category(cat["name"])
+    if not coupons:
+        await callback.answer("No products available in this category.", show_alert=True)
+        return
+
+    from bot.keyboards.coupon_kb import category_coupons_kb
+    total_stock = sum(c["stock"] for c in coupons)
+    text = (
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📁 *{escape_md(cat['name'])}*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📦 {len(coupons)} products • {total_stock} total stock\n\n"
+        f"👉 *Select a product:*"
+    )
+    await callback.message.edit_text(
+        text,
+        parse_mode="MarkdownV2",
+        reply_markup=category_coupons_kb(coupons, cat["name"]),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("cat_page:"))
+@error_handler
+async def cb_category_page(callback: types.CallbackQuery):
+    """Handle pagination within a category view."""
+    parts = callback.data.split(":")
+    cat_name = parts[1]
+    page = int(parts[2])
+
+    coupons = await db.get_active_coupons_in_category(cat_name)
+    if not coupons:
+        await callback.answer("No products available.", show_alert=True)
+        return
+
+    from bot.keyboards.coupon_kb import category_coupons_kb
+    total_stock = sum(c["stock"] for c in coupons)
+    text = (
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📁 *{escape_md(cat_name)}*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📦 {len(coupons)} products • {total_stock} total stock\n\n"
+        f"👉 *Select a product:*"
+    )
+    await callback.message.edit_text(
+        text,
+        parse_mode="MarkdownV2",
+        reply_markup=category_coupons_kb(coupons, cat_name, page),
+    )
+    await callback.answer()
 
 @router.callback_query(F.data.startswith("coupon_detail:"))
 @error_handler

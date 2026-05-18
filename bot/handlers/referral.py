@@ -204,6 +204,28 @@ async def cb_ref_claim(callback: types.CallbackQuery):
         from bot.utils.logger import logger
         logger.warning(f"Failed to create reward order (non-critical): {e}")
 
+    # Track promotional loss for coupon reward
+    try:
+        coupon_detail = await db.get_coupon(reward["coupon_id"])
+        estimated_value = float(coupon_detail["discounted_price"]) if coupon_detail else 0
+        coupon_owner = coupon_detail.get("created_by") if coupon_detail else None
+        await db.record_promotional_loss(
+            loss_type="coupon_reward",
+            amount=estimated_value,
+            coupon_owner_admin_id=coupon_owner,
+            user_id=user_id,
+            coupon_id=reward["coupon_id"],
+            order_id=order_id,
+            reference=f"referral_coupon_reward_{reward_id}",
+            details={
+                "reward_title": reward["title"],
+                "referrals_needed": reward["referrals_needed"],
+                "code": code,
+            }
+        )
+    except Exception:
+        pass
+
     title_esc = escape_md(reward["title"])
     code_esc = escape_md(code)
     oid_esc = escape_md(order_id) if order_id else ""
@@ -312,6 +334,23 @@ async def process_referral_on_purchase(user_id: int, order_amount, bot=None):
             f"credited to {referrer_id} from {user_id}'s purchase"
         )
 
+        # Track promotional loss
+        try:
+            await db.record_promotional_loss(
+                loss_type="referral_reward",
+                amount=commission_amt,
+                user_id=referrer_id,
+                reference=f"commission_{commission_pct}pct_from_{user_id}",
+                details={
+                    "buyer_user_id": user_id,
+                    "order_amount": float(order_amount),
+                    "commission_pct": commission_pct,
+                    "mode": "commission"
+                }
+            )
+        except Exception:
+            pass
+
         # Notify referrer
         if bot:
             try:
@@ -419,6 +458,18 @@ async def msg_ref_enter_code(message: types.Message, state: FSMContext):
                         )
                     except Exception as wt_err:
                         logger.warning(f"[REFERRAL] wallet txn log failed: {wt_err}")
+
+                    # Track promotional loss
+                    try:
+                        await db.record_promotional_loss(
+                            loss_type="wallet_reward",
+                            amount=reward_amt,
+                            user_id=referrer_id,
+                            reference=f"referral_reward_from_{user_id}_manual",
+                            details={"referred_user": user_id, "mode": "wallet_reward", "entry": "manual"}
+                        )
+                    except Exception:
+                        pass
 
                     # Notify referrer
                     try:

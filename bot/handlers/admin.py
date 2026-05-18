@@ -1170,6 +1170,28 @@ async def msg_extract_qty(message: types.Message, state: FSMContext):
     )
     logger.info(f"Admin {message.from_user.id} extracted {len(codes)} codes from coupon {coupon_id}")
 
+    # Track promotional loss for extraction
+    try:
+        unit_price = float(coupon["discounted_price"]) if coupon else 0
+        total_value = unit_price * len(codes)
+        coupon_owner = coupon.get("created_by") if coupon else None
+        await db.record_promotional_loss(
+            loss_type="extraction",
+            amount=total_value,
+            admin_id=message.from_user.id,
+            coupon_owner_admin_id=coupon_owner,
+            coupon_id=coupon_id,
+            reference=f"extract_{len(codes)}_codes",
+            details={
+                "coupon_title": title,
+                "quantity": len(codes),
+                "unit_price": unit_price,
+                "codes_sample": codes[:5],
+            }
+        )
+    except Exception:
+        pass
+
     # Show delivery options
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
@@ -4671,6 +4693,7 @@ def _analytics_nav_kb(current_page: str) -> InlineKeyboardMarkup:
         ("📦 Products", "analytics_products:1"),
         ("🧾 Sales", "analytics_sales:1"),
         ("📈 Trends", "analytics_trends"),
+        ("🔻 Losses", "analytics_promo_losses"),
     ]
     row1 = []
     row2 = []
@@ -4760,8 +4783,34 @@ async def cb_admin_analytics(callback: types.CallbackQuery):
         f"┌──────────────────\n"
         f"{methods_text}\n"
         f"└──────────────────\n\n"
-        f"_Navigate below for detailed breakdowns_ ⬇️"
     )
+
+    # Promotional loss summary
+    try:
+        promo_losses = await db.get_total_promotional_losses()
+        grand_loss = promo_losses.get("_grand_total", 0)
+        if grand_loss > 0:
+            text += (
+                f"🔻 *PROMOTIONAL LOSSES*\n"
+                f"┌──────────────────\n"
+                f"│ 💸 Total Losses: *{escape_md(format_currency(grand_loss))}*\n"
+            )
+            # Show top 3 loss types
+            sorted_types = sorted(
+                [(k, v) for k, v in promo_losses.items() if not k.startswith("_")],
+                key=lambda x: x[1]["amount"], reverse=True
+            )[:3]
+            for loss_type, data in sorted_types:
+                type_name = escape_md(loss_type.replace("_", " ").title())
+                amt = escape_md(format_currency(data["amount"]))
+                text += f"│   📉 {type_name}: *{amt}*\n"
+            text += (
+                f"└──────────────────\n\n"
+            )
+    except Exception:
+        pass
+
+    text += f"_Navigate below for detailed breakdowns_ ⬇️"
 
     try:
         await callback.message.edit_text(
@@ -5067,29 +5116,105 @@ async def cb_analytics_trends(callback: types.CallbackQuery):
             f"   🛒 Orders: *{avg_orders:.1f}*"
         )
 
-    # Navigation
-    pages_nav = [
-        ("📊 Overview", "admin_analytics"),
-        ("👑 Admins", "analytics_admins"),
-        ("📦 Products", "analytics_products:1"),
-        ("🧾 Sales", "analytics_sales:1"),
-        ("• 📈 Trends •", "analytics_trends"),
-    ]
-    row1 = [InlineKeyboardButton(text=l, callback_data=d) for l, d in pages_nav[:3]]
-    row2 = [InlineKeyboardButton(text=l, callback_data=d) for l, d in pages_nav[3:]]
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        row1, row2,
-        [InlineKeyboardButton(text="🔄 Refresh", callback_data="analytics_trends")],
-        [back_button("admin_panel")],
-    ])
-
     try:
-        await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+        await callback.message.edit_text(
+            text, parse_mode="MarkdownV2",
+            reply_markup=_analytics_nav_kb("analytics_trends")
+        )
     except Exception as e:
         logger.debug(f"Analytics trends edit_text failed: {e}")
     await callback.answer()
 
+
+# ── Page 6: Promotional Loss Analytics ────────────────────
+
+@router.callback_query(F.data == "analytics_promo_losses")
+@admin_only
+@error_handler
+async def cb_analytics_promo_losses(callback: types.CallbackQuery):
+    """Promotional loss dashboard — tracks all platform losses."""
+    promo_losses = await db.get_total_promotional_losses()
+    admin_losses = await db.get_admin_promotional_losses()
+
+    # Get admin names
+    admin_ids = {a["admin_id"] for a in admin_losses if a["admin_id"]}
+    admin_names = await db.get_admin_names_map(admin_ids)
+
+    grand_total = promo_losses.get("_grand_total", 0)
+
+    text = (
+        f"🔻 *PROMOTIONAL LOSS REPORT*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"💸 *Total Platform Losses:* *{escape_md(format_currency(grand_total))}*\n\n"
+    )
+
+    # Loss by type
+    loss_icons = {
+        "wallet_reward": "💰", "referral_reward": "🤝",
+        "coupon_reward": "🎟️", "giveaway": "🎁",
+        "extraction": "📤", "manual_distribution": "📋",
+        "free_coupon": "🆓", "promotional_discount": "🏷️"
+    }
+    type_lines = []
+    for loss_type, data in promo_losses.items():
+        if loss_type.startswith("_"):
+            continue
+        icon = loss_icons.get(loss_type, "📉")
+        type_name = escape_md(loss_type.replace("_", " ").title())
+        count = data["count"]
+        amount = escape_md(format_currency(data["amount"]))
+        type_lines.append(f"   {icon} {type_name}: *{amount}* \\({count} events\\)")
+
+    if type_lines:
+        text += "📊 *Loss Breakdown by Type*\n┌──────────────────\n"
+        text += "\n".join(type_lines)
+        text += "\n└──────────────────\n\n"
+    else:
+        text += "_No promotional losses recorded yet\\._\n\n"
+
+    # Per-admin losses
+    if admin_losses:
+        text += "👑 *Loss Attribution by Admin*\n┌──────────────────\n"
+        for a in admin_losses[:10]:
+            name = escape_md(admin_names.get(a["admin_id"], str(a["admin_id"])))
+            total = escape_md(format_currency(float(a["total_loss"])))
+            giveaway = escape_md(format_currency(float(a["giveaway_loss"])))
+            extraction = escape_md(format_currency(float(a["extraction_loss"])))
+            text += (
+                f"│ 👤 *{name}*\n"
+                f"│    Total: *{total}* \\({a['event_count']} events\\)\n"
+                f"│    🎁 Giveaway: *{giveaway}* \\({a['giveaway_count']}\\)\n"
+                f"│    📤 Extraction: *{extraction}* \\({a['extraction_count']}\\)\n"
+            )
+        text += "└──────────────────\n\n"
+
+    # Giveaway stats
+    giveaway_stats = await db.get_admin_giveaway_stats()
+    if giveaway_stats:
+        text += "🎁 *Giveaway Distribution Stats*\n┌──────────────────\n"
+        for g in giveaway_stats[:5]:
+            name = escape_md(admin_names.get(g["admin_id"], str(g["admin_id"])))
+            total_val = escape_md(format_currency(float(g["total_value_given"])))
+            self_val = escape_md(format_currency(float(g["self_stock_value"])))
+            other_val = escape_md(format_currency(float(g["other_stock_value"])))
+            text += (
+                f"│ 👤 *{name}*\n"
+                f"│    📦 {g['total_codes_given']} codes given \\(*{total_val}*\\)\n"
+                f"│    ✅ Self stock: *{self_val}* \\({g['self_stock_count']}\\)\n"
+                f"│    ⚠️ Others' stock: *{other_val}* \\({g['other_stock_count']}\\)\n"
+            )
+        text += "└──────────────────\n\n"
+
+    text += "_Updated in real\\-time_ 🔄"
+
+    try:
+        await callback.message.edit_text(
+            text, parse_mode="MarkdownV2",
+            reply_markup=_analytics_nav_kb("analytics_promo_losses")
+        )
+    except Exception as e:
+        logger.debug(f"Analytics promo losses edit_text failed: {e}")
+    await callback.answer()
 
 # ── Support Settings (support text + inline buttons) ──────
 

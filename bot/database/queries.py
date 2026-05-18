@@ -1947,3 +1947,317 @@ async def delete_specific_codes(coupon_id: int, code_ids: list[int]) -> int:
                 ), updated_at = NOW() WHERE id = $1
             """, coupon_id)
     return result or 0
+
+
+# ── PROMOTIONAL LOSS TRACKING ────────────────────────────
+
+async def record_promotional_loss(
+    loss_type: str, amount: float,
+    admin_id: int = None, coupon_owner_admin_id: int = None,
+    user_id: int = None, coupon_id: int = None,
+    order_id: str = None, reference: str = None,
+    details: dict = None
+):
+    """Record a promotional/platform loss event.
+    
+    loss_type values:
+        referral_reward, wallet_reward, coupon_reward,
+        giveaway, manual_distribution, promotional_discount,
+        free_coupon, extraction
+    """
+    import json
+    pool = await get_pool()
+    details_json = json.dumps(details) if details else None
+    await pool.execute("""
+        INSERT INTO promotional_losses 
+        (loss_type, amount, admin_id, coupon_owner_admin_id, user_id,
+         coupon_id, order_id, reference, details)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+    """, loss_type, amount, admin_id, coupon_owner_admin_id,
+        user_id, coupon_id, order_id, reference, details_json)
+
+
+async def get_total_promotional_losses() -> dict:
+    """Get aggregate promotional losses by type."""
+    pool = await get_pool()
+    rows = await pool.fetch("""
+        SELECT loss_type,
+               COUNT(*) as event_count,
+               COALESCE(SUM(amount), 0) as total_amount
+        FROM promotional_losses
+        GROUP BY loss_type
+        ORDER BY total_amount DESC
+    """)
+    result = {}
+    grand_total = 0
+    for r in rows:
+        result[r["loss_type"]] = {
+            "count": r["event_count"],
+            "amount": float(r["total_amount"])
+        }
+        grand_total += float(r["total_amount"])
+    result["_grand_total"] = grand_total
+    return result
+
+
+async def get_admin_promotional_losses() -> list:
+    """Get promotional losses grouped by admin."""
+    pool = await get_pool()
+    return await pool.fetch("""
+        SELECT 
+            admin_id,
+            COUNT(*) as event_count,
+            COALESCE(SUM(amount), 0) as total_loss,
+            COUNT(*) FILTER (WHERE loss_type = 'giveaway') as giveaway_count,
+            COALESCE(SUM(amount) FILTER (WHERE loss_type = 'giveaway'), 0) as giveaway_loss,
+            COUNT(*) FILTER (WHERE loss_type = 'extraction') as extraction_count,
+            COALESCE(SUM(amount) FILTER (WHERE loss_type = 'extraction'), 0) as extraction_loss,
+            COUNT(*) FILTER (WHERE loss_type IN ('referral_reward', 'wallet_reward')) as reward_count,
+            COALESCE(SUM(amount) FILTER (WHERE loss_type IN ('referral_reward', 'wallet_reward')), 0) as reward_loss
+        FROM promotional_losses
+        WHERE admin_id IS NOT NULL
+        GROUP BY admin_id
+        ORDER BY total_loss DESC
+    """)
+
+
+async def get_promotional_loss_history(limit: int = 50) -> list:
+    """Get recent promotional loss events."""
+    pool = await get_pool()
+    return await pool.fetch("""
+        SELECT pl.*, c.title as coupon_title
+        FROM promotional_losses pl
+        LEFT JOIN coupons c ON pl.coupon_id = c.id
+        ORDER BY pl.created_at DESC
+        LIMIT $1
+    """, limit)
+
+
+async def get_admin_loss_share() -> list:
+    """Calculate each admin's share of total promotional losses.
+    
+    For losses not attributed to a specific admin, they are
+    distributed equally among all admins.
+    """
+    pool = await get_pool()
+    
+    # Get all admins
+    admins = await pool.fetch("SELECT telegram_id FROM admins")
+    admin_count = len(admins)
+    if admin_count == 0:
+        return []
+    
+    # Get attributed losses (where admin_id IS NOT NULL)
+    attributed = await pool.fetch("""
+        SELECT admin_id,
+               COALESCE(SUM(amount), 0) as attributed_loss
+        FROM promotional_losses
+        WHERE admin_id IS NOT NULL
+        GROUP BY admin_id
+    """)
+    
+    # Get unattributed losses (where admin_id IS NULL)
+    unattributed = await pool.fetchval("""
+        SELECT COALESCE(SUM(amount), 0)
+        FROM promotional_losses
+        WHERE admin_id IS NULL
+    """) or 0
+    
+    # Build result
+    attr_map = {r["admin_id"]: float(r["attributed_loss"]) for r in attributed}
+    shared_per_admin = float(unattributed) / admin_count if admin_count > 0 else 0
+    
+    result = []
+    for admin in admins:
+        aid = admin["telegram_id"]
+        direct = attr_map.get(aid, 0)
+        result.append({
+            "admin_id": aid,
+            "direct_loss": direct,
+            "shared_loss": shared_per_admin,
+            "total_loss": direct + shared_per_admin
+        })
+    
+    return sorted(result, key=lambda x: x["total_loss"], reverse=True)
+
+
+# ── GIVEAWAY OWNERSHIP LOGGING ───────────────────────────
+
+async def log_giveaway_distribution(
+    giveaway_id: int = None,
+    executor_admin_id: int = 0,
+    coupon_owner_admin_id: int = None,
+    source_coupon_id: int = None,
+    coupon_category: str = None,
+    codes_distributed: list = None,
+    quantity: int = 0,
+    total_value: float = 0.0,
+    is_self_stock: bool = False,
+    loss_absorbed_by: int = None
+) -> int:
+    """Log a giveaway distribution event with ownership tracking."""
+    pool = await get_pool()
+    codes_text = "\n".join(codes_distributed) if codes_distributed else ""
+    row = await pool.fetchrow("""
+        INSERT INTO giveaway_logs 
+        (giveaway_id, executor_admin_id, coupon_owner_admin_id,
+         source_coupon_id, coupon_category, codes_distributed,
+         quantity, total_value, is_self_stock, loss_absorbed_by)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        RETURNING id
+    """, giveaway_id, executor_admin_id, coupon_owner_admin_id,
+        source_coupon_id, coupon_category, codes_text,
+        quantity, total_value, is_self_stock, loss_absorbed_by)
+    return row["id"]
+
+
+async def get_giveaway_log_history(limit: int = 50) -> list:
+    """Get recent giveaway distribution logs."""
+    pool = await get_pool()
+    return await pool.fetch("""
+        SELECT gl.*,
+               fc.title as giveaway_title,
+               c.title as source_coupon_title
+        FROM giveaway_logs gl
+        LEFT JOIN free_coupons fc ON gl.giveaway_id = fc.id
+        LEFT JOIN coupons c ON gl.source_coupon_id = c.id
+        ORDER BY gl.created_at DESC
+        LIMIT $1
+    """, limit)
+
+
+async def get_admin_giveaway_stats() -> list:
+    """Get giveaway stats per admin (executor)."""
+    pool = await get_pool()
+    return await pool.fetch("""
+        SELECT 
+            executor_admin_id as admin_id,
+            COUNT(*) as total_distributions,
+            COALESCE(SUM(quantity), 0) as total_codes_given,
+            COALESCE(SUM(total_value), 0) as total_value_given,
+            COUNT(*) FILTER (WHERE is_self_stock = TRUE) as self_stock_count,
+            COALESCE(SUM(total_value) FILTER (WHERE is_self_stock = TRUE), 0) as self_stock_value,
+            COUNT(*) FILTER (WHERE is_self_stock = FALSE) as other_stock_count,
+            COALESCE(SUM(total_value) FILTER (WHERE is_self_stock = FALSE), 0) as other_stock_value
+        FROM giveaway_logs
+        GROUP BY executor_admin_id
+        ORDER BY total_value_given DESC
+    """)
+
+
+# ── COMPREHENSIVE ADMIN ANALYTICS ────────────────────────
+
+async def get_full_analytics() -> dict:
+    """Get comprehensive analytics for the admin dashboard."""
+    pool = await get_pool()
+    
+    # Sales stats
+    sales = await get_sales_stats()
+    
+    # Wallet/referral stats
+    wallet_stats = await get_wallet_usage_stats()
+    
+    # Promotional losses
+    promo_losses = await get_total_promotional_losses()
+    
+    # Admin-wise losses
+    admin_losses = await get_admin_loss_share()
+    
+    # Total referral rewards given
+    referral_total = await get_total_referral_rewards_given()
+    
+    # Total wallet used in purchases
+    wallet_used = await get_total_wallet_used_in_purchases()
+    
+    # Giveaway stats
+    giveaway_stats = await get_admin_giveaway_stats()
+    
+    # Category stock
+    cat_stock = await get_category_stock_summary()
+    
+    # Recent extractions
+    extractions = await get_extraction_history(limit=10)
+    
+    return {
+        "sales": dict(sales) if sales else {},
+        "wallet_stats": wallet_stats,
+        "promotional_losses": promo_losses,
+        "admin_losses": admin_losses,
+        "referral_total_given": referral_total,
+        "wallet_used_in_purchases": wallet_used,
+        "giveaway_stats": [dict(g) for g in giveaway_stats],
+        "category_stock": [dict(c) for c in cat_stock],
+        "recent_extractions": [dict(e) for e in extractions],
+    }
+
+
+# ── CATEGORY-AWARE COUPON BROWSING ───────────────────────
+
+async def get_active_coupons_categorized() -> dict:
+    """Get active coupons grouped by category for user browsing.
+    
+    Returns dict:
+        {
+            "categories": [{"id": ..., "name": ..., "coupon_count": ..., "total_stock": ...}],
+            "uncategorized": [coupon_dicts],
+        }
+    """
+    pool = await get_pool()
+    
+    # Get visible categories that have active coupons with stock
+    categories = await pool.fetch("""
+        SELECT cc.id, cc.name, cc.sort_order,
+               COUNT(c.id) as coupon_count,
+               COALESCE(SUM(c.stock), 0) as total_stock
+        FROM coupon_categories cc
+        JOIN coupons c ON c.category = cc.name AND c.is_active = TRUE
+        WHERE cc.is_visible = TRUE
+        GROUP BY cc.id, cc.name, cc.sort_order
+        HAVING COUNT(c.id) > 0
+        ORDER BY cc.sort_order, cc.name
+    """)
+    
+    # Get uncategorized active coupons (shown directly, not in any category)
+    uncategorized = await pool.fetch("""
+        SELECT * FROM coupons 
+        WHERE is_active = TRUE 
+          AND (category IS NULL OR category = ''
+               OR category NOT IN (
+                   SELECT name FROM coupon_categories WHERE is_visible = TRUE
+               ))
+        ORDER BY id DESC
+    """)
+    
+    return {
+        "categories": [dict(c) for c in categories],
+        "uncategorized": [dict(c) for c in uncategorized],
+    }
+
+
+async def get_active_coupons_in_category(category_name: str) -> list:
+    """Get active coupons in a specific category for user browsing."""
+    pool = await get_pool()
+    rows = await pool.fetch("""
+        SELECT * FROM coupons 
+        WHERE is_active = TRUE AND category = $1
+        ORDER BY id DESC
+    """, category_name)
+    return [dict(r) for r in rows]
+
+
+async def get_coupon_owner_admin(coupon_id: int) -> int | None:
+    """Get the admin who created/owns a coupon."""
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "SELECT created_by FROM coupons WHERE id = $1", coupon_id
+    )
+    return row["created_by"] if row and row["created_by"] else None
+
+
+async def get_admin_count() -> int:
+    """Get total number of admins (seed + DB)."""
+    pool = await get_pool()
+    db_count = await pool.fetchval("SELECT COUNT(*) FROM admins") or 0
+    from bot.config import Config
+    return db_count + len(Config.ADMIN_IDS)
+

@@ -90,14 +90,15 @@ async def cmd_id_channel(message: types.Message):
 @error_handler
 async def text_buy_vouchers(message: types.Message):
     """Route 'Buy Vouchers' button press — show categorized buying menu."""
-    from bot.services.coupon_service import list_active_coupons
     from bot.keyboards.coupon_kb import buying_menu_kb
 
-    coupons = await list_active_coupons()
+    categorized = await db.get_active_coupons_categorized()
     free_coupons = await db.get_active_free_coupons()
     free_count = len(free_coupons)
 
-    if not coupons and free_count == 0:
+    has_items = bool(categorized["categories"]) or bool(categorized["uncategorized"])
+
+    if not has_items and free_count == 0:
         await message.answer(
             "📭 *No coupons available right now\\.*\n\nCheck back later\\!",
             parse_mode="MarkdownV2",
@@ -108,12 +109,12 @@ async def text_buy_vouchers(message: types.Message):
         "━━━━━━━━━━━━━━━━━━━━\n"
         "🛍️ *VOUCHER SHOP*\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "👉 *Select a product below:*"
+        "👉 *Select a category or product below:*"
     )
     await message.answer(
         text,
         parse_mode="MarkdownV2",
-        reply_markup=buying_menu_kb(coupons, free_count),
+        reply_markup=buying_menu_kb([], free_count, categorized_data=categorized),
     )
 
 
@@ -820,11 +821,11 @@ async def cb_buy_page(callback: types.CallbackQuery):
 @router.callback_query(F.data.startswith("cat_view:"))
 @error_handler
 async def cb_category_view(callback: types.CallbackQuery):
-    """Categories removed — redirect to browse."""
-    await callback.answer("Categories have been removed. Showing all coupons.", show_alert=True)
-    from bot.handlers.coupons import cb_browse
-    callback.data = "browse_coupons"
-    await cb_browse(callback)
+    """Legacy cat_view: redirect to new browse_cat: handler."""
+    cat_id = callback.data.split(":")[1]
+    from bot.handlers.coupons import cb_browse_category
+    callback.data = f"browse_cat:{cat_id}"
+    await cb_browse_category(callback)
 
 
 @router.callback_query(F.data.startswith("coupon_page:"))
@@ -992,6 +993,27 @@ async def cb_claim_free_coupon(callback: types.CallbackQuery):
         except Exception as e:
             from bot.utils.logger import logger
             logger.warning(f"Failed to create giveaway order (non-critical): {e}")
+
+        # Track promotional loss for giveaway
+        try:
+            # Estimate value: use discounted price if linked to a coupon, else 0
+            estimated_value = 0
+            giveaway_admin = fc.get("created_by")
+            await db.record_promotional_loss(
+                loss_type="giveaway",
+                amount=estimated_value,
+                admin_id=giveaway_admin,
+                user_id=user_id,
+                reference=f"giveaway_{fc_id}_claim",
+                details={
+                    "giveaway_id": fc_id,
+                    "giveaway_title": fc["title"],
+                    "codes_count": len(codes),
+                    "codes": codes[:5],  # Store up to 5 codes for reference
+                }
+            )
+        except Exception:
+            pass
 
         order_line = ""
         if oid_esc:
