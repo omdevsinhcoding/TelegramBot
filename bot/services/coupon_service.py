@@ -1,6 +1,6 @@
 """
 DreamX Coupon Bot — Coupon Service
-Business logic for coupon CRUD operations.
+Business logic for coupon CRUD operations with category support.
 """
 
 from bot.database import queries as db
@@ -23,10 +23,13 @@ async def get_coupon_detail(coupon_id: int) -> dict | None:
 
 
 async def add_coupon(title: str, description: str, original_price: float,
-                      discounted_price: float, stock: int, created_by: int = None) -> int:
+                      discounted_price: float, stock: int,
+                      created_by: int = None, category: str = None) -> int:
     cid = await db.create_coupon(title, description, original_price,
                                    discounted_price, stock, created_by)
-    logger.info(f"Coupon created: id={cid}, title={title}, by={created_by}")
+    if category:
+        await db.move_coupon_to_category(cid, category)
+    logger.info(f"Coupon created: id={cid}, title={title}, category={category}, by={created_by}")
     return cid
 
 

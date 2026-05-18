@@ -192,6 +192,7 @@ async def init_db() -> asyncpg.Pool:
             "ALTER TABLE referral_settings ADD COLUMN IF NOT EXISTS wallet_reward_max_amount NUMERIC(10,2) DEFAULT 250.00;",
             "ALTER TABLE referral_settings ADD COLUMN IF NOT EXISTS wallet_reward_duration_days INTEGER DEFAULT 30;",
             "ALTER TABLE referral_claims ADD COLUMN IF NOT EXISTS referrals_needed INTEGER DEFAULT 0;",
+            "ALTER TABLE coupons ADD COLUMN IF NOT EXISTS category VARCHAR(64);",
         ]
         for sql in migrations:
             try:

@@ -230,34 +230,48 @@ async def text_view_stock(message: types.Message):
 
 
 def _build_stock_status_text(coupons: list) -> str:
-    """Build attractive stock status text matching Image 2 reference."""
+    """Build attractive stock status text grouped by category."""
     lines = ["📊 *STOCK STATUS*\n", "━━━━━━━━━━━━━━━━━━━━\n"]
 
     total_available = 0
-    for idx, c in enumerate(coupons, 1):
-        title = escape_md(c["title"])
-        stock = c["stock"]
-        orig = c.get("original_price", 0)
-        disc = c.get("discounted_price", 0)
 
-        total_available += stock
+    # Group by category
+    from collections import OrderedDict
+    grouped = OrderedDict()
+    for c in coupons:
+        cat = c.get("category") or ""
+        grouped.setdefault(cat, []).append(c)
 
-        if stock > 0:
-            status_icon = "✅"
-        else:
-            status_icon = "❌"
+    idx = 1
+    for cat_name, cat_coupons in grouped.items():
+        if cat_name:
+            lines.append(f"🏷️ *{escape_md(cat_name)}*\n")
 
-        # Price display
-        price_line = f"💰 {escape_md(f'₹{disc}')}"
-        if orig > disc and orig > 0:
-            price_line = f"💰 ~{escape_md(f'₹{orig}')}~ {escape_md(f'₹{disc}')}"
+        for c in cat_coupons:
+            title = escape_md(c["title"])
+            stock = c["stock"]
+            orig = c.get("original_price", 0)
+            disc = c.get("discounted_price", 0)
 
-        stock_text = escape_md(f"{stock} available")
+            total_available += stock
 
-        lines.append(
-            f"{idx}\\. {status_icon} *{title}*\n"
-            f"   {price_line} \\| 📦 {stock_text}\n"
-        )
+            if stock > 0:
+                status_icon = "✅"
+            else:
+                status_icon = "❌"
+
+            # Price display
+            price_line = f"💰 {escape_md(f'₹{disc}')}"
+            if orig > disc and orig > 0:
+                price_line = f"💰 ~{escape_md(f'₹{orig}')}~ {escape_md(f'₹{disc}')}"
+
+            stock_text = escape_md(f"{stock} available")
+
+            lines.append(
+                f"{idx}\\. {status_icon} *{title}*\n"
+                f"   {price_line} \\| 📦 {stock_text}\n"
+            )
+            idx += 1
 
     lines.append("━━━━━━━━━━━━━━━━━━━━\n")
     lines.append(f"📦 *Total Available: {total_available} coupons*")

@@ -17,8 +17,10 @@ from bot.services.coupon_service import (
 )
 from bot.keyboards.admin_kb import (
     admin_panel_kb, admin_coupons_kb,
-    admin_coupon_edit_kb, confirm_delete_kb,
+    admin_coupon_edit_kb, confirm_delete_kb, confirm_clear_stock_kb,
     admin_giveaways_kb, admin_giveaway_view_kb,
+    admin_categories_kb, admin_category_view_kb,
+    admin_category_select_kb, admin_category_select_for_add_kb,
 )
 from bot.keyboards.common import back_button, admin_cancel_button
 from bot.utils.helpers import format_currency, format_datetime, escape_md
@@ -48,6 +50,7 @@ class AdminStates(StatesGroup):
     add_description = State()
     add_original_price = State()
     add_discounted_price = State()
+    add_select_category = State()  # category picker step
     add_coupon_codes = State()     # ask for coupon codes directly after price
     # Edit fields
     edit_field_value = State()
@@ -94,6 +97,11 @@ class AdminStates(StatesGroup):
     channels_input = State()
     # Bot name
     bot_name_input = State()
+    # Category management
+    cat_add_name = State()
+    cat_rename_input = State()
+    # Manual extraction
+    extract_qty_input = State()
 
 
 
@@ -185,12 +193,14 @@ async def cb_admin_coupon_edit(callback: types.CallbackQuery):
     desc = escape_md(coupon["description"] or "N/A")
     orig = escape_md(f"₹{coupon['original_price']}")
     sale = escape_md(f"₹{coupon['discounted_price']}")
+    cat = escape_md(coupon.get("category") or "None")
     text = (
         f"✏️ *Edit Coupon \\#{coupon_id}*\n\n"
         f"📝 Title: {title}\n"
         f"💬 Desc: {desc}\n"
         f"💰 Original: {orig}\n"
         f"🔥 Sale: {sale}\n"
+        f"🏷️ Category: {cat}\n"
         f"📦 Stock: {escape_md(str(coupon['stock']))}\n"
         f"Status: {status}"
     )
@@ -299,14 +309,52 @@ async def msg_add_disc_price(message: types.Message, state: FSMContext):
         return
     await state.update_data(discounted_price=price)
     logger.info(f"Admin {message.from_user.id} — discounted price: ₹{price}")
-    await message.answer(
-        f"✅ Sale price: *{escape_md(format_currency(price))}*\n\n"
-        f"🔑 *Step 5/5* — Send *coupon codes* \\(one per line\\)\\.\n\n"
-        f"Or type *skip* to add codes later:",
+
+    # Show category picker if categories exist, otherwise skip to codes
+    categories = await db.get_all_categories()
+    if categories:
+        await message.answer(
+            f"✅ Sale price: *{escape_md(format_currency(price))}*\n\n"
+            f"🏷️ *Step 5/6* — Select a *category* for this coupon:",
+            parse_mode="MarkdownV2",
+            reply_markup=admin_category_select_for_add_kb(categories),
+        )
+        await state.set_state(AdminStates.add_select_category)
+    else:
+        await state.update_data(category=None)
+        await message.answer(
+            f"✅ Sale price: *{escape_md(format_currency(price))}*\n\n"
+            f"🔑 *Step 5/5* — Send *coupon codes* \\(one per line\\)\\.\n\n"
+            f"Or type *skip* to add codes later:",
+            parse_mode="MarkdownV2",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[admin_cancel_button()]]),
+        )
+        await state.set_state(AdminStates.add_coupon_codes)
+
+
+@router.callback_query(F.data.startswith("admin_add_select_cat:"))
+@admin_only
+@error_handler
+async def cb_add_select_category(callback: types.CallbackQuery, state: FSMContext):
+    """Handle category selection during coupon add flow."""
+    cat_id = int(callback.data.split(":")[1])
+
+    if cat_id == 0:
+        # No category selected
+        await state.update_data(category=None)
+    else:
+        cat = await db.get_category(cat_id)
+        if cat:
+            await state.update_data(category=cat["name"])
+
+    await callback.message.edit_text(
+        "🔑 *Step 6/6* — Send *coupon codes* \\(one per line\\)\\.\n\n"
+        "Or type *skip* to add codes later:",
         parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[admin_cancel_button()]]),
     )
     await state.set_state(AdminStates.add_coupon_codes)
+    await callback.answer()
 
 
 @router.message(AdminStates.add_coupon_codes)
@@ -319,6 +367,7 @@ async def msg_add_coupon_codes(message: types.Message, state: FSMContext):
     description = data["description"]
     original_price = data["original_price"]
     discounted_price = data["discounted_price"]
+    category = data.get("category")
 
     # Initial stock is 0 until codes are added
     stock = 0
@@ -326,7 +375,7 @@ async def msg_add_coupon_codes(message: types.Message, state: FSMContext):
     # Create the coupon first
     coupon_id = await add_coupon(
         title, description, original_price, discounted_price, stock,
-        created_by=message.from_user.id
+        created_by=message.from_user.id, category=category
     )
 
     # Add coupon codes if provided
@@ -349,7 +398,7 @@ async def msg_add_coupon_codes(message: types.Message, state: FSMContext):
 
     await db.add_admin_log(
         message.from_user.id, "add_coupon", "coupon", str(coupon_id),
-        f"Title: {title}, Price: ₹{discounted_price}, Stock: {stock}"
+        f"Title: {title}, Price: ₹{discounted_price}, Category: {category or 'None'}, Stock: {stock}"
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_coupons")]])
@@ -360,11 +409,14 @@ async def msg_add_coupon_codes(message: types.Message, state: FSMContext):
     else:
         codes_line = "\n🔑 No codes added \\(add later from edit menu\\)"
 
+    cat_line = f"\n🏷️ Category: *{escape_md(category)}*" if category else ""
+
     await message.answer(
         f"✅ *Coupon \\#{coupon_id} created\\!*\n\n"
         f"📝 Title: *{escape_md(title)}*\n"
         f"💰 Price: *{escape_md(format_currency(discounted_price))}*\n"
         f"📦 Stock: *{stock}*"
+        f"{cat_line}"
         f"{codes_line}",
         parse_mode="MarkdownV2", reply_markup=kb,
     )
@@ -717,6 +769,475 @@ async def cb_admin_download_codes(callback: types.CallbackQuery):
     await callback.answer(f"📄 {len(codes)} codes exported!")
     logger.info(f"Admin {callback.from_user.id} downloaded {len(codes)} unsold codes for coupon {coupon_id}")
 
+
+# ── Category Management ──────────────────────────────────
+
+@router.callback_query(F.data == "admin_categories")
+@admin_only
+@error_handler
+async def cb_admin_categories(callback: types.CallbackQuery):
+    """Show category management panel."""
+    categories = await db.get_all_categories()
+    text = "🏷️ *Coupon Categories*\n\nManage your product categories:"
+    await _safe_edit_or_send(
+        callback.message, text, reply_markup=admin_categories_kb(categories)
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_cat_add")
+@admin_only
+@error_handler
+async def cb_cat_add(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.edit_text(
+        "🏷️ *Add Category*\n\nEnter the category name:",
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [back_button("admin_categories"), admin_cancel_button()]
+        ]),
+    )
+    await state.set_state(AdminStates.cat_add_name)
+    await callback.answer()
+
+
+@router.message(AdminStates.cat_add_name)
+@error_handler
+async def msg_cat_add_name(message: types.Message, state: FSMContext):
+    name = message.text.strip()
+    await state.clear()
+
+    if not name or len(name) > 64:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_categories")]])
+        await message.answer("⚠️ Category name must be 1\\-64 characters\\.", parse_mode="MarkdownV2", reply_markup=kb)
+        return
+
+    # Check for duplicates
+    existing = await db.get_category_by_name(name)
+    if existing:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_categories")]])
+        await message.answer(f"⚠️ Category *{escape_md(name)}* already exists\\.", parse_mode="MarkdownV2", reply_markup=kb)
+        return
+
+    cat_id = await db.create_category(name)
+    await db.add_admin_log(message.from_user.id, "create_category", "category", str(cat_id), f"Name: {name}")
+    logger.info(f"Admin {message.from_user.id} created category: {name} (id={cat_id})")
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_categories")]])
+    await message.answer(
+        f"✅ Category *{escape_md(name)}* created\\!",
+        parse_mode="MarkdownV2", reply_markup=kb,
+    )
+
+
+@router.callback_query(F.data.startswith("admin_cat_view:"))
+@admin_only
+@error_handler
+async def cb_cat_view(callback: types.CallbackQuery):
+    cat_id = int(callback.data.split(":")[1])
+    cat = await db.get_category(cat_id)
+    if not cat:
+        await callback.answer("Category not found.", show_alert=True)
+        return
+
+    coupons = await db.get_coupons_by_category(cat["name"])
+    vis = "👁️ Visible" if cat["is_visible"] else "🔒 Hidden"
+    active = sum(1 for c in coupons if c["is_active"])
+    total_stock = sum(c["stock"] for c in coupons)
+
+    text = (
+        f"🏷️ *Category: {escape_md(cat['name'])}*\n\n"
+        f"📊 Status: {vis}\n"
+        f"📦 Coupons: *{len(coupons)}* \\({active} active\\)\n"
+        f"🔑 Total Stock: *{total_stock}*"
+    )
+
+    await _safe_edit_or_send(
+        callback.message, text,
+        reply_markup=admin_category_view_kb(cat_id, cat["is_visible"])
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_cat_rename:"))
+@admin_only
+@error_handler
+async def cb_cat_rename(callback: types.CallbackQuery, state: FSMContext):
+    cat_id = int(callback.data.split(":")[1])
+    await state.update_data(rename_cat_id=cat_id)
+    await callback.message.edit_text(
+        "✏️ *Rename Category*\n\nEnter the new name:",
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [back_button(f"admin_cat_view:{cat_id}"), admin_cancel_button()]
+        ]),
+    )
+    await state.set_state(AdminStates.cat_rename_input)
+    await callback.answer()
+
+
+@router.message(AdminStates.cat_rename_input)
+@error_handler
+async def msg_cat_rename(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    cat_id = data["rename_cat_id"]
+    await state.clear()
+
+    new_name = message.text.strip()
+    if not new_name or len(new_name) > 64:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_cat_view:{cat_id}")]])
+        await message.answer("⚠️ Name must be 1\\-64 characters\\.", parse_mode="MarkdownV2", reply_markup=kb)
+        return
+
+    # Get old name to update coupons
+    old_cat = await db.get_category(cat_id)
+    if old_cat:
+        pool = await db.get_pool()
+        await pool.execute(
+            "UPDATE coupons SET category = $2, updated_at = NOW() WHERE category = $1",
+            old_cat["name"], new_name
+        )
+
+    await db.update_category_name(cat_id, new_name)
+    await db.add_admin_log(
+        message.from_user.id, "rename_category", "category", str(cat_id),
+        f"Renamed: {old_cat['name'] if old_cat else '?'} → {new_name}"
+    )
+    logger.info(f"Admin {message.from_user.id} renamed category {cat_id} to: {new_name}")
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_cat_view:{cat_id}")]])
+    await message.answer(
+        f"✅ Category renamed to *{escape_md(new_name)}*\\!",
+        parse_mode="MarkdownV2", reply_markup=kb,
+    )
+
+
+@router.callback_query(F.data.startswith("admin_cat_toggle_vis:"))
+@admin_only
+@error_handler
+async def cb_cat_toggle_vis(callback: types.CallbackQuery):
+    cat_id = int(callback.data.split(":")[1])
+    new_vis = await db.toggle_category_visibility(cat_id)
+    status = "visible 👁️" if new_vis else "hidden 🔒"
+    await callback.answer(f"Category is now {status}", show_alert=True)
+    await cb_cat_view(callback)
+
+
+@router.callback_query(F.data.startswith("admin_cat_delete:"))
+@admin_only
+@error_handler
+async def cb_cat_delete(callback: types.CallbackQuery):
+    cat_id = int(callback.data.split(":")[1])
+    cat = await db.get_category(cat_id)
+    if not cat:
+        await callback.answer("Category not found.", show_alert=True)
+        return
+
+    await callback.message.edit_text(
+        f"⚠️ *Delete category* *{escape_md(cat['name'])}*\\?\n\n"
+        f"Coupons in this category will become uncategorized\\.",
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Yes, Delete", callback_data=f"admin_cat_delete_confirm:{cat_id}"),
+                InlineKeyboardButton(text="❌ No, Cancel", callback_data=f"admin_cat_view:{cat_id}"),
+            ]
+        ]),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_cat_delete_confirm:"))
+@admin_only
+@error_handler
+async def cb_cat_delete_confirm(callback: types.CallbackQuery):
+    cat_id = int(callback.data.split(":")[1])
+    cat = await db.get_category(cat_id)
+    name = cat["name"] if cat else "Unknown"
+
+    await db.delete_category(cat_id)
+    await db.add_admin_log(callback.from_user.id, "delete_category", "category", str(cat_id), f"Name: {name}")
+    logger.info(f"Admin {callback.from_user.id} deleted category: {name}")
+
+    await callback.answer(f"Category '{name}' deleted.", show_alert=True)
+    await cb_admin_categories(callback)
+
+
+@router.callback_query(F.data.startswith("admin_cat_coupons:"))
+@admin_only
+@error_handler
+async def cb_cat_coupons(callback: types.CallbackQuery):
+    """Show coupons in a specific category."""
+    cat_id = int(callback.data.split(":")[1])
+    cat = await db.get_category(cat_id)
+    if not cat:
+        await callback.answer("Category not found.", show_alert=True)
+        return
+
+    coupons = await db.get_coupons_by_category(cat["name"])
+    if not coupons:
+        text = f"🏷️ *{escape_md(cat['name'])}*\n\nNo coupons in this category\\."
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_cat_view:{cat_id}")]])
+    else:
+        lines = [f"🏷️ *{escape_md(cat['name'])}* — *{len(coupons)}* coupons\n"]
+        for c in coupons:
+            status = "🟢" if c["is_active"] else "🔴"
+            lines.append(f"{status} {escape_md(c['title'])} — Stock: *{c['stock']}*")
+        text = "\n".join(lines)
+        buttons = []
+        for c in coupons:
+            buttons.append([InlineKeyboardButton(
+                text=f"✏️ {c['title']}",
+                callback_data=f"admin_coupon_edit:{c['id']}"
+            )])
+        buttons.append([back_button(f"admin_cat_view:{cat_id}")])
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    await _safe_edit_or_send(callback.message, text, reply_markup=kb)
+    await callback.answer()
+
+
+# ── Set Category on Existing Coupon ──────────────────────
+
+@router.callback_query(F.data.startswith("admin_set_category:"))
+@admin_only
+@error_handler
+async def cb_set_category(callback: types.CallbackQuery):
+    coupon_id = int(callback.data.split(":")[1])
+    categories = await db.get_all_categories()
+    if not categories:
+        await callback.answer("No categories exist. Create one from 🏷️ Categories first.", show_alert=True)
+        return
+
+    await callback.message.edit_text(
+        "🏷️ *Select Category*\n\nChoose a category for this coupon:",
+        parse_mode="MarkdownV2",
+        reply_markup=admin_category_select_kb(categories, coupon_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_assign_cat:"))
+@admin_only
+@error_handler
+async def cb_assign_category(callback: types.CallbackQuery):
+    parts = callback.data.split(":")
+    coupon_id = int(parts[1])
+    cat_id = int(parts[2])
+
+    if cat_id == 0:
+        await db.move_coupon_to_category(coupon_id, None)
+        await callback.answer("Category removed.", show_alert=True)
+    else:
+        cat = await db.get_category(cat_id)
+        if cat:
+            await db.move_coupon_to_category(coupon_id, cat["name"])
+            await callback.answer(f"Moved to: {cat['name']}", show_alert=True)
+
+    # Refresh coupon edit view
+    await cb_admin_coupon_edit(callback)
+
+
+# ── Stock Management ─────────────────────────────────────
+
+@router.callback_query(F.data == "admin_stock_overview")
+@admin_only
+@error_handler
+async def cb_stock_overview(callback: types.CallbackQuery):
+    """Category-wise stock overview for admins."""
+    summary = await db.get_category_stock_summary()
+    if not summary:
+        text = "📊 *Stock Overview*\n\nNo coupons found\\."
+    else:
+        lines = ["📊 *STOCK OVERVIEW*\n", "━━━━━━━━━━━━━━━━━━━━\n"]
+        grand_total = 0
+        for s in summary:
+            cat_name = escape_md(s["category"])
+            lines.append(
+                f"🏷️ *{cat_name}*\n"
+                f"   📦 Coupons: {s['coupon_count']} \\({s['active_count']} active\\)\n"
+                f"   🔑 Stock: *{s['total_stock']}*\n"
+            )
+            grand_total += s["total_stock"]
+        lines.append("━━━━━━━━━━━━━━━━━━━━")
+        lines.append(f"\n📦 *Grand Total Stock: {grand_total}*")
+        text = "\n".join(lines)
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Refresh", callback_data="admin_stock_overview")],
+        [back_button("admin_panel")],
+    ])
+    await _safe_edit_or_send(callback.message, text, reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_clear_stock:"))
+@admin_only
+@error_handler
+async def cb_clear_stock(callback: types.CallbackQuery):
+    coupon_id = int(callback.data.split(":")[1])
+    coupon = await get_coupon_detail(coupon_id)
+    if not coupon:
+        await callback.answer("Coupon not found.", show_alert=True)
+        return
+
+    stats = await db.get_coupon_code_stats(coupon_id)
+    await callback.message.edit_text(
+        f"⚠️ *Clear ALL unsold stock for:*\n\n"
+        f"🏷️ {escape_md(coupon['title'])}\n"
+        f"📭 Unsold codes: *{stats['unsold']}*\n\n"
+        f"This will permanently delete all unsold codes\\.\n"
+        f"Sold codes and order history will NOT be affected\\.",
+        parse_mode="MarkdownV2",
+        reply_markup=confirm_clear_stock_kb(coupon_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_clear_stock_confirm:"))
+@admin_only
+@error_handler
+async def cb_clear_stock_confirm(callback: types.CallbackQuery):
+    coupon_id = int(callback.data.split(":")[1])
+    deleted = await db.clear_coupon_stock(coupon_id, callback.from_user.id)
+    logger.info(f"Admin {callback.from_user.id} cleared {deleted} codes from coupon {coupon_id}")
+
+    await callback.answer(f"🧹 Cleared {deleted} unsold codes.", show_alert=True)
+    await cb_admin_coupon_edit(callback)
+
+
+# ── Manual Coupon Extraction ─────────────────────────────
+
+@router.callback_query(F.data.startswith("admin_extract_codes:"))
+@admin_only
+@error_handler
+async def cb_extract_codes(callback: types.CallbackQuery, state: FSMContext):
+    coupon_id = int(callback.data.split(":")[1])
+    coupon = await get_coupon_detail(coupon_id)
+    if not coupon:
+        await callback.answer("Coupon not found.", show_alert=True)
+        return
+
+    stats = await db.get_coupon_code_stats(coupon_id)
+    if stats["unsold"] == 0:
+        await callback.answer("No unsold codes available to extract.", show_alert=True)
+        return
+
+    await state.update_data(extract_coupon_id=coupon_id)
+    await callback.message.edit_text(
+        f"📤 *Extract Codes*\n\n"
+        f"🏷️ {escape_md(coupon['title'])}\n"
+        f"📭 Available: *{stats['unsold']}* codes\n\n"
+        f"Enter the *number* of codes to extract:",
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [back_button(f"admin_coupon_edit:{coupon_id}"), admin_cancel_button()]
+        ]),
+    )
+    await state.set_state(AdminStates.extract_qty_input)
+    await callback.answer()
+
+
+@router.message(AdminStates.extract_qty_input)
+@error_handler
+async def msg_extract_qty(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    coupon_id = data["extract_coupon_id"]
+    await state.clear()
+
+    try:
+        qty = int(message.text.strip())
+        if qty <= 0:
+            raise ValueError
+    except ValueError:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_coupon_edit:{coupon_id}")]])
+        await message.answer("⚠️ Enter a valid positive number.", reply_markup=kb)
+        return
+
+    # Extract codes atomically
+    codes = await db.extract_coupon_codes(coupon_id, qty, message.from_user.id)
+    if not codes:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_coupon_edit:{coupon_id}")]])
+        await message.answer("⚠️ No codes available to extract.", reply_markup=kb)
+        return
+
+    coupon = await get_coupon_detail(coupon_id)
+    title = coupon["title"] if coupon else "Unknown"
+    new_stock = coupon["stock"] if coupon else 0
+
+    await db.add_admin_log(
+        message.from_user.id, "extract_codes", "coupon", str(coupon_id),
+        f"Extracted {len(codes)} codes from {title}, remaining stock: {new_stock}"
+    )
+    logger.info(f"Admin {message.from_user.id} extracted {len(codes)} codes from coupon {coupon_id}")
+
+    # Show delivery options
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=f"📄 Download as TXT ({len(codes)} codes)",
+            callback_data=f"admin_extract_download:{coupon_id}"
+        )],
+        [back_button(f"admin_coupon_edit:{coupon_id}")],
+    ])
+
+    # Show codes inline (up to 50, then truncate)
+    if len(codes) <= 50:
+        codes_display = "\n".join(f"`{escape_md(c)}`" for c in codes)
+    else:
+        codes_display = "\n".join(f"`{escape_md(c)}`" for c in codes[:50])
+        codes_display += f"\n\n_\\.\\.\\. and {len(codes) - 50} more \\(download TXT for all\\)_"
+
+    # Store codes temporarily for download
+    await state.update_data(
+        last_extracted_codes=codes,
+        last_extracted_coupon_id=coupon_id,
+        last_extracted_title=title,
+    )
+
+    await message.answer(
+        f"✅ *Extracted {len(codes)} codes\\!*\n\n"
+        f"🏷️ {escape_md(title)}\n"
+        f"📦 Remaining Stock: *{new_stock}*\n\n"
+        f"🔑 *Extracted Codes:*\n\n"
+        f"{codes_display}",
+        parse_mode="MarkdownV2", reply_markup=kb,
+    )
+
+
+@router.callback_query(F.data.startswith("admin_extract_download:"))
+@admin_only
+@error_handler
+async def cb_extract_download(callback: types.CallbackQuery, state: FSMContext):
+    """Download last extracted codes as TXT file."""
+    data = await state.get_data()
+    codes = data.get("last_extracted_codes", [])
+
+    if not codes:
+        await callback.answer("No codes to download. Extract codes first.", show_alert=True)
+        return
+
+    coupon_id = data.get("last_extracted_coupon_id", 0)
+    title = data.get("last_extracted_title", "codes")
+
+    file_content = "\n".join(codes)
+    safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).strip()[:40]
+    filename = f"extracted_{safe_title}_{len(codes)}_codes.txt"
+
+    from aiogram.types import BufferedInputFile
+    file_buf = BufferedInputFile(file_content.encode("utf-8"), filename=filename)
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_coupon_edit:{coupon_id}")]])
+    await callback.message.answer_document(
+        document=file_buf,
+        caption=(
+            f"📤 *Extracted Codes — {escape_md(title)}*\n\n"
+            f"📦 Total: *{len(codes)}* codes\n"
+            f"📁 File: `{escape_md(filename)}`"
+        ),
+        parse_mode="MarkdownV2",
+        reply_markup=kb,
+    )
+    await callback.answer(f"📄 {len(codes)} codes exported!")
+    logger.info(f"Admin {callback.from_user.id} downloaded extracted codes for coupon {coupon_id}")
 
 # ── View Orders ───────────────────────────────────────────
 

@@ -376,6 +376,33 @@ CREATE TABLE IF NOT EXISTS admins (
     added_at    TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- ────────────────────────────────────────────────────────────
+-- 18. COUPON CATEGORIES
+-- ────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS coupon_categories (
+    id          SERIAL PRIMARY KEY,
+    name        VARCHAR(64) UNIQUE NOT NULL,
+    is_visible  BOOLEAN DEFAULT TRUE,
+    sort_order  INTEGER DEFAULT 0,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ────────────────────────────────────────────────────────────
+-- 19. ADMIN EXTRACTIONS (manual bulk coupon extraction log)
+-- ────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS admin_extractions (
+    id          SERIAL PRIMARY KEY,
+    admin_id    BIGINT NOT NULL,
+    coupon_id   INTEGER NOT NULL REFERENCES coupons(id) ON DELETE CASCADE,
+    quantity    INTEGER NOT NULL,
+    codes       TEXT NOT NULL,           -- newline-separated extracted codes
+    reason      TEXT DEFAULT 'Bulk deal',
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_admin_extractions_admin ON admin_extractions (admin_id);
+CREATE INDEX IF NOT EXISTS idx_admin_extractions_coupon ON admin_extractions (coupon_id);
+
 -- ============================================================
 -- END OF SCHEMA — All tables and indexes defined above.
 -- ============================================================

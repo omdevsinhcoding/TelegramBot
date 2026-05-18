@@ -1726,3 +1726,224 @@ async def get_db_admin_ids() -> set[int]:
     pool = await get_pool()
     rows = await pool.fetch("SELECT telegram_id FROM admins")
     return {row["telegram_id"] for row in rows}
+
+
+# ── COUPON CATEGORY QUERIES ──────────────────────────────
+
+async def get_all_categories() -> list:
+    pool = await get_pool()
+    return await pool.fetch(
+        "SELECT * FROM coupon_categories ORDER BY sort_order, name"
+    )
+
+
+async def get_visible_categories() -> list:
+    pool = await get_pool()
+    return await pool.fetch(
+        "SELECT * FROM coupon_categories WHERE is_visible = TRUE ORDER BY sort_order, name"
+    )
+
+
+async def get_category(cat_id: int):
+    pool = await get_pool()
+    return await pool.fetchrow("SELECT * FROM coupon_categories WHERE id = $1", cat_id)
+
+
+async def get_category_by_name(name: str):
+    pool = await get_pool()
+    return await pool.fetchrow(
+        "SELECT * FROM coupon_categories WHERE LOWER(name) = LOWER($1)", name
+    )
+
+
+async def create_category(name: str) -> int:
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "INSERT INTO coupon_categories (name) VALUES ($1) RETURNING id", name
+    )
+    return row["id"]
+
+
+async def update_category_name(cat_id: int, new_name: str):
+    pool = await get_pool()
+    await pool.execute(
+        "UPDATE coupon_categories SET name = $2 WHERE id = $1", cat_id, new_name
+    )
+
+
+async def toggle_category_visibility(cat_id: int) -> bool:
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "UPDATE coupon_categories SET is_visible = NOT is_visible WHERE id = $1 RETURNING is_visible",
+        cat_id
+    )
+    return row["is_visible"] if row else False
+
+
+async def delete_category(cat_id: int):
+    """Delete category and unset category on all coupons that used it."""
+    pool = await get_pool()
+    cat = await pool.fetchrow("SELECT name FROM coupon_categories WHERE id = $1", cat_id)
+    if cat:
+        await pool.execute(
+            "UPDATE coupons SET category = NULL, updated_at = NOW() WHERE category = $1",
+            cat["name"]
+        )
+    await pool.execute("DELETE FROM coupon_categories WHERE id = $1", cat_id)
+
+
+async def get_coupons_by_category(category_name: str) -> list:
+    pool = await get_pool()
+    return await pool.fetch(
+        "SELECT * FROM coupons WHERE category = $1 ORDER BY id DESC",
+        category_name
+    )
+
+
+async def get_uncategorized_coupons() -> list:
+    pool = await get_pool()
+    return await pool.fetch(
+        "SELECT * FROM coupons WHERE category IS NULL OR category = '' ORDER BY id DESC"
+    )
+
+
+async def move_coupon_to_category(coupon_id: int, category_name: str | None):
+    pool = await get_pool()
+    await pool.execute(
+        "UPDATE coupons SET category = $2, updated_at = NOW() WHERE id = $1",
+        coupon_id, category_name
+    )
+
+
+async def get_category_stock_summary() -> list:
+    """Get stock count per category for admin overview."""
+    pool = await get_pool()
+    return await pool.fetch("""
+        SELECT
+            COALESCE(c.category, '(Uncategorized)') AS category,
+            COUNT(*) AS coupon_count,
+            COALESCE(SUM(c.stock), 0) AS total_stock,
+            COUNT(*) FILTER (WHERE c.is_active) AS active_count
+        FROM coupons c
+        GROUP BY COALESCE(c.category, '(Uncategorized)')
+        ORDER BY category
+    """)
+
+
+# ── MANUAL EXTRACTION QUERIES ────────────────────────────
+
+async def extract_coupon_codes(coupon_id: int, quantity: int, admin_id: int) -> list[str]:
+    """Atomically extract N unsold codes from a coupon for manual distribution.
+
+    1. Fetches N unsold codes
+    2. Marks them as sold (sold_to=admin, order_id='EXTRACT-...')
+    3. Syncs stock
+    4. Logs extraction
+
+    Returns list of extracted code strings (may be < quantity if not enough stock).
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # Fetch unsold codes
+            rows = await conn.fetch(
+                "SELECT id, code FROM coupon_codes "
+                "WHERE coupon_id = $1 AND is_sold = FALSE "
+                "ORDER BY id LIMIT $2",
+                coupon_id, quantity
+            )
+            if not rows:
+                return []
+
+            codes = [r["code"] for r in rows]
+            code_ids = [r["id"] for r in rows]
+
+            # Generate extraction order ID
+            import time
+            extract_ref = f"EXTRACT-{int(time.time())}-{admin_id}"
+
+            # Mark codes as sold
+            await conn.execute(
+                "UPDATE coupon_codes SET is_sold = TRUE, sold_to = $1, "
+                "order_id = $2, sold_at = NOW() WHERE id = ANY($3::int[])",
+                admin_id, extract_ref, code_ids
+            )
+
+            # Sync stock
+            await conn.execute("""
+                UPDATE coupons SET stock = (
+                    SELECT COUNT(*) FROM coupon_codes
+                    WHERE coupon_id = $1 AND is_sold = FALSE
+                ), updated_at = NOW() WHERE id = $1
+            """, coupon_id)
+
+            # Log extraction
+            codes_text = "\n".join(codes)
+            await conn.execute(
+                "INSERT INTO admin_extractions (admin_id, coupon_id, quantity, codes) "
+                "VALUES ($1, $2, $3, $4)",
+                admin_id, coupon_id, len(codes), codes_text
+            )
+
+    return codes
+
+
+async def get_extraction_history(coupon_id: int = None, limit: int = 20) -> list:
+    pool = await get_pool()
+    if coupon_id:
+        return await pool.fetch(
+            "SELECT ae.*, c.title AS coupon_title FROM admin_extractions ae "
+            "JOIN coupons c ON c.id = ae.coupon_id "
+            "WHERE ae.coupon_id = $1 ORDER BY ae.created_at DESC LIMIT $2",
+            coupon_id, limit
+        )
+    return await pool.fetch(
+        "SELECT ae.*, c.title AS coupon_title FROM admin_extractions ae "
+        "JOIN coupons c ON c.id = ae.coupon_id "
+        "ORDER BY ae.created_at DESC LIMIT $1",
+        limit
+    )
+
+
+async def clear_coupon_stock(coupon_id: int, admin_id: int) -> int:
+    """Delete all unsold codes for a coupon and sync stock. Returns count deleted."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            result = await conn.fetchval(
+                "WITH deleted AS ("
+                "  DELETE FROM coupon_codes WHERE coupon_id = $1 AND is_sold = FALSE RETURNING id"
+                ") SELECT COUNT(*) FROM deleted",
+                coupon_id
+            )
+            await conn.execute(
+                "UPDATE coupons SET stock = 0, updated_at = NOW() WHERE id = $1",
+                coupon_id
+            )
+            # Log action
+            await add_admin_log(
+                admin_id, "clear_stock", "coupon", str(coupon_id),
+                f"Cleared {result} unsold codes"
+            )
+    return result or 0
+
+
+async def delete_specific_codes(coupon_id: int, code_ids: list[int]) -> int:
+    """Delete specific unsold coupon codes by their IDs. Returns count deleted."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            result = await conn.fetchval(
+                "WITH deleted AS ("
+                "  DELETE FROM coupon_codes WHERE id = ANY($1::int[]) "
+                "  AND coupon_id = $2 AND is_sold = FALSE RETURNING id"
+                ") SELECT COUNT(*) FROM deleted",
+                code_ids, coupon_id
+            )
+            await conn.execute("""
+                UPDATE coupons SET stock = (
+                    SELECT COUNT(*) FROM coupon_codes
+                    WHERE coupon_id = $1 AND is_sold = FALSE
+                ), updated_at = NOW() WHERE id = $1
+            """, coupon_id)
+    return result or 0
