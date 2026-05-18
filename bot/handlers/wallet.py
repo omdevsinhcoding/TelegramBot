@@ -63,7 +63,7 @@ async def cb_history(callback: types.CallbackQuery):
 
     lines = ["📜 *Transaction History*\n"]
     for h in history:
-        emoji = "➕" if h["txn_type"] in ("topup", "refund", "admin_credit") else "➖"
+        emoji = "➕" if h["txn_type"] in ("topup", "refund", "admin_credit", "referral_reward", "referral_commission") else "➖"
         ttype = escape_md(h["txn_type"].upper())
         amt = escape_md(format_currency(h["amount"]))
         bal = escape_md(format_currency(h["balance_after"]))

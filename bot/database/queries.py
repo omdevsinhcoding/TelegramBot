@@ -1241,12 +1241,17 @@ async def check_referral_earning_cap(user_id: int, ref_settings: dict) -> bool:
 
     pool = await get_pool()
     # Sum all referral-related wallet credits in the rolling window
+    # Matches both new (txn_type) and legacy (reference LIKE) patterns
     earned = await pool.fetchval("""
         SELECT COALESCE(SUM(amount), 0)
         FROM wallet_transactions
         WHERE user_id = $1
           AND amount > 0
-          AND reference LIKE 'referral_from_%'
+          AND (
+              txn_type IN ('referral_reward', 'referral_commission')
+              OR reference LIKE 'referral_from_%'
+              OR reference LIKE 'commission_from_%'
+          )
           AND created_at >= NOW() - interval '1 day' * $2
     """, user_id, duration_days)
 
@@ -1254,9 +1259,8 @@ async def check_referral_earning_cap(user_id: int, ref_settings: dict) -> bool:
 
 
 async def get_user_wallet(user_id: int) -> float:
-    pool = await get_pool()
-    row = await pool.fetchrow("SELECT wallet_balance FROM users WHERE telegram_id = $1", user_id)
-    return float(row["wallet_balance"]) if row else 0.0
+    """Alias for get_wallet_balance (legacy compat)."""
+    return await get_wallet_balance(user_id)
 
 async def get_user_referral_earnings(user_id: int) -> float:
     pool = await get_pool()
@@ -1441,9 +1445,8 @@ async def update_bot_settings(**kwargs):
     """Update one or more bot_settings columns.
     
     Raises asyncpg.UndefinedColumnError if a column doesn't exist yet
-    (i.e. the relevant migration hasn't been run). Callers that toggle
-    reservation_enabled / waitlist_enabled should ensure migration_v3.sql
-    has been applied first.
+    (i.e. the schema hasn't been fully applied). Run 'python run_migration.py'
+    to ensure all columns exist.
     """
     pool = await get_pool()
     sets = ", ".join(f"{k} = ${i+1}" for i, k in enumerate(kwargs.keys()))
@@ -1623,7 +1626,7 @@ async def get_dynamic_config() -> dict:
         import logging as _log
         _log.getLogger("dreamx_bot").warning(
             "get_dynamic_config: Could not read all columns. "
-            "Run sql/migration_v3.sql + migration_v4.sql. Using safe defaults."
+            "Run 'python run_migration.py' to update the database schema. Using safe defaults."
         )
         return {
             "payment_timeout_seconds": 600,

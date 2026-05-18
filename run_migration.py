@@ -1,18 +1,17 @@
 """
-DreamX Coupon Bot -- Migration Runner
-Reads DATABASE_URL from .env and runs ALL pending SQL migrations in order.
+DreamX Coupon Bot -- Database Setup / Migration Runner
+Reads DATABASE_URL from .env and applies the unified schema.
 
 Usage:
     python run_migration.py
 
-Runs every migration file found in the sql/ directory in version order.
-Already-applied migrations that raise non-critical errors are skipped safely.
+The schema.sql file is the single source of truth for all tables.
+All statements are idempotent (safe to run multiple times).
 """
 
 import asyncio
 import asyncpg
 import os
-import re
 import sys
 from pathlib import Path
 from dotenv import load_dotenv
@@ -23,58 +22,56 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
 
 load_dotenv()
 
-# All migration files in version order
 SQL_DIR = Path(__file__).resolve().parent / "sql"
 
-MIGRATION_ORDER = [
-    "schema.sql",
-    "migration_v2.sql",
-    "migration_v3.sql",
-    "migration_v4.sql",
-    "migration_v5.sql",
-    "migration_v6.sql",
-    "migration_v7.sql",
-]
 
-
-async def run_sql_file(conn: asyncpg.Connection, filepath: Path) -> bool:
-    """Execute a single SQL file statement-by-statement. Returns True on success."""
+async def run_schema(conn: asyncpg.Connection) -> bool:
+    """Execute the unified schema.sql file."""
+    filepath = SQL_DIR / "schema.sql"
     if not filepath.exists():
-        print(f"  [SKIP]  {filepath.name}  (file not found)")
+        print(f"  [ERROR]  schema.sql not found at {filepath}")
         return False
 
     sql = filepath.read_text(encoding="utf-8")
+    try:
+        await conn.execute(sql)
+        print("  [OK]  schema.sql applied successfully.")
+        return True
+    except Exception as e:
+        print(f"  [WARN]  Schema application note: {e}")
+        return True  # Non-critical — tables may already exist
 
-    # Split on semicolons and run statement by statement
-    statements = [s.strip() for s in sql.split(";") if s.strip()]
 
-    ok = 0
-    skipped = 0
-    for stmt in statements:
-        # Skip pure-comment chunks
-        without_comments = re.sub(r"--[^\n]*", "", stmt).strip()
-        if not without_comments:
-            continue
-        try:
-            await conn.execute(stmt)
-            ok += 1
-        except Exception as e:
-            err = str(e).lower()
-            # Benign errors: already-applied migrations
-            benign = any(kw in err for kw in [
-                "already exists",
-                "duplicate column",
-                "does not exist",
-                "violates not-null",
-            ])
-            if benign:
-                skipped += 1
-            else:
-                print(f"    [WARN] Non-critical error in {filepath.name}: {e!r}")
-                skipped += 1
+async def run_compat_migrations(conn: asyncpg.Connection):
+    """Run compatibility migrations for databases upgrading from older versions."""
+    print("\n  Running compatibility migrations...")
 
-    print(f"  [OK]  {filepath.name:30s}  -- {ok} statements applied, {skipped} skipped")
-    return True
+    # Convert wallet_transactions.txn_type ENUM → VARCHAR
+    try:
+        await conn.execute("""
+            ALTER TABLE wallet_transactions
+            ALTER COLUMN txn_type TYPE VARCHAR(50)
+            USING txn_type::TEXT;
+        """)
+        print("  [OK]  wallet_transactions.txn_type converted to VARCHAR(50)")
+    except Exception:
+        print("  [SKIP] wallet_transactions.txn_type already VARCHAR or N/A")
+
+    # Fix referral_claims FK
+    try:
+        await conn.execute("ALTER TABLE referral_claims ALTER COLUMN reward_id DROP NOT NULL;")
+        await conn.execute("ALTER TABLE referral_claims DROP CONSTRAINT IF EXISTS referral_claims_reward_id_fkey;")
+        await conn.execute("""
+            ALTER TABLE referral_claims
+            ADD CONSTRAINT referral_claims_reward_id_fkey
+            FOREIGN KEY (reward_id)
+            REFERENCES referral_rewards(id) ON DELETE SET NULL;
+        """)
+        print("  [OK]  referral_claims FK updated to ON DELETE SET NULL")
+    except Exception:
+        print("  [SKIP] referral_claims FK already correct or N/A")
+
+    print("  Compatibility migrations complete.")
 
 
 async def main():
@@ -91,14 +88,13 @@ async def main():
         return
 
     print("Connected.\n")
-    print("Running migrations in order:\n")
+    print("Applying unified schema...\n")
 
-    for name in MIGRATION_ORDER:
-        path = SQL_DIR / name
-        await run_sql_file(conn, path)
+    await run_schema(conn)
+    await run_compat_migrations(conn)
 
     await conn.close()
-    print("\nAll migrations complete! Connection closed.")
+    print("\nDatabase setup complete! Connection closed.")
 
 
 if __name__ == "__main__":

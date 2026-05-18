@@ -298,7 +298,7 @@ async def process_referral_on_purchase(user_id: int, order_amount, bot=None):
         try:
             bal = await db.get_wallet_balance(referrer_id)
             await db.add_wallet_transaction(
-                referrer_id, commission_amt, "topup",
+                referrer_id, commission_amt, "referral_commission",
                 bal_before=bal - commission_amt,
                 bal_after=bal,
                 reference=f"commission_from_{user_id}",
@@ -411,10 +411,11 @@ async def msg_ref_enter_code(message: types.Message, state: FSMContext):
                     try:
                         bal = await db.get_wallet_balance(referrer_id)
                         await db.add_wallet_transaction(
-                            referrer_id, reward_amt, "topup",
+                            referrer_id, reward_amt, "referral_reward",
                             bal_before=bal - reward_amt,
                             bal_after=bal,
                             reference=f"referral_from_{user_id}",
+                            description=f"Referral reward for inviting user {user_id}",
                         )
                     except Exception as wt_err:
                         logger.warning(f"[REFERRAL] wallet txn log failed: {wt_err}")

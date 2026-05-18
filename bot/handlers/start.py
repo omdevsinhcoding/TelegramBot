@@ -76,10 +76,11 @@ async def cmd_start(message: types.Message, state: FSMContext):
                                         try:
                                             bal = await db.get_wallet_balance(referrer_id)
                                             await db.add_wallet_transaction(
-                                                referrer_id, reward_amt, "topup",
+                                                referrer_id, reward_amt, "referral_reward",
                                                 bal_before=bal - reward_amt,
                                                 bal_after=bal,
                                                 reference=f"referral_from_{user.id}",
+                                                description=f"Referral reward for inviting user {user.id}",
                                             )
                                         except Exception as wt_err:
                                             logger.warning(f"[REFERRAL] wallet txn log failed: {wt_err}")

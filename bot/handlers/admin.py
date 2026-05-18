@@ -2683,7 +2683,7 @@ async def cb_admin_toggle_reservation(callback: types.CallbackQuery):
         if "does not exist" in str(e) or "UndefinedColumn" in type(e).__name__:
             await callback.answer(
                 "⚠️ Database migration not applied!\n"
-                "Run sql/migration_v3.sql on your PostgreSQL database first.",
+                "Run 'python run_migration.py' to update the database schema.",
                 show_alert=True
             )
             return
@@ -2764,7 +2764,7 @@ async def cb_admin_toggle_waitlist(callback: types.CallbackQuery):
         if "does not exist" in str(e) or "UndefinedColumn" in type(e).__name__:
             await callback.answer(
                 "⚠️ Database migration not applied!\n"
-                "Run sql/migration_v3.sql on your PostgreSQL database first.",
+                "Run 'python run_migration.py' to update the database schema.",
                 show_alert=True
             )
             return

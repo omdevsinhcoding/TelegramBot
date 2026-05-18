@@ -31,7 +31,6 @@ MENU_BUTTON_TEXTS = frozenset({
     "⚠️ Disclaimer",
     "📢 Our Channels",
     "👑 Admin Panel",
-    "💰 Wallet",
 })
 
 
