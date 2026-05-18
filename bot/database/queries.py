@@ -2191,6 +2191,85 @@ async def get_full_analytics() -> dict:
     }
 
 
+# ── REFERRAL LEADERBOARD ANALYTICS ───────────────────────
+
+async def get_referral_leaderboard(limit: int = 50, offset: int = 0) -> list:
+    """Get top referrers sorted by referral count.
+    
+    Returns per-user:
+    - referral count, total commission earned, total wallet rewards,
+    - user info (name, username, join date)
+    """
+    pool = await get_pool()
+    return await pool.fetch("""
+        SELECT 
+            u.telegram_id,
+            COALESCE(u.full_name, '') as full_name,
+            COALESCE(u.username, '') as username,
+            u.created_at as join_date,
+            COUNT(r.id) as referral_count,
+            COALESCE(SUM(r.commission), 0) as total_commission,
+            COALESCE(
+                (SELECT SUM(wt.amount) 
+                 FROM wallet_transactions wt 
+                 WHERE wt.user_id = u.telegram_id 
+                   AND wt.txn_type = 'referral_reward' 
+                   AND wt.amount > 0), 0
+            ) as wallet_rewards_earned,
+            COALESCE(
+                (SELECT SUM(wt.amount) 
+                 FROM wallet_transactions wt 
+                 WHERE wt.user_id = u.telegram_id 
+                   AND wt.txn_type = 'referral_commission' 
+                   AND wt.amount > 0), 0
+            ) as commission_rewards_earned,
+            u.referral_earnings
+        FROM users u
+        INNER JOIN referrals r ON r.referrer_id = u.telegram_id
+        GROUP BY u.telegram_id, u.full_name, u.username, 
+                 u.created_at, u.referral_earnings
+        HAVING COUNT(r.id) > 0
+        ORDER BY referral_count DESC, total_commission DESC
+        LIMIT $1 OFFSET $2
+    """, limit, offset)
+
+
+async def get_referral_leaderboard_count() -> int:
+    """Get total number of users who have at least 1 referral."""
+    pool = await get_pool()
+    return await pool.fetchval("""
+        SELECT COUNT(DISTINCT referrer_id) FROM referrals
+    """) or 0
+
+
+async def get_referral_summary_stats() -> dict:
+    """Get platform-wide referral summary stats."""
+    pool = await get_pool()
+    row = await pool.fetchrow("""
+        SELECT 
+            COUNT(*) as total_referrals,
+            COUNT(DISTINCT referrer_id) as total_referrers,
+            COUNT(DISTINCT referred_id) as total_referred,
+            COALESCE(SUM(commission), 0) as total_commission_paid
+        FROM referrals
+    """)
+    
+    total_rewards = await pool.fetchval("""
+        SELECT COALESCE(SUM(amount), 0) 
+        FROM wallet_transactions 
+        WHERE txn_type IN ('referral_reward', 'referral_commission') 
+          AND amount > 0
+    """) or 0
+    
+    return {
+        "total_referrals": row["total_referrals"] if row else 0,
+        "total_referrers": row["total_referrers"] if row else 0,
+        "total_referred": row["total_referred"] if row else 0,
+        "total_commission_paid": float(row["total_commission_paid"]) if row else 0,
+        "total_rewards_distributed": float(total_rewards),
+    }
+
+
 # ── CATEGORY-AWARE COUPON BROWSING ───────────────────────
 
 async def get_active_coupons_categorized() -> dict:

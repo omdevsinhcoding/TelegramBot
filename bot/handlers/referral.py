@@ -43,6 +43,9 @@ async def text_refer_earn(message: types.Message):
     # ── Build mode-specific "how it works" section ──
     mode = settings.get("mode", "wallet_reward") or "wallet_reward"
 
+    # Dynamic earning badge for header
+    earn_badge = ""
+
     if mode == "code_reward":
         rewards = await db.get_referral_rewards()
         active_rewards = [r for r in rewards if r["is_active"]]
@@ -61,6 +64,7 @@ async def text_refer_earn(message: types.Message):
                     how_it_works += f"✅ {title_esc} — {needed} refs \\(unlocked\\!\\)\n"
                 else:
                     how_it_works += f"🔒 {title_esc} — {needed} refs\n"
+            earn_badge = f"🎁 *{len(active_rewards)} rewards available\\!*"
         else:
             how_it_works = (
                 f"✨ *How it works:*\n"
@@ -76,6 +80,7 @@ async def text_refer_earn(message: types.Message):
             f"2️⃣ Friends join \\& buy\n"
             f"3️⃣ Earn 💰 *{escape_md(str(pct))}%* commission\n"
         )
+        earn_badge = f"💰 *Earn {escape_md(str(pct))}% commission per sale\\!*"
     else:  # wallet_reward (default)
         reward_amt = float(settings.get("reward_amount", 10.0) or 10.0)
         amt_esc = escape_md(str(reward_amt))
@@ -86,6 +91,7 @@ async def text_refer_earn(message: types.Message):
             f"3️⃣ Get 💵 *₹{amt_esc}* per referral\\!\n\n"
             f"💰 Reward goes straight to your wallet\\!\n"
         )
+        earn_badge = f"💵 *Earn up to ₹{amt_esc} per referral\\!*"
 
     link_esc = escape_md(link)
     ref_code_esc = escape_md(ref_code)
@@ -93,14 +99,16 @@ async def text_refer_earn(message: types.Message):
     wallet_esc = escape_md(format_currency(wallet))
 
     text = (
-        f"━━━━━━━━━━━━━━━━━━━━\n"
         f"🤝 *REFER \\& EARN*\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"{how_it_works}\n"
-        f"🔗 *Your Link:*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+    )
+    if earn_badge:
+        text += f"\n{earn_badge}\n"
+    text += (
+        f"\n{how_it_works}\n"
+        f"🔗 *Your Referral Link:*\n"
         f"`{link_esc}`\n\n"
-        f"🔑 *Code:*\n"
-        f"`{ref_code_esc}`\n\n"
+        f"🔑 *Code:* `{ref_code_esc}`\n\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 *Your Stats*\n\n"
         f"👥 Referrals: *{ref_count}*\n"

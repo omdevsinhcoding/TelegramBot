@@ -584,6 +584,9 @@ async def cb_referral_menu(callback: types.CallbackQuery):
     link = f"https://t.me/{bot_info.username}?start={ref_code}"
 
     mode = settings["mode"]
+    # Dynamic earning badge for header
+    earn_badge = ""
+
     if mode == "code_reward":
         rewards = await db.get_referral_rewards()
         active_rewards = [r for r in rewards if r["is_active"]]
@@ -602,6 +605,7 @@ async def cb_referral_menu(callback: types.CallbackQuery):
                     how_it_works += f"✅ {title_esc} — {needed} refs \\(unlocked\\!\\)\n"
                 else:
                     how_it_works += f"🔒 {title_esc} — {needed} refs\n"
+            earn_badge = f"🎁 *{len(active_rewards)} rewards available\\!*"
         else:
             how_it_works = (
                 f"✨ *How it works:*\n"
@@ -618,6 +622,7 @@ async def cb_referral_menu(callback: types.CallbackQuery):
             f"3️⃣ Get 💵 *₹{escape_md(str(reward_amt))}* per referral\\!\n\n"
             f"💰 Reward goes straight to your wallet\\!\n"
         )
+        earn_badge = f"💵 *Earn up to ₹{escape_md(str(reward_amt))} per referral\\!*"
     else:  # commission
         pct = settings["commission_percent"]
         how_it_works = (
@@ -626,6 +631,7 @@ async def cb_referral_menu(callback: types.CallbackQuery):
             f"2️⃣ Friends join \\& buy\n"
             f"3️⃣ Earn 💰 *{escape_md(str(pct))}%* commission\n"
         )
+        earn_badge = f"💰 *Earn {escape_md(str(pct))}% commission per sale\\!*"
 
     from bot.utils.helpers import format_currency
     link_esc = escape_md(link)
@@ -634,14 +640,16 @@ async def cb_referral_menu(callback: types.CallbackQuery):
     wallet_esc = escape_md(format_currency(wallet))
 
     text = (
-        f"━━━━━━━━━━━━━━━━━━━━\n"
         f"🤝 *REFER \\& EARN*\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"{how_it_works}\n"
-        f"🔗 *Your Link:*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+    )
+    if earn_badge:
+        text += f"\n{earn_badge}\n"
+    text += (
+        f"\n{how_it_works}\n"
+        f"🔗 *Your Referral Link:*\n"
         f"`{link_esc}`\n\n"
-        f"🔑 *Code:*\n"
-        f"`{ref_code_esc}`\n\n"
+        f"🔑 *Code:* `{ref_code_esc}`\n\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 *Your Stats*\n\n"
         f"👥 Referrals: *{ref_count}*\n"

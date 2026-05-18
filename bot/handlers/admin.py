@@ -4701,23 +4701,28 @@ def _analytics_nav_kb(current_page: str) -> InlineKeyboardMarkup:
         ("🧾 Sales", "analytics_sales:1"),
         ("📈 Trends", "analytics_trends"),
         ("🔻 Losses", "analytics_promo_losses"),
+        ("🤝 Referrals", "analytics_referrals:1"),
     ]
     row1 = []
     row2 = []
+    row3 = []
     for i, (label, data) in enumerate(pages):
         base = data.split(":")[0]
-        if base == current_page:
+        if base == current_page or data == current_page:
             label = f"• {label} •"
         btn = InlineKeyboardButton(text=label, callback_data=data)
         if i < 3:
             row1.append(btn)
-        else:
+        elif i < 5:
             row2.append(btn)
-    return InlineKeyboardMarkup(inline_keyboard=[
-        row1, row2,
-        [InlineKeyboardButton(text="🔄 Refresh", callback_data=current_page)],
-        [back_button("admin_panel")],
-    ])
+        else:
+            row3.append(btn)
+    rows = [row1, row2]
+    if row3:
+        rows.append(row3)
+    rows.append([InlineKeyboardButton(text="🔄 Refresh", callback_data=current_page)])
+    rows.append([back_button("admin_panel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 # ── Page 1: Overview Dashboard ────────────────────────────
@@ -4828,95 +4833,118 @@ async def cb_admin_analytics(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# ── Page 2: Admin-wise Sales & Referral Loss ──────────────
+# ── Page 2: Admin-wise Sales & Net Revenue ────────────────
 
 @router.callback_query(F.data == "analytics_admins")
 @admin_only
 @error_handler
 async def cb_analytics_admins(callback: types.CallbackQuery):
-    """Per-admin sales breakdown with referral loss distribution."""
+    """Per-admin sales breakdown with proper net revenue calculation.
+    
+    Net Revenue = Gross Revenue - Referral Loss Share - Promotional Losses
+    """
     admin_sales = await db.get_admin_sales_analytics()
 
     # Get ALL admin IDs (seed + DB, deduplicated) for accurate counting
     all_admin_ids = await db.get_all_admin_ids()
     admin_count = len(all_admin_ids)
 
-    # Collect admin IDs for name lookup — include ALL admins, not just those with sales
+    # Collect admin IDs for name lookup — include ALL admins
     admin_ids_for_names = all_admin_ids | {a["admin_id"] for a in admin_sales if a["admin_id"]}
     admin_names = await db.get_admin_names_map(admin_ids_for_names)
 
-    # Calculate referral loss split using REAL admin count
+    # ── Loss Calculations ──
+    # 1. Referral wallet loss (equally split among all admins)
     wallet_used = await db.get_total_wallet_used_in_purchases()
-    loss_per_admin = wallet_used / admin_count if admin_count > 0 else 0
+    referral_loss_per_admin = wallet_used / admin_count if admin_count > 0 else 0
+
+    # 2. Promotional losses per admin (giveaways, extractions, rewards — direct + shared)
+    admin_loss_shares = await db.get_admin_loss_share()
+    loss_share_map = {ls["admin_id"]: ls for ls in admin_loss_shares}
 
     text = (
         f"👑 *ADMIN SALES REPORT*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
     )
 
-    # Global loss info — always show accurate admin count
-    if wallet_used > 0:
+    # Global loss summary
+    total_promo_loss = sum(ls["total_loss"] for ls in admin_loss_shares) if admin_loss_shares else 0
+    total_loss = wallet_used + total_promo_loss
+    if total_loss > 0:
         text += (
-            f"⚠️ *Referral Reward Loss Distribution*\n"
+            f"⚠️ *Platform Loss Summary*\n"
             f"┌──────────────────\n"
-            f"│ 🎁 Total Rewards Used: *{escape_md(format_currency(wallet_used))}*\n"
+            f"│ 🎁 Referral Rewards: *{escape_md(format_currency(wallet_used))}*\n"
+            f"│ 🔻 Promotional Losses: *{escape_md(format_currency(total_promo_loss))}*\n"
+            f"│ 💸 Total Loss: *{escape_md(format_currency(total_loss))}*\n"
             f"│ 👥 Split Among: *{admin_count}* admins\n"
-            f"│ 📉 Loss Per Admin: *{escape_md(format_currency(loss_per_admin))}*\n"
             f"└──────────────────\n\n"
         )
 
-    if not admin_sales:
-        text += "_No admin\\-attributed products yet\\._\n\n"
-        text += "_Add products with the admin panel to see analytics here\\._"
+    # Build admin_id -> sales data map
+    sales_map = {a["admin_id"]: a for a in admin_sales}
+
+    # Show all admins — those with sales first, then those without
+    sorted_admins = []
+    for a in admin_sales:
+        sorted_admins.append(a["admin_id"])
+    for aid in all_admin_ids:
+        if aid not in sorted_admins:
+            sorted_admins.append(aid)
+
+    if not sorted_admins:
+        text += "_No admins registered yet\\._"
     else:
-        # Build a map of admin_id -> sales data for quick lookup
-        sales_map = {a["admin_id"]: a for a in admin_sales}
-
         rank_emojis = ["🥇", "🥈", "🥉"]
-        # Show all admins — those with sales first, then those without
-        sorted_admins = []
-        for a in admin_sales:
-            sorted_admins.append(a["admin_id"])
-        for aid in all_admin_ids:
-            if aid not in sorted_admins:
-                sorted_admins.append(aid)
-
         for i, aid in enumerate(sorted_admins):
             name = admin_names.get(aid, str(aid))
             rank = rank_emojis[i] if i < 3 else f"\\#{i+1}"
             a = sales_map.get(aid)
 
+            # Get this admin's loss breakdown
+            ls = loss_share_map.get(aid, {"direct_loss": 0, "shared_loss": 0, "total_loss": 0})
+            promo_loss = ls["total_loss"]
+            total_admin_loss = referral_loss_per_admin + promo_loss
+
             if a:
                 gross_rev = float(a["total_revenue"])
-                net_rev = gross_rev - loss_per_admin
+                net_rev = max(0, gross_rev - total_admin_loss)
                 rev_str = escape_md(format_currency(gross_rev))
-                net_str = escape_md(format_currency(max(0, net_rev)))
+                net_str = escape_md(format_currency(net_rev))
                 pending_str = escape_md(format_currency(float(a["pending_revenue"])))
 
                 text += (
                     f"{rank} *{escape_md(name)}*\n"
                     f"┌──────────────────\n"
-                    f"│ 📦 Products Added: *{a['products_added']}*\n"
+                    f"│ 📦 Products: *{a['products_added']}* added • *{a['active_products']}* active\n"
                     f"│ 🛒 Total Sold: *{a['total_sold']}*\n"
                     f"│ 💰 Gross Revenue: *{rev_str}*\n"
                 )
-                if wallet_used > 0:
-                    text += f"│ 📉 Referral Loss: *\\-{escape_md(format_currency(loss_per_admin))}*\n"
-                    text += f"│ 💵 Net Revenue: *{net_str}*\n"
+                if total_admin_loss > 0:
+                    if referral_loss_per_admin > 0:
+                        text += f"│ 🎁 Referral Loss: *\\-{escape_md(format_currency(referral_loss_per_admin))}*\n"
+                    if promo_loss > 0:
+                        text += f"│ 🔻 Promo Loss: *\\-{escape_md(format_currency(promo_loss))}*\n"
+                text += f"│ 💵 *Net Revenue: {net_str}*\n"
                 if a["pending_orders"] > 0:
-                    text += f"│ 🟡 Pending: *{a['pending_orders']}* orders \\\\({pending_str}\\\\)\n"
+                    text += f"│ 🟡 Pending: *{a['pending_orders']}* orders \\({pending_str}\\)\n"
                 text += f"└──────────────────\n\n"
             else:
-                # Admin exists but has no products yet
+                # Admin exists but has no products — still show net calculation
+                net_rev = max(0, 0 - total_admin_loss)
                 text += (
                     f"{rank} *{escape_md(name)}*\n"
                     f"┌──────────────────\n"
-                    f"│ 📦 Products Added: *0*\n"
+                    f"│ 📦 Products: *0*\n"
                     f"│ 🛒 Total Sold: *0*\n"
                     f"│ 💰 Gross Revenue: *{escape_md(format_currency(0))}*\n"
                 )
-                if wallet_used > 0:
-                    text += f"│ 📉 Referral Loss: *\\-{escape_md(format_currency(loss_per_admin))}*\n"
+                if total_admin_loss > 0:
+                    if referral_loss_per_admin > 0:
+                        text += f"│ 🎁 Referral Loss: *\\-{escape_md(format_currency(referral_loss_per_admin))}*\n"
+                    if promo_loss > 0:
+                        text += f"│ 🔻 Promo Loss: *\\-{escape_md(format_currency(promo_loss))}*\n"
+                text += f"│ 💵 *Net Revenue: {escape_md(format_currency(net_rev))}*\n"
                 text += f"└──────────────────\n\n"
 
     try:
@@ -4987,9 +5015,11 @@ async def cb_analytics_products(callback: types.CallbackQuery):
         ("🧾 Sales", "analytics_sales:1"),
         ("📈 Trends", "analytics_trends"),
         ("🔻 Losses", "analytics_promo_losses"),
+        ("🤝 Referrals", "analytics_referrals:1"),
     ]
     row1 = [InlineKeyboardButton(text=l, callback_data=d) for l, d in pages_nav[:3]]
-    row2 = [InlineKeyboardButton(text=l, callback_data=d) for l, d in pages_nav[3:]]
+    row2 = [InlineKeyboardButton(text=l, callback_data=d) for l, d in pages_nav[3:5]]
+    row3 = [InlineKeyboardButton(text=l, callback_data=d) for l, d in pages_nav[5:]]
 
     # Pagination row
     nav_row = []
@@ -5000,7 +5030,7 @@ async def cb_analytics_products(callback: types.CallbackQuery):
         nav_row.append(InlineKeyboardButton(text="Next ▶️", callback_data=f"analytics_products:{page+1}"))
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        row1, row2, nav_row,
+        row1, row2, row3, nav_row,
         [InlineKeyboardButton(text="🔄 Refresh", callback_data=f"analytics_products:{page}")],
         [back_button("admin_panel")],
     ])
@@ -5076,9 +5106,11 @@ async def cb_analytics_sales(callback: types.CallbackQuery):
         ("• 🧾 Sales •", f"analytics_sales:{page}"),
         ("📈 Trends", "analytics_trends"),
         ("🔻 Losses", "analytics_promo_losses"),
+        ("🤝 Referrals", "analytics_referrals:1"),
     ]
     row1 = [InlineKeyboardButton(text=l, callback_data=d) for l, d in pages_nav[:3]]
-    row2 = [InlineKeyboardButton(text=l, callback_data=d) for l, d in pages_nav[3:]]
+    row2 = [InlineKeyboardButton(text=l, callback_data=d) for l, d in pages_nav[3:5]]
+    row3 = [InlineKeyboardButton(text=l, callback_data=d) for l, d in pages_nav[5:]]
 
     nav_row = []
     if page > 1:
@@ -5088,7 +5120,7 @@ async def cb_analytics_sales(callback: types.CallbackQuery):
         nav_row.append(InlineKeyboardButton(text="Next ▶️", callback_data=f"analytics_sales:{page+1}"))
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        row1, row2, nav_row,
+        row1, row2, row3, nav_row,
         [InlineKeyboardButton(text="🔄 Refresh", callback_data=f"analytics_sales:{page}")],
         [back_button("admin_panel")],
     ])
@@ -5253,6 +5285,125 @@ async def cb_analytics_promo_losses(callback: types.CallbackQuery):
         )
     except Exception as e:
         logger.debug(f"Analytics promo losses edit_text failed: {e}")
+    await callback.answer()
+
+# ── Page 7: Referral Leaderboard ──────────────────────────
+
+@router.callback_query(F.data.regexp(r"^analytics_referrals(:\d+)?$"))
+@admin_only
+@error_handler
+async def cb_analytics_referrals(callback: types.CallbackQuery):
+    """Referral leaderboard — top referrers with earnings breakdown."""
+    parts = callback.data.split(":")
+    page = int(parts[1]) if len(parts) > 1 else 1
+    PER_PAGE = 8
+
+    # Get platform-wide referral summary
+    ref_stats = await db.get_referral_summary_stats()
+
+    # Get paginated leaderboard
+    total_referrers = await db.get_referral_leaderboard_count()
+    total_pages = max(1, (total_referrers + PER_PAGE - 1) // PER_PAGE)
+    page = max(1, min(page, total_pages))
+    offset = (page - 1) * PER_PAGE
+    leaderboard = await db.get_referral_leaderboard(limit=PER_PAGE, offset=offset)
+
+    text = (
+        f"🤝 *REFERRAL LEADERBOARD*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+    )
+
+    # Platform summary
+    text += (
+        f"📊 *Platform Referral Stats*\n"
+        f"┌──────────────────\n"
+        f"│ 👥 Total Referrals: *{ref_stats['total_referrals']}*\n"
+        f"│ 🧑 Active Referrers: *{ref_stats['total_referrers']}*\n"
+        f"│ 🆕 Users Referred: *{ref_stats['total_referred']}*\n"
+        f"│ 💰 Commissions Paid: *{escape_md(format_currency(ref_stats['total_commission_paid']))}*\n"
+        f"│ 🎁 Total Rewards: *{escape_md(format_currency(ref_stats['total_rewards_distributed']))}*\n"
+        f"└──────────────────\n\n"
+    )
+
+    if not leaderboard:
+        text += "_No referrals recorded yet\\._"
+    else:
+        text += f"🏆 *Top Referrers* — Page *{page}*/*{total_pages}*\n\n"
+
+        rank_emojis = ["🥇", "🥈", "🥉"]
+        for idx, r in enumerate(leaderboard):
+            global_rank = offset + idx
+            rank = rank_emojis[global_rank] if global_rank < 3 else f"\\#{global_rank + 1}"
+
+            name = r["full_name"] or "Unknown"
+            uname = f"@{r['username']}" if r["username"] else ""
+            uid = r["telegram_id"]
+            ref_count = r["referral_count"]
+            commission = float(r["total_commission"])
+            wallet_rew = float(r["wallet_rewards_earned"])
+            comm_rew = float(r["commission_rewards_earned"])
+            total_earned = wallet_rew + comm_rew
+
+            # Format join date
+            join_date = ""
+            if r["join_date"]:
+                try:
+                    join_date = r["join_date"].strftime("%d %b %Y")
+                except Exception:
+                    join_date = str(r["join_date"])[:10]
+
+            text += (
+                f"{rank} *{escape_md(name)}*"
+            )
+            if uname:
+                text += f" _{escape_md(uname)}_"
+            text += (
+                f"\n"
+                f"┌──────────────────\n"
+                f"│ 🆔 ID: `{uid}`\n"
+                f"│ 👥 Referrals: *{ref_count}*\n"
+                f"│ 💰 Total Earned: *{escape_md(format_currency(total_earned))}*\n"
+            )
+            if wallet_rew > 0:
+                text += f"│    🎁 Wallet Rewards: *{escape_md(format_currency(wallet_rew))}*\n"
+            if comm_rew > 0:
+                text += f"│    🤝 Commissions: *{escape_md(format_currency(comm_rew))}*\n"
+            if join_date:
+                text += f"│ 📅 Joined: _{escape_md(join_date)}_\n"
+            text += f"└──────────────────\n\n"
+
+    # Build navigation with pagination
+    pages_nav = [
+        ("📊 Overview", "admin_analytics"),
+        ("👑 Admins", "analytics_admins"),
+        ("📦 Products", "analytics_products:1"),
+        ("🧾 Sales", "analytics_sales:1"),
+        ("📈 Trends", "analytics_trends"),
+        ("🔻 Losses", "analytics_promo_losses"),
+        (f"• 🤝 Referrals •", f"analytics_referrals:{page}"),
+    ]
+    nav_row1 = [InlineKeyboardButton(text=l, callback_data=d) for l, d in pages_nav[:3]]
+    nav_row2 = [InlineKeyboardButton(text=l, callback_data=d) for l, d in pages_nav[3:5]]
+    nav_row3 = [InlineKeyboardButton(text=l, callback_data=d) for l, d in pages_nav[5:]]
+
+    # Pagination row
+    pg_row = []
+    if page > 1:
+        pg_row.append(InlineKeyboardButton(text="◀️ Prev", callback_data=f"analytics_referrals:{page-1}"))
+    pg_row.append(InlineKeyboardButton(text=f"📄 {page}/{total_pages}", callback_data="noop"))
+    if page < total_pages:
+        pg_row.append(InlineKeyboardButton(text="Next ▶️", callback_data=f"analytics_referrals:{page+1}"))
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        nav_row1, nav_row2, nav_row3, pg_row,
+        [InlineKeyboardButton(text="🔄 Refresh", callback_data=f"analytics_referrals:{page}")],
+        [back_button("admin_panel")],
+    ])
+
+    try:
+        await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    except Exception as e:
+        logger.debug(f"Analytics referrals edit_text failed: {e}")
     await callback.answer()
 
 # ── Support Settings (support text + inline buttons) ──────
