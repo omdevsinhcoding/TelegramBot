@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS coupons (
     coupon_code_data    TEXT,          -- actual coupon code/content to deliver
     category            VARCHAR(64),
     image_url           TEXT,
+    created_by          BIGINT,       -- admin who created this coupon
     created_at          TIMESTAMPTZ DEFAULT NOW(),
     updated_at          TIMESTAMPTZ DEFAULT NOW()
 );

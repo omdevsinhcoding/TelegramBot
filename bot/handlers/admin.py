@@ -68,6 +68,7 @@ class AdminStates(StatesGroup):
     # Referral
     ref_commission_input = State()
     ref_reward_amount_input = State()
+    ref_earning_cap_input = State()  # for setting max earning cap + duration
     ref_reward_count_input = State()  # for setting referrals_needed on a coupon reward
     manage_referral_user_input = State()  # search user to manage their referrals
     # Payment settings
@@ -1949,6 +1950,10 @@ async def cb_admin_referral_settings(callback: types.CallbackQuery):
     reward_amt = settings.get("reward_amount", 10.0) or 10.0
     active = "🟢 Active" if settings["is_active"] else "🔴 Disabled"
 
+    # Earning cap info
+    max_amt = settings.get("wallet_reward_max_amount") or 0
+    dur_days = settings.get("wallet_reward_duration_days") or 0
+
     # Mode labels
     mode_labels = {
         "code_reward": "🎁 Coupon Reward",
@@ -1969,6 +1974,13 @@ async def cb_admin_referral_settings(callback: types.CallbackQuery):
         text += f"💰 Commission: {pct_esc}% per purchase\n"
     elif mode == "wallet_reward":
         text += f"💵 Reward: {amt_esc} per referral\n"
+        if float(max_amt) > 0 and int(dur_days) > 0:
+            text += (
+                f"🔒 Earning Cap: ₹{escape_md(str(float(max_amt)))} "
+                f"per {escape_md(str(int(dur_days)))} days\n"
+            )
+        else:
+            text += f"⚠️ No earning cap set \\(unlimited\\)\n"
     else:
         rewards = await db.get_referral_rewards()
         if rewards:
@@ -1995,6 +2007,7 @@ async def cb_admin_referral_settings(callback: types.CallbackQuery):
         buttons.append([InlineKeyboardButton(text="✏️ Edit Commission %", callback_data="admin_ref_edit_commission")])
     elif mode == "wallet_reward":
         buttons.append([InlineKeyboardButton(text="✏️ Edit Reward Amount", callback_data="admin_ref_edit_reward_amount")])
+        buttons.append([InlineKeyboardButton(text="🔒 Edit Earning Cap", callback_data="admin_ref_edit_cap")])
     elif mode == "code_reward":
         buttons.append([InlineKeyboardButton(text="➕ Add Reward Coupon", callback_data="admin_ref_add_reward")])
         rewards = await db.get_referral_rewards()
@@ -2013,8 +2026,8 @@ async def cb_admin_referral_settings(callback: types.CallbackQuery):
 
     try:
         await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"edit_text failed in referral settings: {e}")
     await callback.answer()
 
 
@@ -2329,6 +2342,86 @@ async def msg_ref_reward_amount_input(message: types.Message, state: FSMContext)
         await message.answer("⚠️ Please enter a valid amount (e.g. 10 or 25.5).")
 
 
+# ── Earning Cap Settings (Wallet Reward Mode) ────────────
+
+@router.callback_query(F.data == "admin_ref_edit_cap")
+@admin_only
+@error_handler
+async def cb_ref_edit_cap(callback: types.CallbackQuery, state: FSMContext):
+    """Edit earning cap (max amount + duration in days)."""
+    settings = await db.get_referral_settings()
+    max_amt = settings.get("wallet_reward_max_amount") or 0
+    dur_days = settings.get("wallet_reward_duration_days") or 0
+
+    text = (
+        f"🔒 *Edit Earning Cap*\n\n"
+        f"Current: ₹{escape_md(str(float(max_amt)))} "
+        f"per {escape_md(str(int(dur_days)))} days\n\n"
+        f"Send new cap in format:\n"
+        f"`amount duration_days`\n\n"
+        f"Example: `250 30`\n"
+        f"\\(Max ₹250 in 30 days\\)\n\n"
+        f"Send `0` to disable cap \\(unlimited\\)\\."
+    )
+    await callback.message.edit_text(
+        text, parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [back_button("admin_referral_settings"), admin_cancel_button()]
+        ]),
+    )
+    await state.set_state(AdminStates.ref_earning_cap_input)
+    await callback.answer()
+
+
+@router.message(AdminStates.ref_earning_cap_input)
+@error_handler
+async def msg_ref_earning_cap_input(message: types.Message, state: FSMContext):
+    text = (message.text or "").strip()
+    await state.clear()
+    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_referral_settings")]])
+
+    if text == "0":
+        await db.update_referral_settings(
+            wallet_reward_max_amount=0,
+            wallet_reward_duration_days=0
+        )
+        await message.answer("✅ Earning cap disabled \\(unlimited\\)\\.", parse_mode="MarkdownV2", reply_markup=kb)
+        logger.info(f"Admin {message.from_user.id} disabled referral earning cap")
+        return
+
+    parts = text.split()
+    if len(parts) != 2:
+        await message.answer(
+            "⚠️ Please send in format: `amount days`\n"
+            "Example: `250 30` or `0` to disable",
+            parse_mode="MarkdownV2"
+        )
+        return
+
+    try:
+        max_amt = float(parts[0])
+        dur_days = int(parts[1])
+        if max_amt <= 0 or dur_days <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer(
+            "⚠️ Invalid values. Amount must be > 0, days must be > 0.\n"
+            "Example: `250 30`",
+            parse_mode="MarkdownV2"
+        )
+        return
+
+    await db.update_referral_settings(
+        wallet_reward_max_amount=max_amt,
+        wallet_reward_duration_days=dur_days
+    )
+    await message.answer(
+        f"✅ Earning cap set: ₹{max_amt} per {dur_days} days",
+        reply_markup=kb
+    )
+    logger.info(f"Admin {message.from_user.id} set earning cap: ₹{max_amt} / {dur_days} days")
+
+
 # ── Reward Coupon Management (Code Reward Mode) ──────────
 
 @router.callback_query(F.data == "admin_ref_add_reward")
@@ -2412,13 +2505,27 @@ async def msg_ref_reward_count(message: types.Message, state: FSMContext):
         await message.answer(f"✅ Referral count updated to {val}", reply_markup=kb)
     elif "ref_reward_coupon_id" in data:
         coupon_id = data["ref_reward_coupon_id"]
+
+        # ── Single-active-reward policy: deactivate all existing rewards ──
+        existing = await db.get_referral_rewards()
+        for r in existing:
+            if r["is_active"]:
+                await db.toggle_referral_reward(r["id"])
+                logger.info(f"Auto-deactivated reward {r['id']} ({r['title']}) for single-reward policy")
+
         await db.add_referral_reward(coupon_id, val)
         coupon = await get_coupon_detail(coupon_id)
         title = coupon["title"] if coupon else "Unknown"
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_referral_settings")]])
+
+        deactivated_msg = ""
+        if existing and any(r["is_active"] for r in existing):
+            deactivated_msg = "\n⚠️ Previous rewards were auto\\-deactivated\\."
+
         await message.answer(
             f"✅ Reward added\\!\n\n"
-            f"🏷️ {escape_md(title)} — needs {val} referrals to claim",
+            f"🏷️ {escape_md(title)} — needs {val} referrals to claim"
+            f"{deactivated_msg}",
             parse_mode="MarkdownV2", reply_markup=kb
         )
 
@@ -4140,8 +4247,8 @@ async def cb_admin_analytics(callback: types.CallbackQuery):
             text, parse_mode="MarkdownV2",
             reply_markup=_analytics_nav_kb("admin_analytics")
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Analytics overview edit_text failed: {e}")
     await callback.answer()
 
 
@@ -4213,8 +4320,8 @@ async def cb_analytics_admins(callback: types.CallbackQuery):
             text, parse_mode="MarkdownV2",
             reply_markup=_analytics_nav_kb("analytics_admins")
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Analytics admins edit_text failed: {e}")
     await callback.answer()
 
 
@@ -4295,8 +4402,8 @@ async def cb_analytics_products(callback: types.CallbackQuery):
 
     try:
         await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Analytics products edit_text failed: {e}")
     await callback.answer()
 
 
@@ -4382,8 +4489,8 @@ async def cb_analytics_sales(callback: types.CallbackQuery):
 
     try:
         await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Analytics sales edit_text failed: {e}")
     await callback.answer()
 
 
@@ -4458,8 +4565,8 @@ async def cb_analytics_trends(callback: types.CallbackQuery):
 
     try:
         await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Analytics trends edit_text failed: {e}")
     await callback.answer()
 
 

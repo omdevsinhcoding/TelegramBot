@@ -1217,6 +1217,42 @@ async def add_referral_earnings(user_id: int, amount: float):
         "UPDATE users SET referral_earnings = referral_earnings + $2, wallet_balance = wallet_balance + $2 WHERE telegram_id = $1",
         user_id, amount)
 
+
+async def check_referral_earning_cap(user_id: int, ref_settings: dict) -> bool:
+    """Check if user can still earn referral rewards within the cap.
+
+    Returns True if user is allowed to earn, False if they've hit the cap.
+    Uses a rolling time window based on wallet_reward_duration_days and
+    checks against wallet_reward_max_amount.
+
+    If no caps are configured (or columns are missing), always returns True.
+    """
+    max_amount = ref_settings.get("wallet_reward_max_amount")
+    duration_days = ref_settings.get("wallet_reward_duration_days")
+
+    # No cap configured — always allow
+    if not max_amount or float(max_amount) <= 0:
+        return True
+    if not duration_days or int(duration_days) <= 0:
+        return True
+
+    max_amount = float(max_amount)
+    duration_days = int(duration_days)
+
+    pool = await get_pool()
+    # Sum all referral-related wallet credits in the rolling window
+    earned = await pool.fetchval("""
+        SELECT COALESCE(SUM(amount), 0)
+        FROM wallet_transactions
+        WHERE user_id = $1
+          AND amount > 0
+          AND reference LIKE 'referral_from_%'
+          AND created_at >= NOW() - interval '1 day' * $2
+    """, user_id, duration_days)
+
+    return float(earned or 0) < max_amount
+
+
 async def get_user_wallet(user_id: int) -> float:
     pool = await get_pool()
     row = await pool.fetchrow("SELECT wallet_balance FROM users WHERE telegram_id = $1", user_id)

@@ -117,26 +117,4 @@ def admin_giveaway_view_kb(giveaway_id: int, is_active: bool) -> InlineKeyboardM
     ])
 
 
-def admin_referral_settings_kb(settings: dict) -> InlineKeyboardMarkup:
-    """Legacy — the main referral settings keyboard is now built inline in admin.py."""
-    is_active = settings["is_active"]
-    mode = settings["mode"]
-    toggle_text = "🔴 Disable Referrals" if is_active else "🟢 Enable Referrals"
-    
-    buttons = []
-    if mode == "commission":
-        buttons.append([InlineKeyboardButton(text="✏️ Edit Commission %", callback_data="admin_ref_edit_commission")])
-    elif mode == "wallet_reward":
-        buttons.append([InlineKeyboardButton(text="✏️ Edit Reward Amount", callback_data="admin_ref_edit_reward_amount")])
-    else:
-        buttons.append([
-            InlineKeyboardButton(text="✏️ Edit Needed Count", callback_data="admin_ref_edit_needed"),
-            InlineKeyboardButton(text="✏️ Edit Reward Code", callback_data="admin_ref_edit_code")
-        ])
-        
-    buttons.append([InlineKeyboardButton(text=toggle_text, callback_data="admin_ref_toggle_active")])
-    buttons.append([back_button("admin_panel")])
-    
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
 
