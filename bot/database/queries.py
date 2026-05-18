@@ -2036,14 +2036,15 @@ async def get_promotional_loss_history(limit: int = 50) -> list:
 async def get_admin_loss_share() -> list:
     """Calculate each admin's share of total promotional losses.
     
+    Uses the unified admin set (seed + DB, deduplicated).
     For losses not attributed to a specific admin, they are
     distributed equally among all admins.
     """
     pool = await get_pool()
     
-    # Get all admins
-    admins = await pool.fetch("SELECT telegram_id FROM admins")
-    admin_count = len(admins)
+    # Get ALL admins (seed + DB, deduplicated)
+    all_admin_ids = await get_all_admin_ids()
+    admin_count = len(all_admin_ids)
     if admin_count == 0:
         return []
     
@@ -2068,8 +2069,7 @@ async def get_admin_loss_share() -> list:
     shared_per_admin = float(unattributed) / admin_count if admin_count > 0 else 0
     
     result = []
-    for admin in admins:
-        aid = admin["telegram_id"]
+    for aid in all_admin_ids:
         direct = attr_map.get(aid, 0)
         result.append({
             "admin_id": aid,
@@ -2254,10 +2254,21 @@ async def get_coupon_owner_admin(coupon_id: int) -> int | None:
     return row["created_by"] if row and row["created_by"] else None
 
 
-async def get_admin_count() -> int:
-    """Get total number of admins (seed + DB)."""
+async def get_all_admin_ids() -> set[int]:
+    """Get the deduplicated set of ALL admin Telegram IDs (seed + DB).
+    
+    This is the single source of truth for admin counting across the system.
+    Merges .env seed admins with dynamically added DB admins.
+    """
     pool = await get_pool()
-    db_count = await pool.fetchval("SELECT COUNT(*) FROM admins") or 0
+    rows = await pool.fetch("SELECT telegram_id FROM admins")
+    db_ids = {row["telegram_id"] for row in rows}
     from bot.config import Config
-    return db_count + len(Config.ADMIN_IDS)
+    return db_ids | set(Config.ADMIN_IDS)
+
+
+async def get_admin_count() -> int:
+    """Get total number of unique active admins (seed + DB, deduplicated)."""
+    all_ids = await get_all_admin_ids()
+    return len(all_ids)
 

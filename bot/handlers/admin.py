@@ -3710,6 +3710,12 @@ async def cb_admin_manage_admins(callback: types.CallbackQuery):
     db_admins = await db.get_all_admins()
 
     lines = ["👮 *Admin Management*", "━━━━━━━━━━━━━━━━━━━━", ""]
+
+    # Show total deduplicated count
+    all_ids = set(seed_ids) | {adm["telegram_id"] for adm in db_admins}
+    lines.append(f"📊 *Total Active Admins: {len(all_ids)}*")
+    lines.append("")
+
     lines.append("*Seed Admins* \\(from \\.env — cannot remove\\):")
     for sid in seed_ids:
         lines.append(f"  🔒 `{sid}`")
@@ -3720,7 +3726,8 @@ async def cb_admin_manage_admins(callback: types.CallbackQuery):
         for adm in db_admins:
             tid = adm["telegram_id"]
             added_by = adm["added_by"]
-            lines.append(f"  👤 `{tid}` — added by `{added_by}`")
+            overlap = " \\(also seed\\)" if tid in seed_ids else ""
+            lines.append(f"  👤 `{tid}` — added by `{added_by}`{overlap}")
     else:
         lines.append("_No dynamic admins added yet_")
 
@@ -4732,11 +4739,10 @@ async def cb_admin_analytics(callback: types.CallbackQuery):
     rewards_given = await db.get_total_referral_rewards_given()
     gateway_revenue = revenue - wallet_used  # actual money received
 
-    # Admin count
-    admin_sales = await db.get_admin_sales_analytics()
-    admin_count = len(admin_sales)
+    # Admin count — unified source: seed (.env) + DB admins, deduplicated
+    admin_count = await db.get_admin_count()
 
-    # Per-admin referral loss (equally split among all admins who have products)
+    # Per-admin referral loss (equally split among ALL active admins)
     loss_per_admin = (wallet_used / admin_count) if admin_count > 0 else 0
 
     # Payment method breakdown
@@ -4831,13 +4837,16 @@ async def cb_analytics_admins(callback: types.CallbackQuery):
     """Per-admin sales breakdown with referral loss distribution."""
     admin_sales = await db.get_admin_sales_analytics()
 
-    # Collect admin IDs and get names
-    admin_ids = {a["admin_id"] for a in admin_sales if a["admin_id"]}
-    admin_names = await db.get_admin_names_map(admin_ids)
+    # Get ALL admin IDs (seed + DB, deduplicated) for accurate counting
+    all_admin_ids = await db.get_all_admin_ids()
+    admin_count = len(all_admin_ids)
 
-    # Calculate referral loss split
+    # Collect admin IDs for name lookup — include ALL admins, not just those with sales
+    admin_ids_for_names = all_admin_ids | {a["admin_id"] for a in admin_sales if a["admin_id"]}
+    admin_names = await db.get_admin_names_map(admin_ids_for_names)
+
+    # Calculate referral loss split using REAL admin count
     wallet_used = await db.get_total_wallet_used_in_purchases()
-    admin_count = len(admin_sales) if admin_sales else 1
     loss_per_admin = wallet_used / admin_count if admin_count > 0 else 0
 
     text = (
@@ -4845,45 +4854,70 @@ async def cb_analytics_admins(callback: types.CallbackQuery):
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
     )
 
+    # Global loss info — always show accurate admin count
+    if wallet_used > 0:
+        text += (
+            f"⚠️ *Referral Reward Loss Distribution*\n"
+            f"┌──────────────────\n"
+            f"│ 🎁 Total Rewards Used: *{escape_md(format_currency(wallet_used))}*\n"
+            f"│ 👥 Split Among: *{admin_count}* admins\n"
+            f"│ 📉 Loss Per Admin: *{escape_md(format_currency(loss_per_admin))}*\n"
+            f"└──────────────────\n\n"
+        )
+
     if not admin_sales:
         text += "_No admin\\-attributed products yet\\._\n\n"
         text += "_Add products with the admin panel to see analytics here\\._"
     else:
-        # Global loss info
-        if wallet_used > 0:
-            text += (
-                f"⚠️ *Referral Reward Loss Distribution*\n"
-                f"┌──────────────────\n"
-                f"│ 🎁 Total Rewards Used: *{escape_md(format_currency(wallet_used))}*\n"
-                f"│ 👥 Split Among: *{admin_count}* admins\n"
-                f"│ 📉 Loss Per Admin: *{escape_md(format_currency(loss_per_admin))}*\n"
-                f"└──────────────────\n\n"
-            )
+        # Build a map of admin_id -> sales data for quick lookup
+        sales_map = {a["admin_id"]: a for a in admin_sales}
 
         rank_emojis = ["🥇", "🥈", "🥉"]
-        for i, a in enumerate(admin_sales):
-            name = admin_names.get(a["admin_id"], str(a["admin_id"]))
+        # Show all admins — those with sales first, then those without
+        sorted_admins = []
+        for a in admin_sales:
+            sorted_admins.append(a["admin_id"])
+        for aid in all_admin_ids:
+            if aid not in sorted_admins:
+                sorted_admins.append(aid)
+
+        for i, aid in enumerate(sorted_admins):
+            name = admin_names.get(aid, str(aid))
             rank = rank_emojis[i] if i < 3 else f"\\#{i+1}"
+            a = sales_map.get(aid)
 
-            gross_rev = float(a["total_revenue"])
-            net_rev = gross_rev - loss_per_admin
-            rev_str = escape_md(format_currency(gross_rev))
-            net_str = escape_md(format_currency(max(0, net_rev)))
-            pending_str = escape_md(format_currency(float(a["pending_revenue"])))
+            if a:
+                gross_rev = float(a["total_revenue"])
+                net_rev = gross_rev - loss_per_admin
+                rev_str = escape_md(format_currency(gross_rev))
+                net_str = escape_md(format_currency(max(0, net_rev)))
+                pending_str = escape_md(format_currency(float(a["pending_revenue"])))
 
-            text += (
-                f"{rank} *{escape_md(name)}*\n"
-                f"┌──────────────────\n"
-                f"│ 📦 Products Added: *{a['products_added']}*\n"
-                f"│ 🛒 Total Sold: *{a['total_sold']}*\n"
-                f"│ 💰 Gross Revenue: *{rev_str}*\n"
-            )
-            if wallet_used > 0:
-                text += f"│ 📉 Referral Loss: *\\-{escape_md(format_currency(loss_per_admin))}*\n"
-                text += f"│ 💵 Net Revenue: *{net_str}*\n"
-            if a["pending_orders"] > 0:
-                text += f"│ 🟡 Pending: *{a['pending_orders']}* orders \\\\({pending_str}\\\\)\n"
-            text += f"└──────────────────\n\n"
+                text += (
+                    f"{rank} *{escape_md(name)}*\n"
+                    f"┌──────────────────\n"
+                    f"│ 📦 Products Added: *{a['products_added']}*\n"
+                    f"│ 🛒 Total Sold: *{a['total_sold']}*\n"
+                    f"│ 💰 Gross Revenue: *{rev_str}*\n"
+                )
+                if wallet_used > 0:
+                    text += f"│ 📉 Referral Loss: *\\-{escape_md(format_currency(loss_per_admin))}*\n"
+                    text += f"│ 💵 Net Revenue: *{net_str}*\n"
+                if a["pending_orders"] > 0:
+                    text += f"│ 🟡 Pending: *{a['pending_orders']}* orders \\\\({pending_str}\\\\)\n"
+                text += f"└──────────────────\n\n"
+            else:
+                # Admin exists but has no products yet
+                text += (
+                    f"{rank} *{escape_md(name)}*\n"
+                    f"┌──────────────────\n"
+                    f"│ 📦 Products Added: *0*\n"
+                    f"│ 🛒 Total Sold: *0*\n"
+                    f"│ 💰 Gross Revenue: *{escape_md(format_currency(0))}*\n"
+                )
+                if wallet_used > 0:
+                    text += f"│ 📉 Referral Loss: *\\-{escape_md(format_currency(loss_per_admin))}*\n"
+                text += f"└──────────────────\n\n"
 
     try:
         await callback.message.edit_text(
@@ -4952,6 +4986,7 @@ async def cb_analytics_products(callback: types.CallbackQuery):
         ("• 📦 Products •", f"analytics_products:{page}"),
         ("🧾 Sales", "analytics_sales:1"),
         ("📈 Trends", "analytics_trends"),
+        ("🔻 Losses", "analytics_promo_losses"),
     ]
     row1 = [InlineKeyboardButton(text=l, callback_data=d) for l, d in pages_nav[:3]]
     row2 = [InlineKeyboardButton(text=l, callback_data=d) for l, d in pages_nav[3:]]
@@ -5040,6 +5075,7 @@ async def cb_analytics_sales(callback: types.CallbackQuery):
         ("📦 Products", "analytics_products:1"),
         ("• 🧾 Sales •", f"analytics_sales:{page}"),
         ("📈 Trends", "analytics_trends"),
+        ("🔻 Losses", "analytics_promo_losses"),
     ]
     row1 = [InlineKeyboardButton(text=l, callback_data=d) for l, d in pages_nav[:3]]
     row2 = [InlineKeyboardButton(text=l, callback_data=d) for l, d in pages_nav[3:]]
@@ -5136,16 +5172,19 @@ async def cb_analytics_promo_losses(callback: types.CallbackQuery):
     promo_losses = await db.get_total_promotional_losses()
     admin_losses = await db.get_admin_promotional_losses()
 
-    # Get admin names
-    admin_ids = {a["admin_id"] for a in admin_losses if a["admin_id"]}
-    admin_names = await db.get_admin_names_map(admin_ids)
+    # Get ALL admin IDs (seed + DB) for complete name resolution
+    all_admin_ids = await db.get_all_admin_ids()
+    admin_count = len(all_admin_ids)
+    admin_ids_for_names = all_admin_ids | {a["admin_id"] for a in admin_losses if a["admin_id"]}
+    admin_names = await db.get_admin_names_map(admin_ids_for_names)
 
     grand_total = promo_losses.get("_grand_total", 0)
 
     text = (
         f"🔻 *PROMOTIONAL LOSS REPORT*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"💸 *Total Platform Losses:* *{escape_md(format_currency(grand_total))}*\n\n"
+        f"💸 *Total Platform Losses:* *{escape_md(format_currency(grand_total))}*\n"
+        f"👥 *Active Admins:* *{admin_count}*\n\n"
     )
 
     # Loss by type
