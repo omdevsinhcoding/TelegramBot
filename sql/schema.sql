@@ -282,8 +282,10 @@ CREATE TABLE IF NOT EXISTS referral_rewards (
 
 -- ────────────────────────────────────────────────────────────
 -- 14. REFERRAL CLAIMS (tracks who claimed which reward)
+--     Credit-based system: 1 referral = 1 claim credit.
 --     reward_id is nullable + ON DELETE SET NULL so claims
 --     survive reward deletion (prevents free-reuse bug).
+--     NO unique constraint — users can claim multiple times.
 -- ────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS referral_claims (
     id                  SERIAL PRIMARY KEY,
@@ -291,9 +293,8 @@ CREATE TABLE IF NOT EXISTS referral_claims (
     reward_id           INTEGER REFERENCES referral_rewards(id) ON DELETE SET NULL,
     coupon_id           INTEGER NOT NULL REFERENCES coupons(id),
     code                TEXT,
-    referrals_needed    INTEGER DEFAULT 0,
-    claimed_at          TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(user_id, reward_id)
+    referrals_needed    INTEGER DEFAULT 1,
+    claimed_at          TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_referral_claims_user ON referral_claims (user_id);

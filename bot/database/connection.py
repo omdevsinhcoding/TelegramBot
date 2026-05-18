@@ -191,7 +191,7 @@ async def init_db() -> asyncpg.Pool:
             "ALTER TABLE referral_settings ADD COLUMN IF NOT EXISTS reward_amount NUMERIC(10,2) DEFAULT 10.0;",
             "ALTER TABLE referral_settings ADD COLUMN IF NOT EXISTS wallet_reward_max_amount NUMERIC(10,2) DEFAULT 250.00;",
             "ALTER TABLE referral_settings ADD COLUMN IF NOT EXISTS wallet_reward_duration_days INTEGER DEFAULT 30;",
-            "ALTER TABLE referral_claims ADD COLUMN IF NOT EXISTS referrals_needed INTEGER DEFAULT 0;",
+            "ALTER TABLE referral_claims ADD COLUMN IF NOT EXISTS referrals_needed INTEGER DEFAULT 1;",
             "ALTER TABLE coupons ADD COLUMN IF NOT EXISTS category VARCHAR(64);",
         ]
         for sql in migrations:
@@ -199,6 +199,16 @@ async def init_db() -> asyncpg.Pool:
                 await conn.execute(sql)
             except Exception:
                 pass
+
+        # Drop UNIQUE(user_id, reward_id) constraint on referral_claims
+        # This allows multiple claims per reward (credit-based system)
+        try:
+            await conn.execute("""
+                ALTER TABLE referral_claims
+                DROP CONSTRAINT IF EXISTS referral_claims_user_id_reward_id_key;
+            """)
+        except Exception:
+            pass
 
         # Ensure default settings rows exist
         try:

@@ -98,6 +98,11 @@ async def text_refer_earn(message: types.Message):
     earnings_esc = escape_md(format_currency(earnings))
     wallet_esc = escape_md(format_currency(wallet))
 
+    # Get pending credits for code_reward mode
+    pending_credits = 0
+    if mode == "code_reward":
+        pending_credits = await db.get_referral_pending_credits(user_id)
+
     text = (
         f"🤝 *REFER \\& EARN*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -112,6 +117,10 @@ async def text_refer_earn(message: types.Message):
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 *Your Stats*\n\n"
         f"👥 Referrals: *{ref_count}*\n"
+    )
+    if mode == "code_reward":
+        text += f"🎟️ Pending Credits: *{pending_credits}*\n"
+    text += (
         f"💸 Earnings: *{earnings_esc}*\n"
         f"💰 Wallet: *{wallet_esc}*\n\n"
         f"💡 _Wallet balance can be used to purchase coupons\\!_ 💳\n"
@@ -120,11 +129,12 @@ async def text_refer_earn(message: types.Message):
 
     buttons = []
 
-    # 🎁 Claim Rewards — show in code_reward mode when rewards are available
-    if mode == "code_reward":
-        claimable = await db.get_claimable_rewards(user_id, ref_count)
-        if claimable:
-            buttons.append([InlineKeyboardButton(text="🎁 Claim Rewards", callback_data="ref_claim_rewards")])
+    # 🎁 Claim Rewards — show when user has pending credits (even if stock = 0)
+    if mode == "code_reward" and pending_credits > 0:
+        buttons.append([InlineKeyboardButton(
+            text=f"🎁 Claim Rewards ({pending_credits} credits)",
+            callback_data="ref_claim_rewards"
+        )])
 
     # Allow manual entry if no referrer
     referrer = await db.get_referrer_of(user_id)
@@ -141,29 +151,56 @@ async def text_refer_earn(message: types.Message):
 @router.callback_query(F.data == "ref_claim_rewards")
 @error_handler
 async def cb_ref_claim_rewards(callback: types.CallbackQuery):
-    """Show rewards user can claim based on their referral count."""
+    """Show rewards user can claim — credit-based system."""
     user_id = callback.from_user.id
     ref_count = await db.get_referral_count(user_id)
-    claimable = await db.get_claimable_rewards(user_id, ref_count)
+    pending_credits = await db.get_referral_pending_credits(user_id)
 
-    if not claimable:
-        await callback.answer("No rewards to claim right now. Keep referring!", show_alert=True)
+    if pending_credits <= 0:
+        await callback.answer("No pending reward credits. Keep referring!", show_alert=True)
+        return
+
+    # Get all active rewards (including out-of-stock ones for display)
+    rewards = await db.get_referral_rewards()
+    active_rewards = [r for r in rewards if r["is_active"]]
+
+    if not active_rewards:
+        await callback.answer("No rewards available right now. Check back later!", show_alert=True)
         return
 
     text = (
-        "🎁 *Claim Your Referral Rewards*\n\n"
-        f"👥 Your referrals: *{ref_count}*\n\n"
-        "Select a reward to claim:"
+        f"🎁 *CLAIM REFERRAL REWARDS*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"👥 Total Referrals: *{ref_count}*\n"
+        f"🎟️ Pending Credits: *{pending_credits}*\n\n"
     )
 
     buttons = []
-    for r in claimable:
+    has_any_stock = False
+    for r in active_rewards:
         title = r["title"][:30]
-        buttons.append([InlineKeyboardButton(
-            text=f"🎁 {title} ({r['referrals_needed']} refs)",
-            callback_data=f"ref_claim:{r['id']}"
-        )])
-    buttons.append([back_button("back_home")])
+        stock = r["stock"]
+        if stock > 0:
+            has_any_stock = True
+            buttons.append([InlineKeyboardButton(
+                text=f"🎁 {title} • 📦 {stock} left",
+                callback_data=f"ref_claim:{r['id']}"
+            )])
+            text += f"✅ *{escape_md(title)}* — 📦 *{stock}* in stock\n"
+        else:
+            text += f"❌ *{escape_md(title)}* — _Out of stock_\n"
+
+    if not has_any_stock:
+        text += (
+            f"\n📭 *All reward coupons are currently out of stock\\.*\n\n"
+            f"_Admin will add new coupons soon\\._\n"
+            f"_Your *{pending_credits}* pending credits are saved_\n"
+            f"_and will be usable when stock is replenished\\!_ ✨"
+        )
+    else:
+        text += f"\n_Select a reward to claim \\(costs 1 credit each\\):_"
+
+    buttons.append([InlineKeyboardButton(text="◀️ Back", callback_data="referral_menu")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
 
     await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
@@ -173,20 +210,27 @@ async def cb_ref_claim_rewards(callback: types.CallbackQuery):
 @router.callback_query(F.data.startswith("ref_claim:"))
 @error_handler
 async def cb_ref_claim(callback: types.CallbackQuery):
-    """User claims a specific referral reward."""
+    """User claims a specific referral reward — credit-based."""
     reward_id = int(callback.data.split(":")[1])
     user_id = callback.from_user.id
 
-    # Verify user has enough referrals
-    ref_count = await db.get_referral_count(user_id)
+    # Verify pending credits
+    pending_credits = await db.get_referral_pending_credits(user_id)
     reward = await db.get_referral_reward(reward_id)
     if not reward:
         await callback.answer("Reward not found.", show_alert=True)
         return
 
-    if ref_count < reward["referrals_needed"]:
+    if pending_credits < reward["referrals_needed"]:
         await callback.answer(
-            f"You need {reward['referrals_needed']} referrals. You have {ref_count}.",
+            f"Not enough credits. You have {pending_credits}, need {reward['referrals_needed']}.",
+            show_alert=True
+        )
+        return
+
+    if reward["stock"] <= 0:
+        await callback.answer(
+            "⚠️ This coupon is out of stock. Admin will add new coupons soon. Your credits are saved!",
             show_alert=True
         )
         return
@@ -194,7 +238,7 @@ async def cb_ref_claim(callback: types.CallbackQuery):
     # Try to claim
     code = await db.claim_referral_reward(user_id, reward_id)
     if not code:
-        await callback.answer("Could not claim. Already claimed or out of stock.", show_alert=True)
+        await callback.answer("Could not claim. Out of stock or no credits.", show_alert=True)
         return
 
     # Create a reward order so it appears in Order History
@@ -202,7 +246,6 @@ async def cb_ref_claim(callback: types.CallbackQuery):
     order_id = generate_order_id()
     try:
         await db.create_reward_order(order_id, user_id, reward["coupon_id"], "referral_reward")
-        # Link the coupon code to this order
         pool = await db.get_pool()
         await pool.execute(
             "UPDATE coupon_codes SET order_id = $1 WHERE coupon_id = $2 AND code = $3 AND sold_to = $4",
@@ -212,7 +255,7 @@ async def cb_ref_claim(callback: types.CallbackQuery):
         from bot.utils.logger import logger
         logger.warning(f"Failed to create reward order (non-critical): {e}")
 
-    # Track promotional loss for coupon reward
+    # Track promotional loss
     try:
         coupon_detail = await db.get_coupon(reward["coupon_id"])
         estimated_value = float(coupon_detail["discounted_price"]) if coupon_detail else 0
@@ -234,10 +277,21 @@ async def cb_ref_claim(callback: types.CallbackQuery):
     except Exception:
         pass
 
+    # Calculate remaining credits after this claim
+    new_pending = await db.get_referral_pending_credits(user_id)
+
     title_esc = escape_md(reward["title"])
     code_esc = escape_md(code)
     oid_esc = escape_md(order_id) if order_id else ""
-    kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
+
+    buttons = []
+    if new_pending > 0:
+        buttons.append([InlineKeyboardButton(
+            text=f"🎁 Claim More ({new_pending} credits left)",
+            callback_data="ref_claim_rewards"
+        )])
+    buttons.append([back_button("back_home")])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
 
     await callback.message.edit_text(
         f"🎊✨ *CONGRATULATIONS\\!* ✨🎊\n"
@@ -247,10 +301,11 @@ async def cb_ref_claim(callback: types.CallbackQuery):
         f"🔑 Your Code:\n"
         f"`{code_esc}`\n\n"
         f"📦 Order ID: `{oid_esc}`\n\n"
+        f"🎟️ Credits Remaining: *{new_pending}*\n\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"💡 _This reward is saved in your_\n"
         f"_📦 Order History — view anytime\\!_\n\n"
-        f"🤝 _Keep referring to unlock more rewards\\!_ 🚀",
+        f"🤝 _Keep referring to earn more rewards\\!_ 🚀",
         parse_mode="MarkdownV2", reply_markup=kb
     )
     await callback.answer("🎉 Reward claimed!")

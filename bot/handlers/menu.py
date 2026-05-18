@@ -639,6 +639,11 @@ async def cb_referral_menu(callback: types.CallbackQuery):
     earnings_esc = escape_md(format_currency(earnings))
     wallet_esc = escape_md(format_currency(wallet))
 
+    # Get pending credits for code_reward mode
+    pending_credits = 0
+    if mode == "code_reward":
+        pending_credits = await db.get_referral_pending_credits(user_id)
+
     text = (
         f"🤝 *REFER \\& EARN*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -653,6 +658,10 @@ async def cb_referral_menu(callback: types.CallbackQuery):
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 *Your Stats*\n\n"
         f"👥 Referrals: *{ref_count}*\n"
+    )
+    if mode == "code_reward":
+        text += f"🎟️ Pending Credits: *{pending_credits}*\n"
+    text += (
         f"💸 Earnings: *{earnings_esc}*\n"
         f"💰 Wallet: *{wallet_esc}*\n\n"
         f"💡 _Wallet balance can be used to purchase coupons\\!_ 💳\n"
@@ -661,11 +670,12 @@ async def cb_referral_menu(callback: types.CallbackQuery):
 
     buttons = []
 
-    # 🎁 Claim Rewards — FIRST PRIORITY (top)
-    if mode == "code_reward":
-        claimable = await db.get_claimable_rewards(user_id, ref_count)
-        if claimable:
-            buttons.append([InlineKeyboardButton(text="🎁 Claim Rewards", callback_data="ref_claim_rewards")])
+    # 🎁 Claim Rewards — show when user has pending credits (even if stock = 0)
+    if mode == "code_reward" and pending_credits > 0:
+        buttons.append([InlineKeyboardButton(
+            text=f"🎁 Claim Rewards ({pending_credits} credits)",
+            callback_data="ref_claim_rewards"
+        )])
 
     # Allow manual entry if no referrer
     referrer = await db.get_referrer_of(user_id)

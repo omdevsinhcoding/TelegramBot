@@ -1311,37 +1311,40 @@ async def update_referral_reward_count(reward_id: int, count: int):
     await pool.execute("UPDATE referral_rewards SET referrals_needed = $2 WHERE id = $1", reward_id, count)
 
 async def get_claimable_rewards(user_id: int, ref_count: int) -> list:
-    """Get rewards user can claim based on *remaining* (unconsumed) referrals.
+    """Get rewards user can claim based on their referral credit balance.
 
-    Remaining = total_refs - SUM(referrals_needed of all past claims).
+    Credit system:
+      - Each referral earns 1 credit
+      - Each claim costs 1 credit (referrals_needed, typically 1)
+      - pending_credits = total_refs - SUM(referrals_needed of all claims)
+      - If pending_credits > 0, user can claim any active reward with stock
 
-    This ensures that if admin removes a reward and adds a new one, users
-    CANNOT reuse referrals that were already consumed by prior claims.
-    Claims survive reward deletion because the FK is ON DELETE SET NULL,
-    and referrals_needed is persisted on the claim row itself.
+    Returns active rewards that have coupon stock available.
+    The caller should also check pending_credits to know HOW MANY claims
+    the user can make.
     """
     pool = await get_pool()
+
+    # Calculate pending credits
+    consumed = await pool.fetchval(
+        "SELECT COALESCE(SUM(COALESCE(referrals_needed, 1)), 0) "
+        "FROM referral_claims WHERE user_id = $1",
+        user_id
+    ) or 0
+    pending_credits = ref_count - int(consumed)
+
+    if pending_credits <= 0:
+        return []
+
+    # Return active rewards that have stock
     return await pool.fetch(
         """
         SELECT rr.*, c.title, c.stock
         FROM referral_rewards rr
         JOIN coupons c ON rr.coupon_id = c.id
         WHERE rr.is_active = TRUE
-          AND c.stock > 0
-          AND rr.referrals_needed <= (
-            $2::int - COALESCE(
-              (SELECT SUM(COALESCE(rc.referrals_needed, 0))
-               FROM referral_claims rc WHERE rc.user_id = $1),
-              0
-            )
-          )
-          AND rr.id NOT IN (
-            SELECT reward_id FROM referral_claims
-            WHERE user_id = $1 AND reward_id IS NOT NULL
-          )
         ORDER BY rr.referrals_needed ASC
         """,
-        user_id, ref_count
     )
 
 async def get_user_referral_claims(user_id: int) -> list:
@@ -1353,54 +1356,58 @@ async def get_user_referral_claims(user_id: int) -> list:
         user_id
     )
 
-async def claim_referral_reward(user_id: int, reward_id: int) -> str | None:
-    """Claim a referral reward — assigns a coupon code to the user. Returns the code or None.
+async def get_referral_pending_credits(user_id: int) -> int:
+    """Get user's pending referral claim credits.
+    
+    pending = total_referrals - total_consumed_credits
+    """
+    pool = await get_pool()
+    total_refs = await pool.fetchval(
+        "SELECT COUNT(*) FROM referrals WHERE referrer_id = $1", user_id
+    ) or 0
+    consumed = await pool.fetchval(
+        "SELECT COALESCE(SUM(COALESCE(referrals_needed, 1)), 0) "
+        "FROM referral_claims WHERE user_id = $1",
+        user_id
+    ) or 0
+    return max(0, int(total_refs) - int(consumed))
 
-    Inside a single atomic transaction:
-      1. Verifies reward is active + has stock.
-      2. Verifies user hasn't already claimed THIS reward_id.
-      3. Computes remaining refs = total_refs - already_consumed_refs and
-         ensures the user actually has enough *new* referrals to earn this reward.
-         This prevents free re-claims when admin removes and re-adds a reward.
-      4. Assigns an unsold code, decrements stock, and records the claim with
-         the referrals_needed value so future eligibility checks stay accurate
-         even after the reward row itself is deleted.
+
+async def claim_referral_reward(user_id: int, reward_id: int) -> str | None:
+    """Claim a referral reward — credit-based system.
+
+    1 referral = 1 credit. Each claim costs reward.referrals_needed credits (usually 1).
+    Users can claim the same reward multiple times as long as they have credits.
+    Returns the coupon code string, or None if claim failed.
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            # 1. Get reward details
+            # 1. Get reward details + stock
             reward = await conn.fetchrow(
                 "SELECT rr.*, c.stock FROM referral_rewards rr "
                 "JOIN coupons c ON rr.coupon_id = c.id WHERE rr.id = $1 AND rr.is_active = TRUE",
                 reward_id
             )
-            if not reward or reward["stock"] <= 0:
+            if not reward:
                 return None
 
-            # 2. Check this exact reward_id hasn't been claimed already
-            existing = await conn.fetchrow(
-                "SELECT id FROM referral_claims WHERE user_id = $1 AND reward_id = $2",
-                user_id, reward_id
-            )
-            if existing:
-                return None
+            # 2. Check coupon stock
+            if reward["stock"] <= 0:
+                return None  # Out of stock — caller should show appropriate message
 
-            # 3. ── CORE FIX: verify remaining (unconsumed) referrals ──────
-            # Count total referrals this user has made
+            # 3. Verify user has enough referral credits
             total_refs = await conn.fetchval(
                 "SELECT COUNT(*) FROM referrals WHERE referrer_id = $1", user_id
             ) or 0
-            # Sum of referrals_needed across ALL past claims (survives reward deletion)
-            consumed_refs = await conn.fetchval(
-                "SELECT COALESCE(SUM(COALESCE(referrals_needed, 0)), 0) "
+            consumed = await conn.fetchval(
+                "SELECT COALESCE(SUM(COALESCE(referrals_needed, 1)), 0) "
                 "FROM referral_claims WHERE user_id = $1",
                 user_id
             ) or 0
-            remaining_refs = int(total_refs) - int(consumed_refs)
-            if remaining_refs < reward["referrals_needed"]:
-                return None  # Not enough new referrals — cannot claim
-            # ────────────────────────────────────────────────────────────
+            pending = int(total_refs) - int(consumed)
+            if pending < reward["referrals_needed"]:
+                return None  # Not enough credits
 
             # 4. Get an unsold code
             code_row = await conn.fetchrow(
@@ -1408,9 +1415,9 @@ async def claim_referral_reward(user_id: int, reward_id: int) -> str | None:
                 reward["coupon_id"]
             )
             if not code_row:
-                return None
+                return None  # No codes left
 
-            # Mark code as sold
+            # 5. Mark code as sold
             await conn.execute(
                 "UPDATE coupon_codes SET is_sold = TRUE, sold_to = $2, sold_at = NOW() WHERE id = $1",
                 code_row["id"], user_id
@@ -1420,8 +1427,7 @@ async def claim_referral_reward(user_id: int, reward_id: int) -> str | None:
                 "UPDATE coupons SET stock = stock - 1 WHERE id = $1",
                 reward["coupon_id"]
             )
-            # Record claim — store referrals_needed so consumption is tracked
-            # permanently even if the referral_rewards row is later deleted.
+            # 6. Record claim — each claim is a separate row (no UNIQUE constraint)
             await conn.execute(
                 "INSERT INTO referral_claims "
                 "(user_id, reward_id, coupon_id, code, referrals_needed) "
