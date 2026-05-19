@@ -2263,7 +2263,7 @@ async def get_referral_leaderboard(limit: int = 50, offset: int = 0) -> list:
             u.telegram_id,
             COALESCE(u.full_name, '') as full_name,
             COALESCE(u.username, '') as username,
-            u.created_at as join_date,
+            u.joined_at as join_date,
             COUNT(r.id) as referral_count,
             COALESCE(SUM(r.commission), 0) as total_commission,
             COALESCE(
@@ -2284,7 +2284,7 @@ async def get_referral_leaderboard(limit: int = 50, offset: int = 0) -> list:
         FROM users u
         INNER JOIN referrals r ON r.referrer_id = u.telegram_id
         GROUP BY u.telegram_id, u.full_name, u.username, 
-                 u.created_at, u.referral_earnings
+                 u.joined_at, u.referral_earnings
         HAVING COUNT(r.id) > 0
         ORDER BY referral_count DESC, total_commission DESC
         LIMIT $1 OFFSET $2

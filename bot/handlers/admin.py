@@ -4755,9 +4755,9 @@ async def _analytics_safe_edit(callback, text: str, reply_markup, page_name: str
         await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=reply_markup)
     except Exception as e:
         error_msg = str(e).lower()
-        logger.warning(f"Analytics {page_name} MarkdownV2 failed: {str(e)[:150]}")
         if "not modified" in error_msg:
             return  # Same content — not a real error
+        logger.warning(f"Analytics {page_name} MarkdownV2 failed: {str(e)[:150]}")
         # Strip MarkdownV2 formatting and retry as plain text
         try:
             plain = re.sub(r'\\(.)', r'\1', text)
@@ -5249,7 +5249,7 @@ async def cb_analytics_trends(callback: types.CallbackQuery):
         avg_orders = total_period_orders / len(daily) if daily else 0
         text += (
             f"   💰 Revenue: *{escape_md(format_currency(avg_rev))}*\n"
-            f"   🛒 Orders: *{avg_orders:.1f}*"
+            f"   🛒 Orders: *{escape_md(f'{avg_orders:.1f}')}*"
         )
 
     await _analytics_safe_edit(
