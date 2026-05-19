@@ -23,9 +23,13 @@ async def cb_browse(callback: types.CallbackQuery):
     free_coupons = await db.get_active_free_coupons()
     free_count = len(free_coupons)
 
+    active_coupons = await db.get_active_coupons()
     has_categories = bool(categorized["categories"])
 
-    if not has_categories and free_count == 0:
+    if not has_categories:
+        categorized = None
+
+    if not active_coupons and free_count == 0:
         from aiogram.types import InlineKeyboardMarkup
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
         await callback.message.edit_text(
@@ -39,12 +43,12 @@ async def cb_browse(callback: types.CallbackQuery):
     text = (
         "🛍️ *VOUCHER SHOP*\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "👉 *Select a category:*"
+        "👉 *Select a product:*" if not has_categories else "👉 *Select a category:*"
     )
     await callback.message.edit_text(
         text,
         parse_mode="MarkdownV2",
-        reply_markup=buying_menu_kb([], free_count, categorized_data=categorized),
+        reply_markup=buying_menu_kb(active_coupons, free_count, categorized_data=categorized),
     )
     await callback.answer()
 

@@ -14,3 +14,14 @@
 2026-05-13 17:58:23 | INFO     | dreamx_bot           | Database pool ready.
 2026-05-13 17:58:23 | INFO     | dreamx_bot           | Order expiry service started (lightweight, no payment polling).
 2026-05-13 17:58:23 | INFO     | dreamx_bot           | Bot started: @Driveupop2bot (ID: 5831000088)
+2026-05-20 00:39:43 | INFO     | dreamx_bot           | Connecting to PostgreSQL...
+2026-05-20 00:39:49 | INFO     | dreamx_bot           | Database schema applied successfully.
+2026-05-20 00:39:52 | INFO     | dreamx_bot           | Database pool ready — schema applied.
+2026-05-20 00:40:21 | INFO     | dreamx_bot           | Starting DreamX Coupon Bot...
+2026-05-20 00:40:22 | INFO     | dreamx_bot           | Connecting to PostgreSQL...
+2026-05-20 00:40:23 | INFO     | dreamx_bot           | Database schema applied successfully.
+2026-05-20 00:40:25 | INFO     | dreamx_bot           | Database pool ready — schema applied.
+2026-05-20 00:40:25 | INFO     | dreamx_bot           | Loaded 1 DB admins into cache.
+2026-05-20 00:40:26 | INFO     | dreamx_bot           | Startup stock sync completed.
+2026-05-20 00:40:26 | INFO     | dreamx_bot           | Order expiry service started (lightweight, no payment polling).
+2026-05-20 00:40:26 | INFO     | dreamx_bot           | Bot started: @Lootpaglubot (ID: 8825167443)

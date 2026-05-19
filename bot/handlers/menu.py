@@ -96,9 +96,13 @@ async def text_buy_vouchers(message: types.Message):
     free_coupons = await db.get_active_free_coupons()
     free_count = len(free_coupons)
 
+    active_coupons = await db.get_active_coupons()
     has_categories = bool(categorized["categories"])
 
-    if not has_categories and free_count == 0:
+    if not has_categories:
+        categorized = None
+
+    if not active_coupons and free_count == 0:
         await message.answer(
             "📭 *No coupons available right now\\.*\n\nCheck back later\\!",
             parse_mode="MarkdownV2",
@@ -108,12 +112,12 @@ async def text_buy_vouchers(message: types.Message):
     text = (
         "🛍️ *VOUCHER SHOP*\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "👉 *Select a category:*"
+        "👉 *Select a product:*" if not has_categories else "👉 *Select a category:*"
     )
     await message.answer(
         text,
         parse_mode="MarkdownV2",
-        reply_markup=buying_menu_kb([], free_count, categorized_data=categorized),
+        reply_markup=buying_menu_kb(active_coupons, free_count, categorized_data=categorized),
     )
 
 
