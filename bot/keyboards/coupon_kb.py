@@ -37,6 +37,37 @@ def buying_menu_kb(coupons: list, free_coupon_count: int = 0, page: int = 0,
                     callback_data=f"browse_cat:{cat['id']}"
                 )
             ])
+            
+        # ── Uncategorized Items ──
+        uncategorized = [c for c in coupons if not c.get("category")]
+        if uncategorized:
+            total_items = len(uncategorized)
+            start = page * ITEMS_PER_PAGE
+            end = start + ITEMS_PER_PAGE
+            page_items = uncategorized[start:end]
+
+            for c in page_items:
+                stock = c["stock"]
+                disc = c.get("discounted_price", 0)
+                if stock > 0:
+                    label = f"🛍️ {c['title']} | ₹{disc:.1f} | 📦 {stock}"
+                else:
+                    label = f"🛍️ {c['title']} | ₹{disc:.1f} | ❌ Sold Out"
+                buttons.append([
+                    InlineKeyboardButton(
+                        text=label,
+                        callback_data=f"coupon_detail:{c['id']}" if stock > 0 else "noop"
+                    )
+                ])
+
+            nav_row = []
+            if page > 0:
+                nav_row.append(InlineKeyboardButton(text="◀️ Previous", callback_data=f"buy_page:{page - 1}"))
+            if end < total_items:
+                nav_row.append(InlineKeyboardButton(text="Next ▶️", callback_data=f"buy_page:{page + 1}"))
+            if nav_row:
+                buttons.append(nav_row)
+
     else:
         # ── Fallback: Flat product list (no categories) ──
         total_items = len(coupons)

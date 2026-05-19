@@ -825,16 +825,26 @@ async def cb_buy_page(callback: types.CallbackQuery):
     page = int(callback.data.split(":")[1])
     from bot.services.coupon_service import list_active_coupons
     from bot.keyboards.coupon_kb import buying_menu_kb
+    from bot.database import queries as db
 
     coupons = await list_active_coupons()
     free_coupons = await db.get_active_free_coupons()
     free_count = len(free_coupons)
+    
+    categorized = await db.get_active_coupons_categorized()
+    has_categories = bool(categorized["categories"])
+    if not has_categories:
+        categorized = None
 
-    text = "🛒 *Available Coupons:*"
+    text = (
+        "🛍️ *VOUCHER SHOP*\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "👉 *Select a product:*" if not has_categories else "👉 *Select a category:*"
+    )
     await callback.message.edit_text(
         text,
         parse_mode="MarkdownV2",
-        reply_markup=buying_menu_kb(coupons, free_count, page),
+        reply_markup=buying_menu_kb(coupons, free_count, page, categorized_data=categorized),
     )
     await callback.answer()
 
