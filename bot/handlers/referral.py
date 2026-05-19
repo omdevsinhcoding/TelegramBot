@@ -221,24 +221,25 @@ async def cb_ref_claim(callback: types.CallbackQuery):
         await callback.answer("Reward not found.", show_alert=True)
         return
 
-    if pending_credits < reward["referrals_needed"]:
+    if pending_credits < 1:
         await callback.answer(
-            f"Not enough credits. You have {pending_credits}, need {reward['referrals_needed']}.",
+            f"Not enough credits. You have {pending_credits} credit(s). Need at least 1 to claim.",
             show_alert=True
         )
         return
 
-    if reward["stock"] <= 0:
-        await callback.answer(
-            "⚠️ This coupon is out of stock. Admin will add new coupons soon. Your credits are saved!",
-            show_alert=True
-        )
+    if not reward.get("is_active", False):
+        await callback.answer("This reward is no longer active.", show_alert=True)
         return
 
     # Try to claim
     code = await db.claim_referral_reward(user_id, reward_id)
     if not code:
-        await callback.answer("Could not claim. Out of stock or no credits.", show_alert=True)
+        # Could be out of stock or race condition — credits are NOT consumed on failure
+        await callback.answer(
+            "⚠️ Could not claim — coupon may be out of stock. Your credits are safe! Try again.",
+            show_alert=True
+        )
         return
 
     # Create a reward order so it appears in Order History
@@ -368,7 +369,8 @@ async def process_referral_on_purchase(user_id: int, order_amount, bot=None):
         if commission_amt <= 0:
             return
 
-        # Credit commission to referrer's wallet
+        # Credit commission to referrer's wallet (atomic)
+        bal_before = await db.get_wallet_balance(referrer_id)
         await db.add_referral_earnings(referrer_id, commission_amt)
 
         # Update the referral row's commission total
@@ -379,13 +381,13 @@ async def process_referral_on_purchase(user_id: int, order_amount, bot=None):
             referrer_id, user_id, commission_amt
         )
 
-        # Log wallet transaction
+        # Log wallet transaction with accurate before/after balances
         try:
-            bal = await db.get_wallet_balance(referrer_id)
+            bal_after = await db.get_wallet_balance(referrer_id)
             await db.add_wallet_transaction(
                 referrer_id, commission_amt, "referral_commission",
-                bal_before=bal - commission_amt,
-                bal_after=bal,
+                bal_before=bal_before,
+                bal_after=bal_after,
                 reference=f"commission_from_{user_id}",
                 description=f"{commission_pct}% commission on ₹{order_amount} purchase",
             )
@@ -425,7 +427,7 @@ async def process_referral_on_purchase(user_id: int, order_amount, bot=None):
                     f"👤 {buyer_name} made a purchase\\!\n"
                     f"💵 *₹{escape_md(str(commission_amt))}* "
                     f"\\({escape_md(str(commission_pct))}%\\) added to your wallet\\!\n"
-                    f"💰 Balance: *₹{escape_md(str(round(float(bal), 2)))}*\n\n"
+                    f"💰 Balance: *₹{escape_md(str(round(float(bal_after), 2)))}*\n\n"
                     f"🚀 _Keep sharing to earn more\\!_"
                 )
                 await bot.send_message(referrer_id, notify_text, parse_mode="MarkdownV2")
@@ -509,9 +511,10 @@ async def msg_ref_enter_code(message: types.Message, state: FSMContext):
                     await db.add_referral_earnings(referrer_id, reward_amt)
                     logger.info(f"[REFERRAL] ₹{reward_amt} credited to {referrer_id} (manual code entry)")
 
-                    # Log wallet transaction
+                    # Log wallet transaction with accurate balances
                     try:
                         bal = await db.get_wallet_balance(referrer_id)
+                        # add_referral_earnings already added reward_amt, so bal is post-credit
                         await db.add_wallet_transaction(
                             referrer_id, reward_amt, "referral_reward",
                             bal_before=bal - reward_amt,

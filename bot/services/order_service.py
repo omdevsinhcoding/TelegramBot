@@ -174,22 +174,23 @@ async def cancel_order(order_id: str, bot=None) -> bool:
     if payment_method and payment_method.startswith("combo_"):
         user_id = order["user_id"]
         try:
-            # Find the wallet deduction for this order
+            # Find the wallet deduction for this specific order
+            # Search by order_id first (most reliable), then fallback to coupon_id pattern
             pool = await db.get_pool()
             wt = await pool.fetchrow(
                 """SELECT ABS(amount) as amt, balance_after FROM wallet_transactions
-                   WHERE user_id = $1 AND reference LIKE $2 AND txn_type = 'purchase'
+                   WHERE user_id = $1 AND txn_type = 'purchase'
+                     AND (reference LIKE $2 OR reference LIKE $3)
                    ORDER BY created_at DESC LIMIT 1""",
-                user_id, f"combo_coupon_{coupon_id}%"
+                user_id, f"%{order_id}%", f"combo_coupon_{coupon_id}%"
             )
             if wt:
                 refund_amt = float(wt["amt"])
-                current_bal = await db.get_wallet_balance(user_id)
-                new_bal = current_bal + refund_amt
-                await db.update_wallet_balance(user_id, new_bal)
+                # Use atomic credit to prevent race condition
+                result = await db.credit_wallet_atomic(user_id, refund_amt)
                 await db.add_wallet_transaction(
                     user_id, refund_amt, "refund",
-                    bal_before=current_bal, bal_after=new_bal,
+                    bal_before=result["balance_before"], bal_after=result["balance_after"],
                     reference=f"cancel_{order_id}",
                     description=f"Refund for cancelled combo order {order_id}",
                 )
@@ -231,18 +232,18 @@ async def expire_orders(bot=None):
             try:
                 wt = await pool.fetchrow(
                     """SELECT ABS(amount) as amt FROM wallet_transactions
-                       WHERE user_id = $1 AND reference LIKE $2 AND txn_type = 'purchase'
+                       WHERE user_id = $1 AND txn_type = 'purchase'
+                         AND (reference LIKE $2 OR reference LIKE $3)
                        ORDER BY created_at DESC LIMIT 1""",
-                    co["user_id"], f"combo_coupon_{co['coupon_id']}%"
+                    co["user_id"], f"%{co['order_id']}%", f"combo_coupon_{co['coupon_id']}%"
                 )
                 if wt:
                     refund_amt = float(wt["amt"])
-                    current_bal = await db.get_wallet_balance(co["user_id"])
-                    new_bal = current_bal + refund_amt
-                    await db.update_wallet_balance(co["user_id"], new_bal)
+                    # Use atomic credit for race-safe refund
+                    result = await db.credit_wallet_atomic(co["user_id"], refund_amt)
                     await db.add_wallet_transaction(
                         co["user_id"], refund_amt, "refund",
-                        bal_before=current_bal, bal_after=new_bal,
+                        bal_before=result["balance_before"], bal_after=result["balance_after"],
                         reference=f"expire_{co['order_id']}",
                         description=f"Refund for expired combo order {co['order_id']}",
                     )

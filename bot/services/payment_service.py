@@ -89,14 +89,15 @@ async def expire_orders_loop(bot: Bot):
                             except Exception:
                                 pass
 
-                        # Notify user
+                        # Notify user — include support contact in case they already paid
                         try:
                             oid = escape_md(order_id)
                             await bot.send_message(
                                 user_id,
                                 f"⏰ *Payment Expired*\n\n"
                                 f"Order `{oid}` has expired\\.\n"
-                                f"Please create a new order\\.",
+                                f"Please create a new order\\.\n\n"
+                                f"_If you already made the payment, please contact support with your UTR/transaction ID and we will resolve it\\._",
                                 parse_mode="MarkdownV2",
                             )
                         except Exception:
@@ -107,6 +108,20 @@ async def expire_orders_loop(bot: Bot):
 
         except Exception as e:
             logger.error(f"Expiry loop error: {e}\n{traceback.format_exc()}")
+
+        # Periodic stock sync every 5th cycle (~2.5 minutes) to prevent drift
+        try:
+            if not hasattr(expire_orders_loop, '_cycle_count'):
+                expire_orders_loop._cycle_count = 0
+            expire_orders_loop._cycle_count += 1
+            if expire_orders_loop._cycle_count % 5 == 0:
+                try:
+                    await db.sync_all_coupon_stocks()
+                    logger.debug("Periodic stock sync completed.")
+                except Exception as sync_err:
+                    logger.warning(f"Periodic stock sync failed: {sync_err}")
+        except Exception:
+            pass
 
         # Check every 30 seconds — lightweight, no API calls
         try:

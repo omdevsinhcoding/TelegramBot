@@ -96,9 +96,19 @@ async def cb_browse_category(callback: types.CallbackQuery):
 @error_handler
 async def cb_category_page(callback: types.CallbackQuery):
     """Handle pagination within a category view."""
-    parts = callback.data.split(":")
-    cat_name = parts[1]
-    page = int(parts[2])
+    # Use rsplit with maxsplit=1 to safely extract page from the end
+    # This handles category names that contain colons (e.g., "A:B")
+    raw = callback.data[len("cat_page:"):]  # strip prefix
+    last_colon = raw.rfind(":")
+    if last_colon == -1:
+        await callback.answer("Invalid page data.", show_alert=True)
+        return
+    cat_name = raw[:last_colon]
+    try:
+        page = int(raw[last_colon + 1:])
+    except ValueError:
+        await callback.answer("Invalid page number.", show_alert=True)
+        return
 
     coupons = await db.get_active_coupons_in_category(cat_name)
     if not coupons:

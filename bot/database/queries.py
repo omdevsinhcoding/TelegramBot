@@ -71,11 +71,53 @@ async def get_wallet_balance(telegram_id: int) -> float:
 
 
 async def update_wallet_balance(telegram_id: int, new_balance: float):
+    """Set wallet balance to exact value. AVOID in concurrent contexts.
+    
+    For concurrent-safe operations, use credit_wallet_atomic() or debit_wallet_atomic() instead.
+    This function is kept for admin overrides and migration compatibility.
+    """
     pool = await get_pool()
     await pool.execute(
         "UPDATE users SET wallet_balance = $2, updated_at = NOW() WHERE telegram_id = $1",
         telegram_id, new_balance
     )
+
+
+async def credit_wallet_atomic(telegram_id: int, amount: float) -> dict:
+    """Atomically add amount to wallet balance. Race-condition safe.
+    
+    Returns dict with 'balance_before' and 'balance_after'.
+    """
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        """UPDATE users 
+           SET wallet_balance = wallet_balance + $2, updated_at = NOW() 
+           WHERE telegram_id = $1
+           RETURNING wallet_balance - $2 AS balance_before, wallet_balance AS balance_after""",
+        telegram_id, amount
+    )
+    if row:
+        return {"balance_before": float(row["balance_before"]), "balance_after": float(row["balance_after"])}
+    return {"balance_before": 0.0, "balance_after": 0.0}
+
+
+async def debit_wallet_atomic(telegram_id: int, amount: float) -> dict | None:
+    """Atomically deduct amount from wallet. Race-condition safe.
+    
+    Returns dict with 'balance_before' and 'balance_after', or None if insufficient funds.
+    The WHERE clause ensures balance never goes negative.
+    """
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        """UPDATE users 
+           SET wallet_balance = wallet_balance - $2, updated_at = NOW() 
+           WHERE telegram_id = $1 AND wallet_balance >= $2
+           RETURNING wallet_balance + $2 AS balance_before, wallet_balance AS balance_after""",
+        telegram_id, amount
+    )
+    if row:
+        return {"balance_before": float(row["balance_before"]), "balance_after": float(row["balance_after"])}
+    return None  # Insufficient funds
 
 
 async def add_wallet_transaction(user_id: int, amount: float, txn_type: str,
@@ -1313,22 +1355,21 @@ async def update_referral_reward_count(reward_id: int, count: int):
 async def get_claimable_rewards(user_id: int, ref_count: int) -> list:
     """Get rewards user can claim based on their referral credit balance.
 
-    Credit system:
+    Credit system (1 referral = 1 credit = 1 claim):
       - Each referral earns 1 credit
-      - Each claim costs 1 credit (referrals_needed, typically 1)
-      - pending_credits = total_refs - SUM(referrals_needed of all claims)
-      - If pending_credits > 0, user can claim any active reward with stock
+      - Each claim costs exactly 1 credit (regardless of referrals_needed)
+      - referrals_needed = minimum referral count to UNLOCK the reward
+      - pending_credits = total_refs - COUNT(all claims)
+      - If pending_credits > 0 AND total_refs >= referrals_needed, user can claim
 
-    Returns active rewards that have coupon stock available.
-    The caller should also check pending_credits to know HOW MANY claims
-    the user can make.
+    Returns active rewards that have coupon stock available AND that the user
+    has unlocked (total refs >= referrals_needed).
     """
     pool = await get_pool()
 
-    # Calculate pending credits
+    # Calculate pending credits: 1 claim = 1 credit consumed
     consumed = await pool.fetchval(
-        "SELECT COALESCE(SUM(COALESCE(referrals_needed, 1)), 0) "
-        "FROM referral_claims WHERE user_id = $1",
+        "SELECT COUNT(*) FROM referral_claims WHERE user_id = $1",
         user_id
     ) or 0
     pending_credits = ref_count - int(consumed)
@@ -1336,15 +1377,17 @@ async def get_claimable_rewards(user_id: int, ref_count: int) -> list:
     if pending_credits <= 0:
         return []
 
-    # Return active rewards that have stock
+    # Return active rewards that have stock AND that the user has unlocked
     return await pool.fetch(
         """
         SELECT rr.*, c.title, c.stock
         FROM referral_rewards rr
         JOIN coupons c ON rr.coupon_id = c.id
         WHERE rr.is_active = TRUE
+          AND rr.referrals_needed <= $1
         ORDER BY rr.referrals_needed ASC
         """,
+        ref_count,
     )
 
 async def get_user_referral_claims(user_id: int) -> list:
@@ -1359,15 +1402,16 @@ async def get_user_referral_claims(user_id: int) -> list:
 async def get_referral_pending_credits(user_id: int) -> int:
     """Get user's pending referral claim credits.
     
-    pending = total_referrals - total_consumed_credits
+    Each referral = 1 credit earned.
+    Each claim = 1 credit consumed (regardless of referrals_needed).
+    pending = total_referrals - COUNT(claims)
     """
     pool = await get_pool()
     total_refs = await pool.fetchval(
         "SELECT COUNT(*) FROM referrals WHERE referrer_id = $1", user_id
     ) or 0
     consumed = await pool.fetchval(
-        "SELECT COALESCE(SUM(COALESCE(referrals_needed, 1)), 0) "
-        "FROM referral_claims WHERE user_id = $1",
+        "SELECT COUNT(*) FROM referral_claims WHERE user_id = $1",
         user_id
     ) or 0
     return max(0, int(total_refs) - int(consumed))
@@ -1376,8 +1420,10 @@ async def get_referral_pending_credits(user_id: int) -> int:
 async def claim_referral_reward(user_id: int, reward_id: int) -> str | None:
     """Claim a referral reward — credit-based system.
 
-    1 referral = 1 credit. Each claim costs reward.referrals_needed credits (usually 1).
-    Users can claim the same reward multiple times as long as they have credits.
+    1 referral = 1 credit. Each claim costs exactly 1 credit.
+    referrals_needed = minimum referral count to UNLOCK the reward (threshold).
+    Users can claim the same reward multiple times as long as they have credits
+    AND their total refs >= referrals_needed.
     Returns the coupon code string, or None if claim failed.
     """
     pool = await get_pool()
@@ -1396,18 +1442,22 @@ async def claim_referral_reward(user_id: int, reward_id: int) -> str | None:
             if reward["stock"] <= 0:
                 return None  # Out of stock — caller should show appropriate message
 
-            # 3. Verify user has enough referral credits
+            # 3. Verify user has unlocked this reward AND has pending credits
             total_refs = await conn.fetchval(
                 "SELECT COUNT(*) FROM referrals WHERE referrer_id = $1", user_id
             ) or 0
+            # Check unlock threshold: user must have at least referrals_needed total refs
+            if int(total_refs) < reward["referrals_needed"]:
+                return None  # Reward not unlocked yet
+
+            # Check pending credits: 1 claim = 1 credit consumed
             consumed = await conn.fetchval(
-                "SELECT COALESCE(SUM(COALESCE(referrals_needed, 1)), 0) "
-                "FROM referral_claims WHERE user_id = $1",
+                "SELECT COUNT(*) FROM referral_claims WHERE user_id = $1",
                 user_id
             ) or 0
             pending = int(total_refs) - int(consumed)
-            if pending < reward["referrals_needed"]:
-                return None  # Not enough credits
+            if pending < 1:
+                return None  # No credits left
 
             # 4. Get an unsold code
             code_row = await conn.fetchrow(
@@ -1424,10 +1474,11 @@ async def claim_referral_reward(user_id: int, reward_id: int) -> str | None:
             )
             # Decrease stock
             await conn.execute(
-                "UPDATE coupons SET stock = stock - 1 WHERE id = $1",
+                "UPDATE coupons SET stock = stock - 1 WHERE id = $1 AND stock > 0",
                 reward["coupon_id"]
             )
-            # 6. Record claim — each claim is a separate row (no UNIQUE constraint)
+            # 6. Record claim — each claim costs 1 credit
+            #    Store referrals_needed for historical reference only
             await conn.execute(
                 "INSERT INTO referral_claims "
                 "(user_id, reward_id, coupon_id, code, referrals_needed) "

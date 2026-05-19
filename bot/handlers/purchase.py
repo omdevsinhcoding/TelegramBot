@@ -922,9 +922,10 @@ async def msg_bharatpe_utr(message: types.Message, state: FSMContext):
     # Check if UTR was already used by a DIFFERENT order (prevents cross-order reuse)
     # But allow the SAME order to resubmit the same UTR (retry scenario)
     # IMPORTANT: Only check bharatpe/paytm gateway txns — Razorpay stores link_id in utr column
+    # Also check pending/initiated to prevent concurrent submission of same UTR to multiple orders
     pool = await db.get_pool()
     existing = await pool.fetchrow(
-        "SELECT order_id, status FROM transactions WHERE utr = $1 AND status = 'success' AND gateway IN ('bharatpe', 'paytm')", utr
+        "SELECT order_id, status FROM transactions WHERE utr = $1 AND status IN ('success', 'initiated', 'pending') AND gateway IN ('bharatpe', 'paytm')", utr
     )
     if existing and existing["order_id"] != order_id:
         oid_esc = escape_md(existing["order_id"])

@@ -31,15 +31,39 @@ router = Router()
 
 
 async def _safe_edit_or_send(message: types.Message, text: str, reply_markup=None, parse_mode="MarkdownV2"):
-    """Try to edit the message text; if it fails (e.g. document/photo message), delete and send new."""
-    try:
-        await message.edit_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
-    except Exception:
+    """Try to edit the message text; if it fails (e.g. document/photo message), delete and send new.
+    
+    If MarkdownV2 parsing fails, retries with plain text (strip formatting).
+    """
+    import re
+
+    async def _try_send(txt, pm):
         try:
-            await message.delete()
-        except Exception:
-            pass
-        await message.answer(text, parse_mode=parse_mode, reply_markup=reply_markup)
+            await message.edit_text(txt, parse_mode=pm, reply_markup=reply_markup)
+        except Exception as edit_err:
+            if "message is not modified" in str(edit_err).lower():
+                return  # Same content — not an error
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            await message.answer(txt, parse_mode=pm, reply_markup=reply_markup)
+
+    try:
+        await _try_send(text, parse_mode)
+    except Exception as e:
+        error_str = str(e).lower()
+        if "parse" in error_str or "can't" in error_str or "markdown" in error_str or "character" in error_str:
+            # MarkdownV2 parse error — strip formatting and retry as plain text
+            plain = re.sub(r'\\(.)', r'\1', text)      # remove escapes
+            plain = re.sub(r'[*_`~]', '', plain)        # remove formatting chars
+            logger.warning(f"MarkdownV2 parse failed, retrying plain: {str(e)[:100]}")
+            try:
+                await _try_send(plain, None)
+            except Exception:
+                pass  # Even plain text failed
+        else:
+            logger.error(f"_safe_edit_or_send failed: {e}")
 
 
 # ── FSM States ────────────────────────────────────────────
@@ -682,6 +706,24 @@ async def msg_upload_codes_file(message: types.Message, state: FSMContext):
         f"✅ Uploaded *{inserted}* codes from file\\!\n"
         f"📦 Updated stock: *{new_stock}*{dup_note}",
         parse_mode="MarkdownV2", reply_markup=kb,
+    )
+
+
+# Fallback: admin sent text instead of a file in upload state
+@router.message(AdminStates.upload_codes_file)
+@error_handler
+async def msg_upload_codes_fallback(message: types.Message, state: FSMContext):
+    """Handle non-document messages during file upload state."""
+    data = await state.get_data()
+    coupon_id = data.get("upload_codes_coupon_id", "")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [back_button(f"admin_coupon_edit:{coupon_id}"), admin_cancel_button()]
+    ])
+    await message.answer(
+        "⚠️ Please send a *\\.txt* file, not text\\.\n\n"
+        "_Or press Cancel to go back\\._",
+        parse_mode="MarkdownV2",
+        reply_markup=kb,
     )
 
 
@@ -1905,9 +1947,23 @@ async def cb_bc_send_now(callback: types.CallbackQuery, state: FSMContext):
             logger.debug(f"Broadcast to {u['telegram_id']} failed: {e}")
             failed += 1
 
-        # Rate limit: small delay every 20 messages
-        if (sent + failed) % 20 == 0:
+        # Per-message delay to stay under Telegram's 30 msg/sec limit
+        await asyncio.sleep(0.05)
+
+        # Batch pause + progress update every 25 messages
+        processed = sent + failed
+        if processed % 25 == 0:
             await asyncio.sleep(1)
+            # Update progress so admin doesn't see a frozen screen
+            try:
+                pct = round(processed / total * 100) if total else 0
+                await progress_msg.edit_text(
+                    f"📢 Broadcasting\\.\\.\\. {pct}%\\n"
+                    f"✅ {sent} sent, ❌ {failed} failed \\({processed}/{total}\\)",
+                    parse_mode="MarkdownV2",
+                )
+            except Exception:
+                pass
 
     await db.update_broadcast(bid, sent, failed, "completed")
     await db.add_admin_log(

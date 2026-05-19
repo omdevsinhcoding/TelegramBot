@@ -37,11 +37,15 @@ MENU_BUTTON_TEXTS = frozenset({
 class FSMClearMiddleware(BaseMiddleware):
     """Clear FSM state when a known menu button or command is pressed during text input.
     
-    This solves the systemic issue where pressing a keyboard button during
-    any FSM text-input state (BharatPe UTR entry, admin field edit, referral
-    code entry, etc.) causes the FSM handler to intercept and misinterpret
-    the menu button text as user input.
+    Also handles non-text messages (photos, stickers, etc.) sent during
+    text-input FSM states — clears the state so the user doesn't get stuck.
     """
+
+    # FSM states that expect a document (not text) — these should NOT be cleared
+    # when a non-text message is sent.
+    DOCUMENT_STATES = frozenset({
+        "AdminStates:upload_codes_file",
+    })
 
     async def __call__(
         self,
@@ -49,11 +53,31 @@ class FSMClearMiddleware(BaseMiddleware):
         event: Message,
         data: Dict[str, Any],
     ) -> Any:
-        # Only process text messages in private chats
-        if not isinstance(event, Message) or not event.text:
+        if not isinstance(event, Message):
             return await handler(event, data)
 
         if event.chat.type != "private":
+            return await handler(event, data)
+
+        state: FSMContext | None = data.get("state")
+
+        # Handle non-text messages during FSM states
+        if not event.text:
+            if state:
+                try:
+                    current_state = await state.get_state()
+                    if current_state is not None:
+                        # Don't clear states that legitimately expect documents/media
+                        if current_state in self.DOCUMENT_STATES:
+                            return await handler(event, data)
+                        # Clear stale text-input state on non-text message
+                        logger.info(
+                            f"[FSM_CLEAR] Cleared stale state '{current_state}' for user "
+                            f"{event.from_user.id} (sent non-text message)"
+                        )
+                        await state.clear()
+                except Exception as e:
+                    logger.warning(f"[FSM_CLEAR] Error checking state: {e}")
             return await handler(event, data)
 
         text = event.text.strip()
@@ -63,7 +87,6 @@ class FSMClearMiddleware(BaseMiddleware):
         is_command = text.startswith("/")
 
         if is_menu_button or is_command:
-            state: FSMContext | None = data.get("state")
             if state:
                 try:
                     current_state = await state.get_state()
