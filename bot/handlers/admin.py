@@ -188,16 +188,36 @@ async def cb_admin_panel(callback: types.CallbackQuery):
     await callback.answer()
 
 
+@router.callback_query(F.data == "noop")
+async def cb_noop(callback: types.CallbackQuery):
+    """No-op button (e.g. page indicators)."""
+    await callback.answer()
+
 # ── Manage Coupons ────────────────────────────────────────
 
-@router.callback_query(F.data == "admin_coupons")
+@router.callback_query(F.data.regexp(r"^admin_coupons(:\d+)?$"))
 @admin_only
 @error_handler
 async def cb_admin_coupons(callback: types.CallbackQuery):
-    coupons = await list_all_coupons()
-    text = "📦 *Manage Coupons*\n\nSelect a coupon to edit or add a new one:"
+    PER_PAGE = 20
+    parts = callback.data.split(":")
+    page = int(parts[1]) if len(parts) > 1 else 1
+
+    total = await db.get_coupons_count()
+    total_pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
+    page = max(1, min(page, total_pages))
+    offset = (page - 1) * PER_PAGE
+
+    coupons = await db.get_coupons_paginated(PER_PAGE, offset)
+    coupons = [dict(c) for c in coupons]
+
+    text = (
+        f"📦 *Manage Coupons* — Page {page}/{total_pages}\n"
+        f"📊 Total: *{total}* products\n\n"
+        f"Select a coupon to edit or add a new one:"
+    )
     await _safe_edit_or_send(
-        callback.message, text, reply_markup=admin_coupons_kb(coupons)
+        callback.message, text, reply_markup=admin_coupons_kb(coupons, page, total_pages)
     )
     await callback.answer()
 
@@ -2608,8 +2628,11 @@ async def cb_admin_referral_settings(callback: types.CallbackQuery):
         buttons.append([InlineKeyboardButton(text="✏️ Edit Reward Amount", callback_data="admin_ref_edit_reward_amount")])
         buttons.append([InlineKeyboardButton(text="🔒 Edit Earning Cap", callback_data="admin_ref_edit_cap")])
     elif mode == "code_reward":
-        buttons.append([InlineKeyboardButton(text="➕ Add Reward Coupon", callback_data="admin_ref_add_reward")])
         rewards = await db.get_referral_rewards()
+        active_rewards = [r for r in rewards if r["is_active"]]
+        # Dynamic button: "Replace" if reward exists, "Add" if none
+        add_btn_text = "🔄 Replace Reward Coupon" if active_rewards else "➕ Add Reward Coupon"
+        buttons.append([InlineKeyboardButton(text=add_btn_text, callback_data="admin_ref_add_reward")])
         for r in rewards:
             si = "🟢" if r["is_active"] else "🔴"
             buttons.append([InlineKeyboardButton(
@@ -3027,6 +3050,41 @@ async def msg_ref_earning_cap_input(message: types.Message, state: FSMContext):
 @admin_only
 @error_handler
 async def cb_ref_add_reward(callback: types.CallbackQuery):
+    """Show confirmation if a reward already exists, then coupon selection."""
+    existing_rewards = await db.get_referral_rewards()
+    active_rewards = [r for r in existing_rewards if r["is_active"]]
+
+    if active_rewards:
+        # Show confirmation before replacing
+        current = active_rewards[0]
+        title_esc = escape_md(current["title"])
+        await callback.message.edit_text(
+            f"⚠️ *Replace Existing Reward?*\n\n"
+            f"Current reward: 🎁 *{title_esc}* \\({current['referrals_needed']} refs\\)\n\n"
+            f"Adding a new reward will *remove the current one*\\.\n"
+            f"Do you want to continue?",
+            parse_mode="MarkdownV2",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Yes, Replace", callback_data="admin_ref_replace_confirm"),
+                 InlineKeyboardButton(text="❌ Cancel", callback_data="admin_referral_settings")],
+            ]),
+        )
+        await callback.answer()
+        return
+
+    # No existing rewards — go straight to coupon selection
+    await _show_reward_coupon_picker(callback)
+
+
+@router.callback_query(F.data == "admin_ref_replace_confirm")
+@admin_only
+@error_handler
+async def cb_ref_replace_confirm(callback: types.CallbackQuery):
+    """Admin confirmed replacing the existing reward. Show coupon picker."""
+    await _show_reward_coupon_picker(callback)
+
+
+async def _show_reward_coupon_picker(callback: types.CallbackQuery):
     """Show all available coupons for admin to pick as a reward."""
     coupons = await list_all_coupons()
     existing_rewards = await db.get_referral_rewards()
@@ -3105,26 +3163,25 @@ async def msg_ref_reward_count(message: types.Message, state: FSMContext):
     elif "ref_reward_coupon_id" in data:
         coupon_id = data["ref_reward_coupon_id"]
 
-        # ── Single-active-reward policy: deactivate all existing rewards ──
+        # ── Single-reward policy: DELETE all existing rewards ──
         existing = await db.get_referral_rewards()
         for r in existing:
-            if r["is_active"]:
-                await db.toggle_referral_reward(r["id"])
-                logger.info(f"Auto-deactivated reward {r['id']} ({r['title']}) for single-reward policy")
+            await db.remove_referral_reward(r["id"])
+            logger.info(f"Auto-deleted reward {r['id']} ({r['title']}) for single-reward policy")
 
         await db.add_referral_reward(coupon_id, val)
         coupon = await get_coupon_detail(coupon_id)
         title = coupon["title"] if coupon else "Unknown"
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_referral_settings")]])
 
-        deactivated_msg = ""
-        if existing and any(r["is_active"] for r in existing):
-            deactivated_msg = "\n⚠️ Previous rewards were auto\\-deactivated\\."
+        replaced_msg = ""
+        if existing:
+            replaced_msg = "\n⚠️ Previous reward was replaced\\."
 
         await message.answer(
-            f"✅ Reward added\\!\n\n"
+            f"✅ Reward set\\!\n\n"
             f"🏷️ {escape_md(title)} — needs {val} referrals to claim"
-            f"{deactivated_msg}",
+            f"{replaced_msg}",
             parse_mode="MarkdownV2", reply_markup=kb
         )
 

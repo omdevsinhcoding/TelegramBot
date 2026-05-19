@@ -165,6 +165,21 @@ async def get_all_coupons():
     return await pool.fetch("SELECT * FROM coupons ORDER BY id DESC")
 
 
+async def get_coupons_paginated(limit: int = 20, offset: int = 0):
+    """Get coupons with pagination for admin panel."""
+    pool = await get_pool()
+    return await pool.fetch(
+        "SELECT * FROM coupons ORDER BY id DESC LIMIT $1 OFFSET $2",
+        limit, offset
+    )
+
+
+async def get_coupons_count() -> int:
+    """Get total number of coupons."""
+    pool = await get_pool()
+    return await pool.fetchval("SELECT COUNT(*) FROM coupons") or 0
+
+
 async def update_coupon(coupon_id: int, **fields):
     pool = await get_pool()
     set_parts = []

@@ -41,7 +41,7 @@ def admin_panel_kb() -> InlineKeyboardMarkup:
     ])
 
 
-def admin_coupons_kb(coupons: list) -> InlineKeyboardMarkup:
+def admin_coupons_kb(coupons: list, page: int = 1, total_pages: int = 1) -> InlineKeyboardMarkup:
     buttons = []
     for c in coupons:
         status = "🟢" if c["is_active"] else "🔴"
@@ -52,6 +52,15 @@ def admin_coupons_kb(coupons: list) -> InlineKeyboardMarkup:
                 callback_data=f"admin_coupon_edit:{c['id']}"
             )
         ])
+    # Pagination nav
+    if total_pages > 1:
+        nav_row = []
+        if page > 1:
+            nav_row.append(InlineKeyboardButton(text="⬅️ Previous", callback_data=f"admin_coupons:{page - 1}"))
+        nav_row.append(InlineKeyboardButton(text=f"📄 {page}/{total_pages}", callback_data="noop"))
+        if page < total_pages:
+            nav_row.append(InlineKeyboardButton(text="Next ➡️", callback_data=f"admin_coupons:{page + 1}"))
+        buttons.append(nav_row)
     buttons.append([
         InlineKeyboardButton(text="➕ Add New Coupon", callback_data="admin_coupon_add")
     ])

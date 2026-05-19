@@ -157,6 +157,22 @@ async def cmd_start(message: types.Message, state: FSMContext):
                                     logger.warning(f"[REFERRAL] notification failed: {n_err}")
                         else:
                             logger.info("[REFERRAL] System inactive — no reward credited.")
+
+                        # ── Notify the REFERRED USER (User 2) ──
+                        try:
+                            referrer_esc = escape_md(referrer_name)
+                            referred_notify = (
+                                f"🎉 *Welcome\\!*\n\n"
+                                f"🔗 You joined via *{referrer_esc}*'s referral link\\!\n"
+                                f"🎁 Your friend will receive a reward for inviting you\\.\n\n"
+                                f"🛍️ _Start shopping and enjoy the deals\\!_"
+                            )
+                            await message.bot.send_message(
+                                user.id, referred_notify, parse_mode="MarkdownV2"
+                            )
+                        except Exception as n2_err:
+                            logger.warning(f"[REFERRAL] referred user notification failed: {n2_err}")
+
                     else:
                         logger.info(f"[REFERRAL] record_referral returned False for {user.id}")
     except Exception as e:
