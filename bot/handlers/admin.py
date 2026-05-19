@@ -1355,7 +1355,7 @@ async def cb_admin_orders(callback: types.CallbackQuery):
         lines.append(
             f"{status_dot} *{i}\\. {name}*\n"
             f"   🆔 `{uid}`\n"
-            f"   📦 {orders} orders \\| ✅ {paid} paid \\| 💰 {spent}"
+            f"   📦 {orders} orders \\( ✅ {paid} paid \\) 💰 {spent}"
         )
 
     text = "\n".join(lines)
@@ -1413,7 +1413,7 @@ async def cb_admin_order_user(callback: types.CallbackQuery):
         f"📦 *Orders for* {user_name}",
         f"👤 ID: `{user_id}`",
         f"━━━━━━━━━━━━━━━━━━━━",
-        f"📊 Total: *{total}* \\| ✅ Paid: *{paid_count}* \\| 💰 {escape_md(format_currency(total_spent))}",
+        f"📊 Total: *{total}* \\( ✅ Paid: *{paid_count}* \\) 💰 {escape_md(format_currency(total_spent))}",
         f"━━━━━━━━━━━━━━━━━━━━",
     ]
 
@@ -1958,7 +1958,7 @@ async def cb_bc_send_now(callback: types.CallbackQuery, state: FSMContext):
             try:
                 pct = round(processed / total * 100) if total else 0
                 await progress_msg.edit_text(
-                    f"📢 Broadcasting\\.\\.\\. {pct}%\\n"
+                    f"📢 Broadcasting\\.\\.\\.  {pct}%\n"
                     f"✅ {sent} sent, ❌ {failed} failed \\({processed}/{total}\\)",
                     parse_mode="MarkdownV2",
                 )
@@ -2417,7 +2417,7 @@ async def cb_giveaway_viewcodes(callback: types.CallbackQuery):
         document=file_buf,
         caption=(
             f"📄 *Unclaimed Codes — {escape_md(title)}*\n\n"
-            f"📦 Total: *{total}* \\| ✅ Claimed: *{claimed}* \\| 📭 Unclaimed: *{unclaimed}*\n"
+            f"📦 Total: *{total}* \\( ✅ Claimed: *{claimed}* \\) 📭 Unclaimed: *{unclaimed}*\n"
             f"📁 File: `{escape_md(filename)}`"
         ),
         parse_mode="MarkdownV2",
@@ -4396,7 +4396,7 @@ async def cb_admin_user_orders(callback: types.CallbackQuery):
         f"📦 *Orders for* {user_name}",
         f"👤 ID: `{user_id}`",
         f"━━━━━━━━━━━━━━━━━━━━",
-        f"📊 Total: *{total}* \\| ✅ Paid: *{paid_count}* \\| 💰 {escape_md(format_currency(total_spent))}",
+        f"📊 Total: *{total}* \\( ✅ Paid: *{paid_count}* \\) 💰 {escape_md(format_currency(total_spent))}",
         f"━━━━━━━━━━━━━━━━━━━━",
     ]
 
@@ -4748,6 +4748,32 @@ async def msg_admin_wallet_edit(message: types.Message, state: FSMContext):
 # 📊 ANALYTICS DASHBOARD — Multi-page Telegram Interactive
 # ══════════════════════════════════════════════════════════════
 
+async def _analytics_safe_edit(callback, text: str, reply_markup, page_name: str):
+    """Edit analytics message with MarkdownV2, falling back to plain text on parse error."""
+    import re
+    try:
+        await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=reply_markup)
+    except Exception as e:
+        error_msg = str(e).lower()
+        logger.warning(f"Analytics {page_name} MarkdownV2 failed: {str(e)[:150]}")
+        if "not modified" in error_msg:
+            return  # Same content — not a real error
+        # Strip MarkdownV2 formatting and retry as plain text
+        try:
+            plain = re.sub(r'\\(.)', r'\1', text)
+            plain = re.sub(r'[*_`~]', '', plain)
+            await callback.message.edit_text(plain, reply_markup=reply_markup)
+        except Exception as e2:
+            logger.error(f"Analytics {page_name} plain text also failed: {e2}")
+            # Last resort: send a new message
+            try:
+                await callback.message.answer(
+                    f"⚠️ Analytics page failed to render. Please try again.",
+                    reply_markup=reply_markup,
+                )
+            except Exception:
+                pass
+
 def _analytics_nav_kb(current_page: str) -> InlineKeyboardMarkup:
     """Navigation keyboard for analytics pages."""
     pages = [
@@ -4815,7 +4841,7 @@ async def cb_admin_analytics(callback: types.CallbackQuery):
         m = pm["method"]
         icon = method_icons.get(m, "💳")
         amt = escape_md(format_currency(float(pm["total_amount"])))
-        method_lines.append(f"   {icon} {escape_md(m)}: *{pm['order_count']}* orders \\\\| *{amt}*")
+        method_lines.append(f"   {icon} {escape_md(m)}: *{pm['order_count']}* orders \\| *{amt}*")
 
     methods_text = "\n".join(method_lines) if method_lines else "   _No paid orders yet_"
 
@@ -4879,13 +4905,9 @@ async def cb_admin_analytics(callback: types.CallbackQuery):
 
     text += f"_Navigate below for detailed breakdowns_ ⬇️"
 
-    try:
-        await callback.message.edit_text(
-            text, parse_mode="MarkdownV2",
-            reply_markup=_analytics_nav_kb("admin_analytics")
-        )
-    except Exception as e:
-        logger.debug(f"Analytics overview edit_text failed: {e}")
+    await _analytics_safe_edit(
+        callback, text, _analytics_nav_kb("admin_analytics"), "overview"
+    )
     await callback.answer()
 
 
@@ -5003,13 +5025,9 @@ async def cb_analytics_admins(callback: types.CallbackQuery):
                 text += f"│ 💵 *Net Revenue: {escape_md(format_currency(net_rev))}*\n"
                 text += f"└──────────────────\n\n"
 
-    try:
-        await callback.message.edit_text(
-            text, parse_mode="MarkdownV2",
-            reply_markup=_analytics_nav_kb("analytics_admins")
-        )
-    except Exception as e:
-        logger.debug(f"Analytics admins edit_text failed: {e}")
+    await _analytics_safe_edit(
+        callback, text, _analytics_nav_kb("analytics_admins"), "admins"
+    )
     await callback.answer()
 
 
@@ -5040,7 +5058,7 @@ async def cb_analytics_products(callback: types.CallbackQuery):
     text = (
         f"📦 *PRODUCT ANALYTICS*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"📄 Page *{page}* / *{total_pages}* \\\\| Total: *{total}* products\n\n"
+        f"📄 Page *{page}* / *{total_pages}* \\| Total: *{total}* products\n\n"
     )
 
     if not page_items:
@@ -5056,8 +5074,8 @@ async def cb_analytics_products(callback: types.CallbackQuery):
             text += (
                 f"{status} *{title}*\n"
                 f"┌──────────────────\n"
-                f"│ 💰 Price: *{price}* \\\\| Revenue: *{rev}*\n"
-                f"│ 🛒 Sold: *{p['sold_count']}* \\\\| 📦 Stock: *{p['codes_available']}*\n"
+                f"│ 💰 Price: *{price}* \\| Revenue: *{rev}*\n"
+                f"│ 🛒 Sold: *{p['sold_count']}* \\| 📦 Stock: *{p['codes_available']}*\n"
                 f"│ 🔑 Codes: *{p['codes_sold']}* sold / *{p['codes_sold'] + p['codes_available']}* total\n"
                 f"│ 👤 By: _{escape_md(admin_name)}_\n"
                 f"└──────────────────\n\n"
@@ -5091,10 +5109,7 @@ async def cb_analytics_products(callback: types.CallbackQuery):
         [back_button("admin_panel")],
     ])
 
-    try:
-        await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
-    except Exception as e:
-        logger.debug(f"Analytics products edit_text failed: {e}")
+    await _analytics_safe_edit(callback, text, kb, "products")
     await callback.answer()
 
 
@@ -5125,7 +5140,7 @@ async def cb_analytics_sales(callback: types.CallbackQuery):
     text = (
         f"🧾 *RECENT SALES*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"📄 Page *{page}* / *{total_pages}* \\\\| Total: *{total}* sales\n\n"
+        f"📄 Page *{page}* / *{total_pages}* \\| Total: *{total}* sales\n\n"
     )
 
     if not page_items:
@@ -5149,9 +5164,9 @@ async def cb_analytics_sales(callback: types.CallbackQuery):
 
             text += (
                 f"*{i}\\.* 🛍️ *{title}*\n"
-                f"   👤 {buyer} \\\\(`{uid}`\\\\)\n"
-                f"   💸 *{amt}* × {r['quantity']} \\\\| {m_icon} {escape_md(method)}\n"
-                f"   👑 _{escape_md(admin_name)}_ \\\\| 🕐 {escape_md(paid_str)}\n\n"
+                f"   👤 {buyer} \\(`{uid}`\\)\n"
+                f"   💸 *{amt}* × {r['quantity']} \\| {m_icon} {escape_md(method)}\n"
+                f"   👑 _{escape_md(admin_name)}_ \\| 🕐 {escape_md(paid_str)}\n\n"
             )
 
     # Navigation
@@ -5181,10 +5196,7 @@ async def cb_analytics_sales(callback: types.CallbackQuery):
         [back_button("admin_panel")],
     ])
 
-    try:
-        await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
-    except Exception as e:
-        logger.debug(f"Analytics sales edit_text failed: {e}")
+    await _analytics_safe_edit(callback, text, kb, "sales")
     await callback.answer()
 
 
@@ -5227,7 +5239,7 @@ async def cb_analytics_trends(callback: types.CallbackQuery):
             bar = "█" * bar_len + "░" * (12 - bar_len)
             rev_str = escape_md(format_currency(rev))
 
-            text += f"`{day_str}` {bar} *{rev_str}* \\\\({orders}\\\\)\n"
+            text += f"`{day_str}` {bar} *{rev_str}* \\({orders}\\)\n"
 
         text += (
             f"\n━━━━━━━━━━━━━━━━━━━━\n"
@@ -5240,13 +5252,9 @@ async def cb_analytics_trends(callback: types.CallbackQuery):
             f"   🛒 Orders: *{avg_orders:.1f}*"
         )
 
-    try:
-        await callback.message.edit_text(
-            text, parse_mode="MarkdownV2",
-            reply_markup=_analytics_nav_kb("analytics_trends")
-        )
-    except Exception as e:
-        logger.debug(f"Analytics trends edit_text failed: {e}")
+    await _analytics_safe_edit(
+        callback, text, _analytics_nav_kb("analytics_trends"), "trends"
+    )
     await callback.answer()
 
 
@@ -5334,13 +5342,9 @@ async def cb_analytics_promo_losses(callback: types.CallbackQuery):
 
     text += "_Updated in real\\-time_ 🔄"
 
-    try:
-        await callback.message.edit_text(
-            text, parse_mode="MarkdownV2",
-            reply_markup=_analytics_nav_kb("analytics_promo_losses")
-        )
-    except Exception as e:
-        logger.debug(f"Analytics promo losses edit_text failed: {e}")
+    await _analytics_safe_edit(
+        callback, text, _analytics_nav_kb("analytics_promo_losses"), "promo_losses"
+    )
     await callback.answer()
 
 # ── Page 7: Referral Leaderboard ──────────────────────────
@@ -5456,10 +5460,7 @@ async def cb_analytics_referrals(callback: types.CallbackQuery):
         [back_button("admin_panel")],
     ])
 
-    try:
-        await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
-    except Exception as e:
-        logger.debug(f"Analytics referrals edit_text failed: {e}")
+    await _analytics_safe_edit(callback, text, kb, "referrals")
     await callback.answer()
 
 # ── Support Settings (support text + inline buttons) ──────
