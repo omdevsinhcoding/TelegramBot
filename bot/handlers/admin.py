@@ -126,6 +126,12 @@ class AdminStates(StatesGroup):
     cat_rename_input = State()
     # Manual extraction
     extract_qty_input = State()
+    # Stock alert settings
+    stock_alert_threshold_input = State()
+    # Expense tracking
+    expense_type_input = State()
+    expense_amount_input = State()
+    expense_desc_input = State()
 
 
 
@@ -434,6 +440,13 @@ async def msg_add_coupon_codes(message: types.Message, state: FSMContext):
         # Stock is synced inside add_coupon_codes_bulk via sync_coupon_stock
         if codes_added > 0:
             stock = codes_added
+            # Log stock action + clear alerts
+            try:
+                await db.log_stock_action(coupon_id, message.from_user.id, 'create', codes_added)
+                from bot.services.stock_alert_service import on_stock_replenished
+                await on_stock_replenished(coupon_id, codes_added)
+            except Exception as e:
+                logger.warning(f"Stock logging failed (non-critical): {e}")
             logger.info(f"Admin {message.from_user.id} — added {codes_added} codes to coupon {coupon_id}")
 
     # Fetch actual stock after sync
@@ -640,6 +653,14 @@ async def msg_add_codes(message: types.Message, state: FSMContext):
         message.from_user.id, "add_codes", "coupon", str(coupon_id),
         f"Added {inserted} codes (skipped {skipped} duplicates), new stock: {new_stock}"
     )
+    # Log stock action + clear alerts
+    try:
+        if inserted > 0:
+            await db.log_stock_action(coupon_id, message.from_user.id, 'add_codes', inserted)
+            from bot.services.stock_alert_service import on_stock_replenished
+            await on_stock_replenished(coupon_id, new_stock)
+    except Exception as e:
+        logger.warning(f"Stock logging failed (non-critical): {e}")
     logger.info(f"Admin {message.from_user.id} added {inserted} codes to coupon {coupon_id} (skipped {skipped} dupes)")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_coupon_edit:{coupon_id}")]])
@@ -722,6 +743,14 @@ async def msg_upload_codes_file(message: types.Message, state: FSMContext):
         message.from_user.id, "upload_codes", "coupon", str(coupon_id),
         f"Uploaded {inserted} codes from file (skipped {skipped} duplicates), new stock: {new_stock}"
     )
+    # Log stock action + clear alerts
+    try:
+        if inserted > 0:
+            await db.log_stock_action(coupon_id, message.from_user.id, 'upload_codes', inserted)
+            from bot.services.stock_alert_service import on_stock_replenished
+            await on_stock_replenished(coupon_id, new_stock)
+    except Exception as e:
+        logger.warning(f"Stock logging failed (non-critical): {e}")
     logger.info(f"Admin {message.from_user.id} uploaded {inserted} codes from file to coupon {coupon_id} (skipped {skipped} dupes)")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_coupon_edit:{coupon_id}")]])
@@ -4840,27 +4869,26 @@ def _analytics_nav_kb(current_page: str) -> InlineKeyboardMarkup:
         ("📈 Trends", "analytics_trends"),
         ("🔻 Losses", "analytics_promo_losses"),
         ("🤝 Referrals", "analytics_referrals:1"),
+        ("📆 Daily P&L", "analytics_daily_pnl"),
+        ("🏷️ Category", "analytics_category_profit"),
     ]
-    row1 = []
-    row2 = []
-    row3 = []
+    rows = []
+    current_row = []
     for i, (label, data) in enumerate(pages):
         base = data.split(":")[0]
         if base == current_page or data == current_page:
             label = f"• {label} •"
         btn = InlineKeyboardButton(text=label, callback_data=data)
-        if i < 3:
-            row1.append(btn)
-        elif i < 5:
-            row2.append(btn)
-        else:
-            row3.append(btn)
-    rows = [row1, row2]
-    if row3:
-        rows.append(row3)
+        current_row.append(btn)
+        if len(current_row) == 3:
+            rows.append(current_row)
+            current_row = []
+    if current_row:
+        rows.append(current_row)
     rows.append([InlineKeyboardButton(text="🔄 Refresh", callback_data=current_page)])
     rows.append([back_button("admin_panel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
 
 
 # ── Page 1: Overview Dashboard ────────────────────────────
@@ -4890,9 +4918,19 @@ async def cb_admin_analytics(callback: types.CallbackQuery):
     except Exception:
         pass
 
-    # Calculate NET PROFIT
+    # Expenses & COGS
+    total_expenses = 0
+    stock_cogs = 0
+    try:
+        total_expenses = await db.get_total_expenses()
+        stock_cogs = await db.get_total_stock_cost()
+    except Exception:
+        pass
+
+    # Calculate TRUE NET PROFIT (Revenue - Losses - Expenses - COGS)
     total_loss = wallet_used + total_promo_loss
-    net_profit = gateway_revenue - total_promo_loss
+    total_costs = total_loss + total_expenses + stock_cogs
+    net_profit = gateway_revenue - total_promo_loss - total_expenses - stock_cogs
 
     # Profit/Loss indicator
     if net_profit > 0:
@@ -4926,14 +4964,18 @@ async def cb_admin_analytics(callback: types.CallbackQuery):
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"{profit_icon} *{profit_label}: {escape_md(format_currency(abs(net_profit)))}*\n\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"💵 *PAISA KAHAN SE AAYA*\n"
+        f"💵 *REVENUE \\(Paisa Aaya\\)*\n"
         f"  🏦 Gateway se mila: *{escape_md(format_currency(gateway_revenue))}*\n"
         f"  💰 Wallet se pay hua: *{escape_md(format_currency(wallet_used))}*\n"
         f"  📊 Total Revenue: *{revenue_str}*\n\n"
-        f"💸 *PAISA KAHAN GAYA \\(Losses\\)*\n"
+        f"💸 *LOSSES \\(Paisa Gaya\\)*\n"
         f"  🎁 Referral Rewards: *{escape_md(format_currency(rewards_given))}*\n"
         f"  🔻 Promotions/Giveaways: *{escape_md(format_currency(total_promo_loss))}*\n"
-        f"  💸 Total Loss: *{escape_md(format_currency(total_loss))}*\n\n"
+        f"  💸 Loss Total: *{escape_md(format_currency(total_loss))}*\n\n"
+        f"📦 *EXPENSES \\(Kharcha\\)*\n"
+        f"  📦 Stock COGS: *{escape_md(format_currency(stock_cogs))}*\n"
+        f"  💼 Operational: *{escape_md(format_currency(total_expenses))}*\n"
+        f"  📋 Expense Total: *{escape_md(format_currency(total_expenses + stock_cogs))}*\n\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"🏪 *STORE*\n"
         f"  👥 Users: *{user_count}* \\| 👑 Admins: *{admin_count}*\n"
@@ -6122,6 +6164,424 @@ async def cb_admin_ban_msg_preview(callback: types.CallbackQuery):
         parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_buttons),
     )
+    await callback.answer()
+
+
+# ══════════════════════════════════════════════════════════════
+# 🔔 STOCK ALERT SETTINGS
+# ══════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data == "admin_stock_alerts")
+@admin_only
+@error_handler
+async def cb_admin_stock_alerts(callback: types.CallbackQuery):
+    """Stock alert settings page."""
+    settings = await db.get_stock_alert_settings()
+    threshold = settings.get("global_threshold", 5)
+    enabled = settings.get("is_enabled", True)
+    status_icon = "🟢" if enabled else "🔴"
+    status_text = "Enabled" if enabled else "Disabled"
+
+    # Count low stock coupons
+    low_stock = await db.get_low_stock_coupons(threshold)
+    low_count = len(low_stock)
+    out_of_stock = sum(1 for c in low_stock if c["stock"] == 0)
+    warning_count = low_count - out_of_stock
+
+    text = (
+        f"🔔 *STOCK ALERT SETTINGS*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"{status_icon} Status: *{status_text}*\n"
+        f"📊 Threshold: *{threshold}* units\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📦 *Current Status*\n"
+        f"  🟡 Low Stock: *{warning_count}* products\n"
+        f"  🔴 Out of Stock: *{out_of_stock}* products\n\n"
+        f"_When stock drops below the threshold,_\n"
+        f"_all admins will be notified automatically\\._"
+    )
+
+    toggle_text = "🔴 Disable Alerts" if enabled else "🟢 Enable Alerts"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=toggle_text, callback_data="admin_toggle_stock_alerts")],
+        [InlineKeyboardButton(text="📊 Set Threshold", callback_data="admin_set_alert_threshold")],
+        [InlineKeyboardButton(text="📋 View Low Stock", callback_data="admin_view_low_stock")],
+        [back_button("admin_panel")],
+    ])
+
+    await _safe_edit_or_send(callback.message, text, reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_toggle_stock_alerts")
+@admin_only
+@error_handler
+async def cb_toggle_stock_alerts(callback: types.CallbackQuery):
+    settings = await db.get_stock_alert_settings()
+    new_status = not settings.get("is_enabled", True)
+    await db.update_stock_alert_settings(is_enabled=new_status)
+    status_text = "enabled" if new_status else "disabled"
+    await callback.answer(f"Stock alerts {status_text}!", show_alert=True)
+    # Re-render settings page
+    await cb_admin_stock_alerts(callback)
+
+
+@router.callback_query(F.data == "admin_set_alert_threshold")
+@admin_only
+@error_handler
+async def cb_set_alert_threshold(callback: types.CallbackQuery, state: FSMContext):
+    await state.set_state(AdminStates.stock_alert_threshold_input)
+    await _safe_edit_or_send(
+        callback.message,
+        f"📊 *Set Stock Alert Threshold*\n\n"
+        f"Enter the stock level at which you want to\n"
+        f"receive low\\-stock alerts\\."
+        f"\n\n_Current: {escape_md(str((await db.get_stock_alert_settings()).get('global_threshold', 5)))}_"
+        f"\n\nSend a number \\(e\\.g\\. 5, 10, 20\\):",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [admin_cancel_button()],
+        ]),
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.stock_alert_threshold_input)
+@admin_only
+async def msg_stock_alert_threshold(message: types.Message, state: FSMContext):
+    text = message.text.strip()
+    if not text.isdigit() or int(text) < 1:
+        await message.answer("⚠️ Please enter a valid positive number (e.g. 5, 10, 20).")
+        return
+    threshold = int(text)
+    await db.update_stock_alert_settings(threshold=threshold)
+    await state.clear()
+    await message.answer(f"✅ Stock alert threshold set to {threshold} units.")
+    logger.info(f"Admin {message.from_user.id} set stock alert threshold to {threshold}")
+
+
+@router.callback_query(F.data == "admin_view_low_stock")
+@admin_only
+@error_handler
+async def cb_view_low_stock(callback: types.CallbackQuery):
+    """View all products currently below stock threshold."""
+    settings = await db.get_stock_alert_settings()
+    threshold = settings.get("global_threshold", 5)
+    low_stock = await db.get_low_stock_coupons(threshold)
+
+    if not low_stock:
+        text = (
+            f"📋 *LOW STOCK REPORT*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"✅ All products have sufficient stock\\!\n"
+            f"_\\(threshold: {threshold} units\\)_"
+        )
+    else:
+        lines = []
+        for c in low_stock[:20]:  # Max 20 items
+            stock = c["stock"]
+            if stock == 0:
+                icon = "🔴"
+            elif stock <= 2:
+                icon = "🟠"
+            else:
+                icon = "🟡"
+            cat = f" [{escape_md(c.get('category', ''))}]" if c.get('category') else ""
+            lines.append(f"{icon} {escape_md(c['title'])}{cat}: *{stock}* left")
+
+        text = (
+            f"📋 *LOW STOCK REPORT*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"_Threshold: {threshold} units_\n\n"
+            + "\n".join(lines)
+        )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Refresh", callback_data="admin_view_low_stock")],
+        [back_button("admin_stock_alerts")],
+    ])
+    await _safe_edit_or_send(callback.message, text, reply_markup=kb)
+    await callback.answer()
+
+
+# ══════════════════════════════════════════════════════════════
+# 💰 EXPENSE TRACKING
+# ══════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data == "admin_expenses")
+@admin_only
+@error_handler
+async def cb_admin_expenses(callback: types.CallbackQuery):
+    """Expense overview page."""
+    summary = await db.get_expenses_summary()
+    total = summary.get("_grand_total", 0)
+    stock_cost = await db.get_total_stock_cost()
+
+    type_icons = {
+        "stock_purchase": "📦", "operational": "⚙️", "payout": "💸",
+        "refund": "↩️", "gateway_fee": "💳", "other": "📝"
+    }
+
+    lines = []
+    for etype, data in summary.items():
+        if etype.startswith("_"):
+            continue
+        icon = type_icons.get(etype, "📝")
+        lines.append(f"  {icon} {escape_md(etype)}: *{escape_md(format_currency(data['total']))}* \\({data['count']} entries\\)")
+
+    exp_text = "\n".join(lines) if lines else "   _No expenses recorded yet_"
+
+    text = (
+        f"💰 *EXPENSE TRACKER*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📊 *Summary*\n"
+        f"  💸 Total Expenses: *{escape_md(format_currency(total))}*\n"
+        f"  📦 Stock COGS: *{escape_md(format_currency(stock_cost))}*\n"
+        f"  📋 Combined: *{escape_md(format_currency(total + stock_cost))}*\n\n"
+        f"📂 *By Type*\n"
+        f"{exp_text}\n\n"
+        f"_Add expenses to track operational costs_"
+    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Add Expense", callback_data="admin_add_expense")],
+        [InlineKeyboardButton(text="📋 Recent Expenses", callback_data="admin_recent_expenses")],
+        [InlineKeyboardButton(text="👑 By Admin", callback_data="admin_expenses_by_admin")],
+        [back_button("admin_panel")],
+    ])
+
+    await _safe_edit_or_send(callback.message, text, reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_add_expense")
+@admin_only
+@error_handler
+async def cb_add_expense(callback: types.CallbackQuery, state: FSMContext):
+    """Start add expense flow."""
+    await state.set_state(AdminStates.expense_type_input)
+    types_text = (
+        "📦 stock\\_purchase — Stock/inventory cost\n"
+        "⚙️ operational — Server, hosting, tools\n"
+        "💸 payout — Payouts to partners\n"
+        "↩️ refund — Customer refunds\n"
+        "💳 gateway\\_fee — Payment gateway fees\n"
+        "📝 other — Miscellaneous"
+    )
+    await _safe_edit_or_send(
+        callback.message,
+        f"➕ *ADD EXPENSE*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"Select expense type:\n\n"
+        f"{types_text}\n\n"
+        f"_Type one of: stock\\_purchase, operational, payout, refund, gateway\\_fee, other_",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [admin_cancel_button()],
+        ]),
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.expense_type_input)
+@admin_only
+async def msg_expense_type(message: types.Message, state: FSMContext):
+    valid_types = ["stock_purchase", "operational", "payout", "refund", "gateway_fee", "other"]
+    etype = message.text.strip().lower()
+    if etype not in valid_types:
+        await message.answer(f"⚠️ Invalid type. Choose: {', '.join(valid_types)}")
+        return
+    await state.update_data(expense_type=etype)
+    await state.set_state(AdminStates.expense_amount_input)
+    await message.answer(f"✅ Type: {etype}\n\n💰 Now enter the amount (e.g. 500, 1000.50):")
+
+
+@router.message(AdminStates.expense_amount_input)
+@admin_only
+async def msg_expense_amount(message: types.Message, state: FSMContext):
+    try:
+        amount = float(message.text.strip())
+        if amount <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer("⚠️ Enter a valid positive amount (e.g. 500, 1000.50).")
+        return
+    await state.update_data(expense_amount=amount)
+    await state.set_state(AdminStates.expense_desc_input)
+    await message.answer(f"✅ Amount: ₹{amount:.2f}\n\n📝 Enter a description (or send 'skip'):")
+
+
+@router.message(AdminStates.expense_desc_input)
+@admin_only
+async def msg_expense_desc(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    desc = message.text.strip()
+    if desc.lower() == "skip":
+        desc = None
+
+    admin_id = message.from_user.id
+    expense_id = await db.add_expense(
+        admin_id=admin_id,
+        expense_type=data["expense_type"],
+        amount=data["expense_amount"],
+        description=desc,
+    )
+    await state.clear()
+    await message.answer(
+        f"✅ Expense recorded!\n\n"
+        f"📋 ID: #{expense_id}\n"
+        f"📂 Type: {data['expense_type']}\n"
+        f"💰 Amount: ₹{data['expense_amount']:.2f}\n"
+        f"📝 Note: {desc or 'N/A'}\n\n"
+        f"This will now appear in analytics."
+    )
+    logger.info(f"Admin {admin_id} added expense #{expense_id}: {data['expense_type']} ₹{data['expense_amount']:.2f}")
+
+
+@router.callback_query(F.data == "admin_recent_expenses")
+@admin_only
+@error_handler
+async def cb_recent_expenses(callback: types.CallbackQuery):
+    expenses = await db.get_admin_expenses_list(limit=15)
+    if not expenses:
+        text = "📋 *RECENT EXPENSES*\n━━━━━━━━━━━━━━━━━━━━\n\n_No expenses recorded yet\\._"
+    else:
+        admin_ids = {e["admin_id"] for e in expenses}
+        names = await db.get_admin_names_map(admin_ids)
+
+        lines = []
+        for e in expenses:
+            admin_name = escape_md(names.get(e["admin_id"], str(e["admin_id"])))
+            amt = escape_md(format_currency(float(e["amount"])))
+            desc = escape_md(e.get("description", "") or "")
+            if len(desc) > 30:
+                desc = desc[:27] + "\\.\\.\\."
+            date_str = escape_md(format_datetime(e["created_at"]))
+            lines.append(f"• {escape_md(e['expense_type'])} \\| *{amt}* \\| {admin_name}\n  _{desc}_ \\| {date_str}")
+
+        text = (
+            f"📋 *RECENT EXPENSES*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            + "\n\n".join(lines)
+        )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Refresh", callback_data="admin_recent_expenses")],
+        [back_button("admin_expenses")],
+    ])
+    await _safe_edit_or_send(callback.message, text, reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_expenses_by_admin")
+@admin_only
+@error_handler
+async def cb_expenses_by_admin(callback: types.CallbackQuery):
+    admin_totals = await db.get_admin_expense_totals()
+    if not admin_totals:
+        text = "👑 *EXPENSES BY ADMIN*\n━━━━━━━━━━━━━━━━━━━━\n\n_No expenses recorded yet\\._"
+    else:
+        admin_ids = {a["admin_id"] for a in admin_totals}
+        names = await db.get_admin_names_map(admin_ids)
+
+        lines = []
+        for i, a in enumerate(admin_totals, 1):
+            name = escape_md(names.get(a["admin_id"], str(a["admin_id"])))
+            total = escape_md(format_currency(float(a["total_spent"])))
+            lines.append(f"{i}\\. {name}: *{total}* \\({a['expense_count']} entries\\)")
+
+        text = (
+            f"👑 *EXPENSES BY ADMIN*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            + "\n".join(lines)
+        )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [back_button("admin_expenses")],
+    ])
+    await _safe_edit_or_send(callback.message, text, reply_markup=kb)
+    await callback.answer()
+
+
+# ══════════════════════════════════════════════════════════════
+# 📈 ENHANCED ANALYTICS — Daily P&L, Category Profit, Time-based
+# ══════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data == "analytics_daily_pnl")
+@admin_only
+@error_handler
+async def cb_analytics_daily_pnl(callback: types.CallbackQuery):
+    """Daily profit & loss for the last 7 days."""
+    daily = await db.get_daily_profit(7)
+
+    lines = []
+    for d in daily:
+        day_str = d["day"].strftime("%d %b")
+        rev = float(d["revenue"])
+        profit = float(d["net_profit"])
+        orders = int(d["orders"])
+        
+        if profit > 0:
+            icon = "📈"
+        elif profit < 0:
+            icon = "📉"
+        else:
+            icon = "➖"
+
+        lines.append(
+            f"{icon} *{escape_md(day_str)}*: "
+            f"Rev *{escape_md(format_currency(rev))}* \\| "
+            f"P/L *{escape_md(format_currency(profit))}* \\| "
+            f"{orders} orders"
+        )
+
+    text = (
+        f"📆 *DAILY PROFIT \\& LOSS*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"_Last 7 days_\n\n"
+        + ("\n".join(lines) if lines else "_No data yet_")
+    )
+
+    kb = _analytics_nav_kb("analytics_daily_pnl")
+    await _analytics_safe_edit(callback, text, kb, "daily_pnl")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "analytics_category_profit")
+@admin_only
+@error_handler
+async def cb_analytics_category_profit(callback: types.CallbackQuery):
+    """Category-wise profitability."""
+    categories = await db.get_category_profitability()
+
+    lines = []
+    for c in categories:
+        cat_name = escape_md(c["category"])
+        rev = float(c["revenue"])
+        cost = float(c["total_cost"])
+        profit = float(c["profit"])
+        sold = int(c["units_sold"])
+        stock = int(c["current_stock"])
+
+        if profit > 0:
+            icon = "🟢"
+        elif profit < 0:
+            icon = "🔴"
+        else:
+            icon = "⚪"
+
+        lines.append(
+            f"{icon} *{cat_name}*\n"
+            f"   Rev: *{escape_md(format_currency(rev))}* \\| Cost: *{escape_md(format_currency(cost))}*\n"
+            f"   Profit: *{escape_md(format_currency(profit))}* \\| Sold: *{sold}* \\| Stock: *{stock}*"
+        )
+
+    text = (
+        f"🏷️ *CATEGORY PROFITABILITY*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        + ("\n\n".join(lines) if lines else "_No data yet_")
+    )
+
+    kb = _analytics_nav_kb("analytics_category_profit")
+    await _analytics_safe_edit(callback, text, kb, "category_profit")
     await callback.answer()
 
 

@@ -450,6 +450,75 @@ CREATE INDEX IF NOT EXISTS idx_giveaway_logs_executor ON giveaway_logs (executor
 CREATE INDEX IF NOT EXISTS idx_giveaway_logs_owner ON giveaway_logs (coupon_owner_admin_id);
 CREATE INDEX IF NOT EXISTS idx_giveaway_logs_created ON giveaway_logs (created_at);
 
+-- ────────────────────────────────────────────────────────────
+-- 22. STOCK ALERT SETTINGS (global low-stock alert config)
+-- ────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS stock_alert_settings (
+    id                  SERIAL PRIMARY KEY,
+    global_threshold    INTEGER DEFAULT 5,
+    is_enabled          BOOLEAN DEFAULT TRUE,
+    updated_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Insert default row if none exist
+INSERT INTO stock_alert_settings (global_threshold, is_enabled)
+SELECT 5, TRUE
+WHERE NOT EXISTS (SELECT 1 FROM stock_alert_settings);
+
+-- ────────────────────────────────────────────────────────────
+-- 23. STOCK ALERTS SENT (deduplication — prevents spam alerts)
+--     UNIQUE(coupon_id, stock_level) ensures each stock level
+--     is only alerted ONCE per coupon. Cleared when stock is
+--     replenished above threshold.
+-- ────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS stock_alerts_sent (
+    id              SERIAL PRIMARY KEY,
+    coupon_id       INTEGER NOT NULL REFERENCES coupons(id) ON DELETE CASCADE,
+    stock_level     INTEGER NOT NULL,
+    alerted_at      TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(coupon_id, stock_level)
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_alerts_coupon ON stock_alerts_sent (coupon_id);
+
+-- ────────────────────────────────────────────────────────────
+-- 24. COUPON STOCK LOGS (tracks who added/modified stock)
+--     Every stock change is logged for full audit trail.
+-- ────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS coupon_stock_logs (
+    id              SERIAL PRIMARY KEY,
+    coupon_id       INTEGER NOT NULL REFERENCES coupons(id) ON DELETE CASCADE,
+    admin_id        BIGINT NOT NULL,
+    action          VARCHAR(32) NOT NULL,  -- 'add_codes', 'clear_stock', 'upload_codes', 'extract', 'create'
+    quantity        INTEGER NOT NULL DEFAULT 0,
+    cost_per_unit   NUMERIC(10, 2) DEFAULT 0.00,
+    total_cost      NUMERIC(12, 2) DEFAULT 0.00,
+    notes           TEXT,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_logs_coupon ON coupon_stock_logs (coupon_id);
+CREATE INDEX IF NOT EXISTS idx_stock_logs_admin ON coupon_stock_logs (admin_id);
+CREATE INDEX IF NOT EXISTS idx_stock_logs_created ON coupon_stock_logs (created_at);
+
+-- ────────────────────────────────────────────────────────────
+-- 25. ADMIN EXPENSES (operational expenses beyond stock cost)
+-- ────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS admin_expenses (
+    id              SERIAL PRIMARY KEY,
+    admin_id        BIGINT NOT NULL,
+    expense_type    VARCHAR(64) NOT NULL,  -- 'stock_purchase', 'operational', 'payout', 'refund', 'gateway_fee', 'other'
+    amount          NUMERIC(12, 2) NOT NULL,
+    description     TEXT,
+    coupon_id       INTEGER REFERENCES coupons(id) ON DELETE SET NULL,
+    reference       TEXT,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_expenses_admin ON admin_expenses (admin_id);
+CREATE INDEX IF NOT EXISTS idx_expenses_type ON admin_expenses (expense_type);
+CREATE INDEX IF NOT EXISTS idx_expenses_created ON admin_expenses (created_at);
+
 -- ============================================================
 -- END OF SCHEMA — All tables and indexes defined above.
 -- ============================================================

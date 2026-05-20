@@ -17,6 +17,10 @@ def admin_panel_kb() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📊 Stock Overview", callback_data="admin_stock_overview")
         ],
         [
+            InlineKeyboardButton(text="🔔 Stock Alerts", callback_data="admin_stock_alerts"),
+            InlineKeyboardButton(text="💰 Expenses", callback_data="admin_expenses")
+        ],
+        [
             InlineKeyboardButton(text="💳 Payments", callback_data="admin_payments"),
             InlineKeyboardButton(text="🧾 Orders", callback_data="admin_orders")
         ],

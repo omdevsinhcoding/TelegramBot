@@ -2414,3 +2414,420 @@ async def get_admin_count() -> int:
     all_ids = await get_all_admin_ids()
     return len(all_ids)
 
+
+# ══════════════════════════════════════════════════════════════
+# STOCK ALERT SYSTEM
+# ══════════════════════════════════════════════════════════════
+
+async def get_stock_alert_settings() -> dict:
+    """Get global stock alert settings."""
+    pool = await get_pool()
+    row = await pool.fetchrow("SELECT * FROM stock_alert_settings ORDER BY id LIMIT 1")
+    if not row:
+        await pool.execute(
+            "INSERT INTO stock_alert_settings (global_threshold, is_enabled) VALUES (5, TRUE)"
+        )
+        row = await pool.fetchrow("SELECT * FROM stock_alert_settings ORDER BY id LIMIT 1")
+    return dict(row)
+
+
+async def update_stock_alert_settings(threshold: int = None, is_enabled: bool = None):
+    """Update stock alert settings."""
+    pool = await get_pool()
+    if threshold is not None and is_enabled is not None:
+        await pool.execute(
+            "UPDATE stock_alert_settings SET global_threshold = $1, is_enabled = $2, updated_at = NOW()",
+            threshold, is_enabled
+        )
+    elif threshold is not None:
+        await pool.execute(
+            "UPDATE stock_alert_settings SET global_threshold = $1, updated_at = NOW()", threshold
+        )
+    elif is_enabled is not None:
+        await pool.execute(
+            "UPDATE stock_alert_settings SET is_enabled = $1, updated_at = NOW()", is_enabled
+        )
+
+
+async def get_low_stock_coupons(threshold: int) -> list:
+    """Get all active coupons at or below the stock threshold."""
+    pool = await get_pool()
+    return await pool.fetch("""
+        SELECT c.id, c.title, c.stock, c.category, c.created_by, c.updated_at,
+               COALESCE(
+                   (SELECT admin_id FROM coupon_stock_logs
+                    WHERE coupon_id = c.id ORDER BY created_at DESC LIMIT 1),
+                   c.created_by
+               ) AS last_stock_admin
+        FROM coupons c
+        WHERE c.is_active = TRUE AND c.stock <= $1 AND c.stock >= 0
+        ORDER BY c.stock ASC, c.title
+    """, threshold)
+
+
+async def check_alert_already_sent(coupon_id: int, stock_level: int) -> bool:
+    """Check if an alert was already sent for this coupon at this stock level."""
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "SELECT id FROM stock_alerts_sent WHERE coupon_id = $1 AND stock_level = $2",
+        coupon_id, stock_level
+    )
+    return row is not None
+
+
+async def record_stock_alert(coupon_id: int, stock_level: int):
+    """Record that a stock alert was sent (prevents duplicate spam)."""
+    pool = await get_pool()
+    await pool.execute(
+        """INSERT INTO stock_alerts_sent (coupon_id, stock_level)
+           VALUES ($1, $2) ON CONFLICT (coupon_id, stock_level) DO NOTHING""",
+        coupon_id, stock_level
+    )
+
+
+async def clear_stock_alerts(coupon_id: int):
+    """Clear all alert records for a coupon (called when stock is replenished)."""
+    pool = await get_pool()
+    await pool.execute("DELETE FROM stock_alerts_sent WHERE coupon_id = $1", coupon_id)
+
+
+# ══════════════════════════════════════════════════════════════
+# COUPON STOCK LOGGING
+# ══════════════════════════════════════════════════════════════
+
+async def log_stock_action(
+    coupon_id: int, admin_id: int, action: str,
+    quantity: int, cost_per_unit: float = 0, notes: str = None
+):
+    """Log a stock change action for audit trail."""
+    pool = await get_pool()
+    total_cost = quantity * cost_per_unit
+    await pool.execute("""
+        INSERT INTO coupon_stock_logs
+        (coupon_id, admin_id, action, quantity, cost_per_unit, total_cost, notes)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+    """, coupon_id, admin_id, action, quantity, cost_per_unit, total_cost, notes)
+
+
+async def get_stock_logs(coupon_id: int, limit: int = 10) -> list:
+    """Get stock change history for a coupon."""
+    pool = await get_pool()
+    return await pool.fetch("""
+        SELECT sl.*, u.full_name AS admin_name, u.username AS admin_username
+        FROM coupon_stock_logs sl
+        LEFT JOIN users u ON sl.admin_id = u.telegram_id
+        WHERE sl.coupon_id = $1
+        ORDER BY sl.created_at DESC LIMIT $2
+    """, coupon_id, limit)
+
+
+async def get_admin_stock_summary() -> list:
+    """Per-admin stock contribution summary."""
+    pool = await get_pool()
+    return await pool.fetch("""
+        SELECT
+            sl.admin_id,
+            COUNT(*) AS total_actions,
+            COALESCE(SUM(sl.quantity) FILTER (WHERE sl.action IN ('add_codes', 'upload_codes', 'create')), 0) AS codes_added,
+            COALESCE(SUM(sl.quantity) FILTER (WHERE sl.action = 'extract'), 0) AS codes_extracted,
+            COALESCE(SUM(sl.quantity) FILTER (WHERE sl.action = 'clear_stock'), 0) AS codes_cleared,
+            COALESCE(SUM(sl.total_cost), 0) AS total_cost_invested,
+            MAX(sl.created_at) AS last_action
+        FROM coupon_stock_logs sl
+        GROUP BY sl.admin_id
+        ORDER BY codes_added DESC
+    """)
+
+
+async def get_total_stock_cost() -> float:
+    """Get total cost of all stock ever purchased (COGS basis)."""
+    pool = await get_pool()
+    val = await pool.fetchval(
+        "SELECT COALESCE(SUM(total_cost), 0) FROM coupon_stock_logs WHERE action IN ('add_codes', 'upload_codes', 'create')"
+    )
+    return float(val or 0)
+
+
+# ══════════════════════════════════════════════════════════════
+# EXPENSE TRACKING
+# ══════════════════════════════════════════════════════════════
+
+async def add_expense(
+    admin_id: int, expense_type: str, amount: float,
+    description: str = None, coupon_id: int = None, reference: str = None
+) -> int:
+    """Add an expense record. Returns the expense ID."""
+    pool = await get_pool()
+    row = await pool.fetchrow("""
+        INSERT INTO admin_expenses (admin_id, expense_type, amount, description, coupon_id, reference)
+        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
+    """, admin_id, expense_type, amount, description, coupon_id, reference)
+    return row["id"]
+
+
+async def get_expenses_summary() -> dict:
+    """Get expense totals grouped by type."""
+    pool = await get_pool()
+    rows = await pool.fetch("""
+        SELECT expense_type,
+               COUNT(*) as count,
+               COALESCE(SUM(amount), 0) as total
+        FROM admin_expenses
+        GROUP BY expense_type
+        ORDER BY total DESC
+    """)
+    result = {}
+    grand_total = 0
+    for r in rows:
+        result[r["expense_type"]] = {"count": r["count"], "total": float(r["total"])}
+        grand_total += float(r["total"])
+    result["_grand_total"] = grand_total
+    return result
+
+
+async def get_admin_expenses_list(admin_id: int = None, limit: int = 20) -> list:
+    """Get recent expenses, optionally filtered by admin."""
+    pool = await get_pool()
+    if admin_id:
+        return await pool.fetch(
+            "SELECT * FROM admin_expenses WHERE admin_id = $1 ORDER BY created_at DESC LIMIT $2",
+            admin_id, limit
+        )
+    return await pool.fetch(
+        "SELECT * FROM admin_expenses ORDER BY created_at DESC LIMIT $1", limit
+    )
+
+
+async def get_total_expenses() -> float:
+    """Get grand total of all expenses."""
+    pool = await get_pool()
+    val = await pool.fetchval("SELECT COALESCE(SUM(amount), 0) FROM admin_expenses")
+    return float(val or 0)
+
+
+async def get_admin_expense_totals() -> list:
+    """Get total expenses per admin."""
+    pool = await get_pool()
+    return await pool.fetch("""
+        SELECT admin_id,
+               COUNT(*) as expense_count,
+               COALESCE(SUM(amount), 0) as total_spent
+        FROM admin_expenses
+        GROUP BY admin_id
+        ORDER BY total_spent DESC
+    """)
+
+
+# ══════════════════════════════════════════════════════════════
+# ADVANCED TIME-BASED ANALYTICS
+# ══════════════════════════════════════════════════════════════
+
+async def get_daily_profit(days: int = 7) -> list:
+    """Daily profit = revenue - losses - expenses for last N days."""
+    pool = await get_pool()
+    return await pool.fetch("""
+        WITH days AS (
+            SELECT generate_series(
+                (NOW() - interval '1 day' * $1)::date,
+                NOW()::date,
+                '1 day'::interval
+            )::date AS day
+        ),
+        daily_rev AS (
+            SELECT DATE(COALESCE(paid_at, updated_at)) AS day,
+                   COALESCE(SUM(amount), 0) AS revenue,
+                   COUNT(*) AS order_count
+            FROM orders
+            WHERE status IN ('paid', 'delivered')
+              AND COALESCE(paid_at, updated_at) >= NOW() - interval '1 day' * $1
+            GROUP BY DATE(COALESCE(paid_at, updated_at))
+        ),
+        daily_loss AS (
+            SELECT DATE(created_at) AS day,
+                   COALESCE(SUM(amount), 0) AS loss
+            FROM promotional_losses
+            WHERE created_at >= NOW() - interval '1 day' * $1
+            GROUP BY DATE(created_at)
+        ),
+        daily_ref AS (
+            SELECT DATE(created_at) AS day,
+                   COALESCE(SUM(amount), 0) AS referral_loss
+            FROM wallet_transactions
+            WHERE amount > 0
+              AND txn_type IN ('referral_reward', 'referral_commission')
+              AND created_at >= NOW() - interval '1 day' * $1
+            GROUP BY DATE(created_at)
+        ),
+        daily_exp AS (
+            SELECT DATE(created_at) AS day,
+                   COALESCE(SUM(amount), 0) AS expenses
+            FROM admin_expenses
+            WHERE created_at >= NOW() - interval '1 day' * $1
+            GROUP BY DATE(created_at)
+        )
+        SELECT d.day,
+               COALESCE(r.revenue, 0) AS revenue,
+               COALESCE(r.order_count, 0) AS orders,
+               COALESCE(l.loss, 0) AS promo_loss,
+               COALESCE(ref.referral_loss, 0) AS referral_loss,
+               COALESCE(e.expenses, 0) AS expenses,
+               COALESCE(r.revenue, 0) - COALESCE(l.loss, 0) - COALESCE(ref.referral_loss, 0) - COALESCE(e.expenses, 0) AS net_profit
+        FROM days d
+        LEFT JOIN daily_rev r ON r.day = d.day
+        LEFT JOIN daily_loss l ON l.day = d.day
+        LEFT JOIN daily_ref ref ON ref.day = d.day
+        LEFT JOIN daily_exp e ON e.day = d.day
+        ORDER BY d.day DESC
+    """, days)
+
+
+async def get_weekly_profit(weeks: int = 4) -> list:
+    """Weekly profit summary for last N weeks."""
+    pool = await get_pool()
+    return await pool.fetch("""
+        SELECT
+            DATE_TRUNC('week', COALESCE(paid_at, updated_at))::date AS week_start,
+            COALESCE(SUM(amount), 0) AS revenue,
+            COUNT(*) AS order_count
+        FROM orders
+        WHERE status IN ('paid', 'delivered')
+          AND COALESCE(paid_at, updated_at) >= NOW() - interval '1 week' * $1
+        GROUP BY DATE_TRUNC('week', COALESCE(paid_at, updated_at))
+        ORDER BY week_start DESC
+    """, weeks)
+
+
+async def get_monthly_profit(months: int = 6) -> list:
+    """Monthly profit summary for last N months."""
+    pool = await get_pool()
+    return await pool.fetch("""
+        SELECT
+            DATE_TRUNC('month', COALESCE(paid_at, updated_at))::date AS month_start,
+            COALESCE(SUM(amount), 0) AS revenue,
+            COUNT(*) AS order_count
+        FROM orders
+        WHERE status IN ('paid', 'delivered')
+          AND COALESCE(paid_at, updated_at) >= NOW() - interval '1 month' * $1
+        GROUP BY DATE_TRUNC('month', COALESCE(paid_at, updated_at))
+        ORDER BY month_start DESC
+    """, months)
+
+
+async def get_category_profitability() -> list:
+    """Revenue, cost, and profit per category."""
+    pool = await get_pool()
+    return await pool.fetch("""
+        SELECT
+            COALESCE(c.category, '(Uncategorized)') AS category,
+            COUNT(DISTINCT c.id) AS product_count,
+            COALESCE(SUM(c.stock), 0) AS current_stock,
+            COALESCE(SUM(o_agg.revenue), 0) AS revenue,
+            COALESCE(SUM(o_agg.sold_count), 0) AS units_sold,
+            COALESCE(SUM(sl_agg.total_cost), 0) AS total_cost,
+            COALESCE(SUM(o_agg.revenue), 0) - COALESCE(SUM(sl_agg.total_cost), 0) AS profit
+        FROM coupons c
+        LEFT JOIN (
+            SELECT coupon_id,
+                   COALESCE(SUM(amount), 0) AS revenue,
+                   COUNT(*) AS sold_count
+            FROM orders WHERE status IN ('paid', 'delivered')
+            GROUP BY coupon_id
+        ) o_agg ON o_agg.coupon_id = c.id
+        LEFT JOIN (
+            SELECT coupon_id, COALESCE(SUM(total_cost), 0) AS total_cost
+            FROM coupon_stock_logs
+            WHERE action IN ('add_codes', 'upload_codes', 'create')
+            GROUP BY coupon_id
+        ) sl_agg ON sl_agg.coupon_id = c.id
+        GROUP BY COALESCE(c.category, '(Uncategorized)')
+        ORDER BY revenue DESC
+    """)
+
+
+async def get_coupon_profitability(limit: int = 20) -> list:
+    """Per-coupon profitability: revenue vs cost."""
+    pool = await get_pool()
+    return await pool.fetch("""
+        SELECT
+            c.id, c.title, c.category, c.stock, c.is_active,
+            c.created_by AS admin_id,
+            c.discounted_price AS price,
+            COALESCE(o_agg.revenue, 0) AS revenue,
+            COALESCE(o_agg.sold_count, 0) AS units_sold,
+            COALESCE(sl_agg.total_cost, 0) AS total_cost,
+            COALESCE(sl_agg.codes_added, 0) AS total_codes_added,
+            COALESCE(o_agg.revenue, 0) - COALESCE(sl_agg.total_cost, 0) AS profit
+        FROM coupons c
+        LEFT JOIN (
+            SELECT coupon_id,
+                   COALESCE(SUM(amount), 0) AS revenue,
+                   COUNT(*) AS sold_count
+            FROM orders WHERE status IN ('paid', 'delivered')
+            GROUP BY coupon_id
+        ) o_agg ON o_agg.coupon_id = c.id
+        LEFT JOIN (
+            SELECT coupon_id,
+                   COALESCE(SUM(total_cost), 0) AS total_cost,
+                   COALESCE(SUM(quantity), 0) AS codes_added
+            FROM coupon_stock_logs
+            WHERE action IN ('add_codes', 'upload_codes', 'create')
+            GROUP BY coupon_id
+        ) sl_agg ON sl_agg.coupon_id = c.id
+        ORDER BY revenue DESC
+        LIMIT $1
+    """, limit)
+
+
+async def get_admin_performance_detailed() -> list:
+    """Comprehensive per-admin metrics: sales, stock, cost, profit."""
+    pool = await get_pool()
+    return await pool.fetch("""
+        SELECT
+            a.admin_id,
+            COALESCE(sales.products_added, 0) AS products_added,
+            COALESCE(sales.total_sold, 0) AS total_sold,
+            COALESCE(sales.total_revenue, 0) AS total_revenue,
+            COALESCE(sales.active_products, 0) AS active_products,
+            COALESCE(stock.codes_added, 0) AS codes_added,
+            COALESCE(stock.total_cost, 0) AS stock_cost,
+            COALESCE(exp.total_expenses, 0) AS expenses,
+            COALESCE(loss.total_loss, 0) AS promo_losses,
+            COALESCE(sales.total_revenue, 0) - COALESCE(stock.total_cost, 0) - COALESCE(exp.total_expenses, 0) - COALESCE(loss.total_loss, 0) AS net_profit
+        FROM (
+            SELECT DISTINCT admin_id FROM (
+                SELECT created_by AS admin_id FROM coupons WHERE created_by IS NOT NULL
+                UNION SELECT admin_id FROM coupon_stock_logs
+                UNION SELECT admin_id FROM admin_expenses
+                UNION SELECT admin_id FROM promotional_losses WHERE admin_id IS NOT NULL
+            ) all_admins
+        ) a
+        LEFT JOIN (
+            SELECT c.created_by AS admin_id,
+                   COUNT(DISTINCT c.id) AS products_added,
+                   COUNT(o.order_id) FILTER (WHERE o.status IN ('paid', 'delivered')) AS total_sold,
+                   COALESCE(SUM(o.amount) FILTER (WHERE o.status IN ('paid', 'delivered')), 0) AS total_revenue,
+                   COUNT(DISTINCT c.id) FILTER (WHERE c.is_active = TRUE) AS active_products
+            FROM coupons c
+            LEFT JOIN orders o ON o.coupon_id = c.id
+            WHERE c.created_by IS NOT NULL
+            GROUP BY c.created_by
+        ) sales ON sales.admin_id = a.admin_id
+        LEFT JOIN (
+            SELECT admin_id,
+                   COALESCE(SUM(quantity) FILTER (WHERE action IN ('add_codes', 'upload_codes', 'create')), 0) AS codes_added,
+                   COALESCE(SUM(total_cost), 0) AS total_cost
+            FROM coupon_stock_logs
+            GROUP BY admin_id
+        ) stock ON stock.admin_id = a.admin_id
+        LEFT JOIN (
+            SELECT admin_id, COALESCE(SUM(amount), 0) AS total_expenses
+            FROM admin_expenses
+            GROUP BY admin_id
+        ) exp ON exp.admin_id = a.admin_id
+        LEFT JOIN (
+            SELECT admin_id, COALESCE(SUM(amount), 0) AS total_loss
+            FROM promotional_losses WHERE admin_id IS NOT NULL
+            GROUP BY admin_id
+        ) loss ON loss.admin_id = a.admin_id
+        ORDER BY total_revenue DESC
+    """)

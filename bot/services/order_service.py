@@ -137,8 +137,17 @@ async def complete_order(order_id: str, txn_ref: str, user_id: int, bot=None) ->
     except Exception as e:
         logger.error(f"Referral process failed for order {order_id}: {e}")
 
+    # ── Check stock alerts after delivery ──
+    if bot and coupon_id:
+        try:
+            from bot.services.stock_alert_service import check_stock_alerts
+            await check_stock_alerts(bot, coupon_id=coupon_id)
+        except Exception as e:
+            logger.warning(f"Stock alert check failed (non-critical): {e}")
+
     logger.info(f"Order completed: {order_id}, delivered {delivered}/{qty} codes")
     return True
+
 
 
 async def cancel_order(order_id: str, bot=None) -> bool:
