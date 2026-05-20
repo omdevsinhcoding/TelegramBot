@@ -9,7 +9,7 @@ from aiogram.fsm.state import StatesGroup, State
 from bot.services.wallet_service import get_balance, get_history
 from bot.keyboards.wallet_kb import wallet_menu_kb, topup_amounts_kb
 from bot.keyboards.common import back_button
-from bot.utils.helpers import format_currency, format_datetime, escape_md
+from bot.utils.helpers import format_currency, format_datetime, escape_md, safe_edit_or_send
 from bot.utils.decorators import error_handler
 
 router = Router()
@@ -29,8 +29,8 @@ async def cb_wallet(callback: types.CallbackQuery):
         f"💎 Balance: *{bal_str}*\n\n"
         f"Choose an option:"
     )
-    await callback.message.edit_text(
-        text, parse_mode="MarkdownV2", reply_markup=wallet_menu_kb()
+    await safe_edit_or_send(
+        callback.message, text, reply_markup=wallet_menu_kb()
     )
     await callback.answer()
 
@@ -39,8 +39,8 @@ async def cb_wallet(callback: types.CallbackQuery):
 @error_handler
 async def cb_topup(callback: types.CallbackQuery):
     text = "➕ *Top\\-Up Wallet*\n\nSelect an amount or enter custom:"
-    await callback.message.edit_text(
-        text, parse_mode="MarkdownV2", reply_markup=topup_amounts_kb()
+    await safe_edit_or_send(
+        callback.message, text, reply_markup=topup_amounts_kb()
     )
     await callback.answer()
 
@@ -54,9 +54,10 @@ async def cb_history(callback: types.CallbackQuery):
 
     if not history:
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("wallet_menu")]])
-        await callback.message.edit_text(
+        await safe_edit_or_send(
+            callback.message,
             "📜 *Transaction History*\n\nNo transactions yet\\.",
-            parse_mode="MarkdownV2", reply_markup=kb,
+            reply_markup=kb,
         )
         await callback.answer()
         return
@@ -75,16 +76,16 @@ async def cb_history(callback: types.CallbackQuery):
 
     text = "\n".join(lines)
     kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("wallet_menu")]])
-    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    await safe_edit_or_send(callback.message, text, reply_markup=kb)
     await callback.answer()
 
 
 @router.callback_query(F.data == "topup_custom")
 @error_handler
 async def cb_topup_custom(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.edit_text(
+    await safe_edit_or_send(
+        callback.message,
         "💬 Enter the amount you want to add \\(min ₹10, max ₹10,000\\):",
-        parse_mode="MarkdownV2",
     )
     await state.set_state(WalletStates.waiting_custom_amount)
     await callback.answer()

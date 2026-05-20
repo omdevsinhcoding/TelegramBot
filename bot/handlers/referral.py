@@ -9,7 +9,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from bot.database import queries as db
 from bot.config import Config
-from bot.utils.helpers import escape_md, format_currency
+from bot.utils.helpers import escape_md, format_currency, safe_edit_or_send
 from bot.utils.decorators import error_handler
 from bot.utils.logger import logger
 from bot.keyboards.common import back_button
@@ -203,7 +203,7 @@ async def cb_ref_claim_rewards(callback: types.CallbackQuery):
     buttons.append([InlineKeyboardButton(text="◀️ Back", callback_data="referral_menu")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    await safe_edit_or_send(callback.message, text, reply_markup=kb)
     await callback.answer()
 
 
@@ -294,7 +294,8 @@ async def cb_ref_claim(callback: types.CallbackQuery):
     buttons.append([back_button("back_home")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    await callback.message.edit_text(
+    await safe_edit_or_send(
+        callback.message,
         f"🎊✨ *CONGRATULATIONS\\!* ✨🎊\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"🏆 *REFERRAL REWARD CLAIMED\\!*\n\n"
@@ -307,7 +308,7 @@ async def cb_ref_claim(callback: types.CallbackQuery):
         f"💡 _This reward is saved in your_\n"
         f"_📦 Order History — view anytime\\!_\n\n"
         f"🤝 _Keep referring to earn more rewards\\!_ 🚀",
-        parse_mode="MarkdownV2", reply_markup=kb
+        reply_markup=kb
     )
     await callback.answer("🎉 Reward claimed!")
 
@@ -320,9 +321,10 @@ async def cb_ref_history(callback: types.CallbackQuery):
 
     if not history:
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
-        await callback.message.edit_text(
+        await safe_edit_or_send(
+            callback.message,
             "📋 *Referral History*\n\nNo referrals yet\\. Share your link to start earning\\!",
-            parse_mode="MarkdownV2", reply_markup=kb
+            reply_markup=kb
         )
         await callback.answer()
         return
@@ -338,8 +340,8 @@ async def cb_ref_history(callback: types.CallbackQuery):
         lines.append(f"{status_icon} {name} — {comm}")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
-    await callback.message.edit_text(
-        "\n".join(lines), parse_mode="MarkdownV2", reply_markup=kb
+    await safe_edit_or_send(
+        callback.message, "\n".join(lines), reply_markup=kb
     )
     await callback.answer()
 
@@ -443,9 +445,10 @@ async def process_referral_on_purchase(user_id: int, order_amount, bot=None):
 async def cb_ref_enter_code(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(ReferralStates.enter_referral_code)
     kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
-    await callback.message.edit_text(
+    await safe_edit_or_send(
+        callback.message,
         "🔗 *Enter Referral Code*\n\nSend the code of the user who invited you:",
-        parse_mode="MarkdownV2", reply_markup=kb
+        reply_markup=kb
     )
     await callback.answer()
 

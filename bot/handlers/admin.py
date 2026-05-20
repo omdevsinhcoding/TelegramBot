@@ -276,13 +276,12 @@ async def cb_add_coupon_start(callback: types.CallbackQuery, state: FSMContext):
         ps.get("gateway_razorpay_enabled", False)
     )
     if not has_gateway:
-        await callback.message.edit_text(
+        await _safe_edit_or_send(callback.message, 
             "⚠️ *Cannot Add Coupon*\n\n"
             "No payment gateway is currently enabled\\.\n\n"
             "Please go to *💳 Payments* and enable at least one "
             "payment gateway \\(Paytm, BharatPe, or Razorpay\\) "
             "before adding coupons\\.",
-            parse_mode="MarkdownV2",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="💳 Go to Payments", callback_data="admin_payments")],
                 [back_button("admin_coupons")],
@@ -291,9 +290,8 @@ async def cb_add_coupon_start(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("⚠️ No gateway enabled!", show_alert=True)
         return
 
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "📝 *Step 1/6* — Enter the *coupon title*:",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[admin_cancel_button()]]),
     )
     await state.set_state(AdminStates.add_title)
@@ -397,10 +395,9 @@ async def cb_add_select_category(callback: types.CallbackQuery, state: FSMContex
         if cat:
             await state.update_data(category=cat["name"])
 
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "🔑 *Step 6/6* — Send *coupon codes* \\(one per line\\)\\.\n\n"
         "Or type *skip* to add codes later:",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[admin_cancel_button()]]),
     )
     await state.set_state(AdminStates.add_coupon_codes)
@@ -494,9 +491,8 @@ async def cb_edit_field(callback: types.CallbackQuery, state: FSMContext):
     label = field_labels.get(field, field)
 
     await state.update_data(edit_coupon_id=coupon_id, edit_field=field)
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         f"✏️ Enter the new *{escape_md(label)}*:",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [back_button(f"admin_coupon_edit:{coupon_id}"), admin_cancel_button()]
         ]),
@@ -560,9 +556,8 @@ async def cb_toggle(callback: types.CallbackQuery):
 @error_handler
 async def cb_delete_confirm(callback: types.CallbackQuery):
     coupon_id = int(callback.data.split(":")[1])
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         f"⚠️ Are you sure you want to *delete coupon \\#{coupon_id}*\\?",
-        parse_mode="MarkdownV2",
         reply_markup=confirm_delete_kb(coupon_id),
     )
     await callback.answer()
@@ -611,10 +606,9 @@ async def cb_delete_exec(callback: types.CallbackQuery):
 async def cb_add_codes(callback: types.CallbackQuery, state: FSMContext):
     coupon_id = int(callback.data.split(":")[1])
     await state.update_data(codes_coupon_id=coupon_id)
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "🔑 Send coupon codes, *one per line*\\.\n\n"
         "_Or use 📄 Upload File button for bulk upload\\._",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [back_button(f"admin_coupon_edit:{coupon_id}"), admin_cancel_button()]
         ]),
@@ -681,11 +675,10 @@ async def cb_upload_codes(callback: types.CallbackQuery, state: FSMContext):
     coupon_id = int(callback.data.split(":")[1])
     await state.update_data(upload_codes_coupon_id=coupon_id)
     await state.set_state(AdminStates.upload_codes_file)
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "📄 *Upload Codes File*\n\n"
         "Send a *\\.txt* file with one code per line\\.\n"
         "The bot will extract all codes and add them to stock\\.",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [back_button(f"admin_coupon_edit:{coupon_id}"), admin_cancel_button()]
         ]),
@@ -819,7 +812,7 @@ async def cb_admin_view_codes(callback: types.CallbackQuery):
     buttons.append([back_button(f"admin_coupon_edit:{coupon_id}")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    await _safe_edit_or_send(callback.message, text, reply_markup=kb)
     await callback.answer()
 
 
@@ -884,9 +877,8 @@ async def cb_admin_categories(callback: types.CallbackQuery):
 @admin_only
 @error_handler
 async def cb_cat_add(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "🏷️ *Add Category*\n\nEnter the category name:",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [back_button("admin_categories"), admin_cancel_button()]
         ]),
@@ -959,9 +951,8 @@ async def cb_cat_view(callback: types.CallbackQuery):
 async def cb_cat_rename(callback: types.CallbackQuery, state: FSMContext):
     cat_id = int(callback.data.split(":")[1])
     await state.update_data(rename_cat_id=cat_id)
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "✏️ *Rename Category*\n\nEnter the new name:",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [back_button(f"admin_cat_view:{cat_id}"), admin_cancel_button()]
         ]),
@@ -1027,10 +1018,9 @@ async def cb_cat_delete(callback: types.CallbackQuery):
         await callback.answer("Category not found.", show_alert=True)
         return
 
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         f"⚠️ *Delete category* *{escape_md(cat['name'])}*\\?\n\n"
         f"Coupons in this category will become uncategorized\\.",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(text="✅ Yes, Delete", callback_data=f"admin_cat_delete_confirm:{cat_id}"),
@@ -1103,9 +1093,8 @@ async def cb_set_category(callback: types.CallbackQuery):
         await callback.answer("No categories exist. Create one from 🏷️ Categories first.", show_alert=True)
         return
 
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "🏷️ *Select Category*\n\nChoose a category for this coupon:",
-        parse_mode="MarkdownV2",
         reply_markup=admin_category_select_kb(categories, coupon_id),
     )
     await callback.answer()
@@ -1176,13 +1165,12 @@ async def cb_clear_stock(callback: types.CallbackQuery):
         return
 
     stats = await db.get_coupon_code_stats(coupon_id)
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         f"⚠️ *Clear ALL unsold stock for:*\n\n"
         f"🏷️ {escape_md(coupon['title'])}\n"
         f"📭 Unsold codes: *{stats['unsold']}*\n\n"
         f"This will permanently delete all unsold codes\\.\n"
         f"Sold codes and order history will NOT be affected\\.",
-        parse_mode="MarkdownV2",
         reply_markup=confirm_clear_stock_kb(coupon_id),
     )
     await callback.answer()
@@ -1218,12 +1206,11 @@ async def cb_extract_codes(callback: types.CallbackQuery, state: FSMContext):
         return
 
     await state.update_data(extract_coupon_id=coupon_id)
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         f"📤 *Extract Codes*\n\n"
         f"🏷️ {escape_md(coupon['title'])}\n"
         f"📭 Available: *{stats['unsold']}* codes\n\n"
         f"Enter the *number* of codes to extract:",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [back_button(f"admin_coupon_edit:{coupon_id}"), admin_cancel_button()]
         ]),
@@ -1373,9 +1360,8 @@ async def cb_admin_orders(callback: types.CallbackQuery):
     users = await db.get_recent_order_users(TOTAL_FETCH)
 
     if not users:
-        await callback.message.edit_text(
+        await _safe_edit_or_send(callback.message, 
             "🧾 *Recent Purchasers*\n\n_No orders yet\\._",
-            parse_mode="MarkdownV2",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_panel")]])
         )
         await callback.answer()
@@ -1542,11 +1528,10 @@ async def cb_admin_order_search(callback: types.CallbackQuery, state: FSMContext
     """Prompt admin to enter an order ID to search."""
     await state.set_state(AdminStates.user_search_input)
     await state.update_data(search_type="order_id")
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "🔍 *Search Order*\n\n"
         "Send the *Order ID* to look up:\n"
         "\\(e\\.g\\. `DX\\-12345678\\-ABCDEF`\\)",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [back_button("admin_orders"), admin_cancel_button()]
         ]),
@@ -1664,9 +1649,8 @@ async def cb_admin_logs(callback: types.CallbackQuery):
     logs = await db.get_admin_logs(TOTAL_FETCH)
 
     if not logs:
-        await callback.message.edit_text(
+        await _safe_edit_or_send(callback.message, 
             "📋 *ADMIN ACTIVITY LOG*\n\n_No activity recorded yet\\._",
-            parse_mode="MarkdownV2",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_panel")]])
         )
         await callback.answer()
@@ -1769,7 +1753,7 @@ async def cb_broadcast(callback: types.CallbackQuery, state: FSMContext):
         "💡 *Tip:* Don't send `/start` — use the button below to\n"
         "broadcast a proper restart message with a button link\\."
     )
-    await callback.message.edit_text(text, parse_mode="MarkdownV2",
+    await _safe_edit_or_send(callback.message, text,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📲 Quick: Broadcast Restart Message", callback_data="bc_quick_restart")],
             [admin_cancel_button()],
@@ -1808,7 +1792,7 @@ async def cb_bc_quick_restart(callback: types.CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="✏️ Edit Message", callback_data="admin_broadcast")],
         [InlineKeyboardButton(text="❌ Cancel", callback_data="admin_panel")],
     ])
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "📲 <b>Quick Restart Broadcast</b>\n\n"
         "This will send the following message to ALL users:\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
@@ -1880,7 +1864,7 @@ async def msg_broadcast_content(message: types.Message, state: FSMContext):
 @admin_only
 @error_handler
 async def cb_bc_add_buttons(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "➕ *Add Inline Buttons*\n\n"
         "Send buttons in this format \\(one per line\\):\n"
         "`Button Text \\| https://link\\.com`\n\n"
@@ -1888,7 +1872,6 @@ async def cb_bc_add_buttons(callback: types.CallbackQuery, state: FSMContext):
         "`Join Channel \\| https://t\\.me/channel`\n"
         "`Visit Website \\| https://example\\.com`\n\n"
         "_Send them now:_",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[admin_cancel_button()]]),
     )
     await state.set_state(AdminStates.broadcast_buttons)
@@ -1965,9 +1948,8 @@ async def cb_bc_send_now(callback: types.CallbackQuery, state: FSMContext):
     await db.update_broadcast(bid, 0, 0, "running")
     logger.info(f"Admin {callback.from_user.id} started broadcast #{bid} to {total} users")
 
-    progress_msg = await callback.message.edit_text(
+    progress_msg = await _safe_edit_or_send(callback.message, 
         f"📢 Broadcasting to {total} users\\.\\.\\.",
-        parse_mode="MarkdownV2",
     )
 
     sent = 0
@@ -2114,9 +2096,8 @@ async def cb_giveaway_add_start(callback: types.CallbackQuery, state: FSMContext
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [back_button("admin_giveaways")],
     ])
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "🎁 *Step 1/3* — Enter the *giveaway title*:",
-        parse_mode="MarkdownV2",
         reply_markup=kb,
     )
     await state.set_state(AdminStates.giveaway_title)
@@ -2190,11 +2171,10 @@ async def cb_giveaway_step3(callback: types.CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="📄 Upload .txt File", callback_data="giveaway_src_file")],
         [admin_cancel_button()],
     ]
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         f"📄 *Step 3/3* — How to add codes?\n"
         f"Codes per user: *{cpu}*\n\n"
         f"Choose a method below:",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
     )
     await callback.answer()
@@ -2222,10 +2202,9 @@ async def cb_giveaway_src_existing(callback: types.CallbackQuery, state: FSMCont
         )])
     buttons.append([back_button("giveaway_step3")])
 
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "📦 *Select a Coupon*\n\n"
         "Choose a coupon to use its codes for the giveaway:",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
     )
     await callback.answer()
@@ -2261,19 +2240,18 @@ async def cb_giveaway_pick_coupon(callback: types.CallbackQuery, state: FSMConte
 
         max_users = len(codes) // max(cpu, 1)
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_giveaways")]])
-        await callback.message.edit_text(
+        await _safe_edit_or_send(callback.message, 
             f"✅ *Giveaway \\#{escape_md(str(gid))} created\\!*\n\n"
             f"📝 Title: *{escape_md(title)}*\n"
             f"📦 Codes loaded: *{len(codes)}*\n"
             f"👤 Codes per user: *{cpu}*\n"
             f"👥 Max users: *\\~{max_users}*",
-            parse_mode="MarkdownV2", reply_markup=kb,
+            reply_markup=kb,
         )
     except Exception as e:
         logger.error(f"Giveaway creation error: {e}")
-        await callback.message.edit_text(
+        await _safe_edit_or_send(callback.message, 
             f"❌ Error creating giveaway: {escape_md(str(e))}",
-            parse_mode="MarkdownV2",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_giveaways")]]),
         )
     await callback.answer()
@@ -2288,14 +2266,13 @@ async def cb_giveaway_src_manual(callback: types.CallbackQuery, state: FSMContex
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [back_button("giveaway_step3"), admin_cancel_button()],
     ])
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "📝 *Paste Codes*\n\n"
         "Send coupon codes, *one per line*:\n\n"
         "Example:\n"
         "`CODE123`\n"
         "`CODE456`\n"
         "`CODE789`",
-        parse_mode="MarkdownV2",
         reply_markup=kb,
     )
     await state.set_state(AdminStates.giveaway_manual_codes)
@@ -2328,10 +2305,9 @@ async def cb_giveaway_src_file(callback: types.CallbackQuery, state: FSMContext)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [back_button("giveaway_step3"), admin_cancel_button()],
     ])
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "📄 *Upload File*\n\n"
         "Send a *\\.txt file* with codes \\(one per line\\)\\.",
-        parse_mode="MarkdownV2",
         reply_markup=kb,
     )
     await state.set_state(AdminStates.giveaway_max_claims)
@@ -2530,9 +2506,8 @@ async def cb_giveaway_add_more_codes(callback: types.CallbackQuery, state: FSMCo
     gid = int(callback.data.split(":")[1])
     await state.update_data(add_codes_giveaway_id=gid)
     kb = InlineKeyboardMarkup(inline_keyboard=[[admin_cancel_button()]])
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "📄 Send more codes \\(one per line\\) or upload a \\.txt file:",
-        parse_mode="MarkdownV2",
         reply_markup=kb,
     )
     await state.set_state(AdminStates.giveaway_add_codes)
@@ -2694,11 +2669,10 @@ async def cb_admin_manage_referrals(callback: types.CallbackQuery, state: FSMCon
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [back_button("admin_referral_settings"), admin_cancel_button()]
     ])
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "🗑️ *Manage Referrals*\n\n"
         "Send the *Telegram ID* of the referrer whose referrals you want to view or delete:\n\n"
         "_Tip: Use /id in the bot to get any user's ID_",
-        parse_mode="MarkdownV2",
         reply_markup=kb,
     )
     await callback.answer()
@@ -2934,9 +2908,8 @@ async def cb_ref_toggle_active(callback: types.CallbackQuery):
 @admin_only
 @error_handler
 async def cb_ref_edit_commission(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "\u270f\ufe0f *Edit Commission Percentage*\n\nEnter new commission percentage \\(e\\.g\\. 10\\.5\\):",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [back_button("admin_referral_settings"), admin_cancel_button()]
         ]),
@@ -2966,11 +2939,10 @@ async def msg_ref_commission_input(message: types.Message, state: FSMContext):
 async def cb_ref_edit_reward_amount(callback: types.CallbackQuery, state: FSMContext):
     settings = await db.get_referral_settings()
     current = settings.get("reward_amount", 10.0) or 10.0
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         f"💵 *Edit Wallet Reward Amount*\n\n"
         f"Current: ₹{escape_md(str(float(current)))}\n\n"
         f"Enter new reward amount \\(e\\.g\\. 10 or 25\\.5\\):",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [back_button("admin_referral_settings"), admin_cancel_button()]
         ]),
@@ -3015,8 +2987,8 @@ async def cb_ref_edit_cap(callback: types.CallbackQuery, state: FSMContext):
         f"\\(Max ₹250 in 30 days\\)\n\n"
         f"Send `0` to disable cap \\(unlimited\\)\\."
     )
-    await callback.message.edit_text(
-        text, parse_mode="MarkdownV2",
+    await _safe_edit_or_send(callback.message, 
+        text,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [back_button("admin_referral_settings"), admin_cancel_button()]
         ]),
@@ -3088,12 +3060,11 @@ async def cb_ref_add_reward(callback: types.CallbackQuery):
         # Show confirmation before replacing
         current = active_rewards[0]
         title_esc = escape_md(current["title"])
-        await callback.message.edit_text(
+        await _safe_edit_or_send(callback.message, 
             f"⚠️ *Replace Existing Reward?*\n\n"
             f"Current reward: 🎁 *{title_esc}* \\({current['referrals_needed']} refs\\)\n\n"
             f"Adding a new reward will *remove the current one*\\.\n"
             f"Do you want to continue?",
-            parse_mode="MarkdownV2",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="✅ Yes, Replace", callback_data="admin_ref_replace_confirm"),
                  InlineKeyboardButton(text="❌ Cancel", callback_data="admin_referral_settings")],
@@ -3136,10 +3107,10 @@ async def _show_reward_coupon_picker(callback: types.CallbackQuery):
     buttons.append([back_button("admin_referral_settings")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "🎁 *Select a Coupon as Referral Reward*\n\n"
         "Pick which coupon users will get when they complete referrals:",
-        parse_mode="MarkdownV2", reply_markup=kb
+        reply_markup=kb
     )
     await callback.answer()
 
@@ -3157,11 +3128,10 @@ async def cb_ref_pick_coupon(callback: types.CallbackQuery, state: FSMContext):
 
     await state.update_data(ref_reward_coupon_id=coupon_id)
     title_esc = escape_md(coupon["title"])
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         f"🎁 *Setting Reward: {title_esc}*\n\n"
         f"How many referrals should a user need to claim this coupon?\n\n"
         f"Enter a number \\(e\\.g\\. 3, 5, 10\\):",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [back_button("admin_referral_settings"), admin_cancel_button()]
         ]),
@@ -3245,7 +3215,7 @@ async def cb_ref_reward_view(callback: types.CallbackQuery):
         [back_button("admin_referral_settings")],
     ])
 
-    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    await _safe_edit_or_send(callback.message, text, reply_markup=kb)
     await callback.answer()
 
 
@@ -3256,9 +3226,8 @@ async def cb_ref_reward_edit(callback: types.CallbackQuery, state: FSMContext):
     """Edit the referral count for a reward."""
     reward_id = int(callback.data.split(":")[1])
     await state.update_data(edit_reward_id=reward_id)
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "✏️ *Edit Referral Count*\n\nEnter the new number of referrals needed:",
-        parse_mode="MarkdownV2"
     )
     await state.set_state(AdminStates.ref_reward_count_input)
     await callback.answer()
@@ -3552,7 +3521,7 @@ async def cb_admin_toggle_force_join_legacy(callback: types.CallbackQuery):
 @error_handler
 async def cb_admin_fj_add(callback: types.CallbackQuery, state: FSMContext):
     """Ask admin to send channel IDs to add."""
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "📢 *Add Force Join Channel\\(s\\)*\n\n"
         "Send the *Channel/Group ID* or *@username*\n\n"
         "You can add multiple at once \\(comma\\-separated\\):\n\n"
@@ -3562,7 +3531,6 @@ async def cb_admin_fj_add(callback: types.CallbackQuery, state: FSMContext):
         "• `@Channel1, @Channel2, \\-100123`\n\n"
         "💡 Use /id command in your channel to get the ID\\.\n\n"
         "⚠️ *IMPORTANT*: Bot MUST be admin in each channel\\!",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [back_button("admin_force_join"), admin_cancel_button()]
         ]),
@@ -3687,7 +3655,7 @@ async def cb_admin_change_bot_name(callback: types.CallbackQuery, state: FSMCont
     settings = await db.get_bot_settings()
     current = (settings.get("bot_name") or "DreamX Store") if settings else "DreamX Store"
 
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         f"✏️ *Change Bot Name*\n\n"
         f"Current name: `{escape_md(current)}`\n\n"
         f"Send the new bot name\\.\n"
@@ -3695,7 +3663,6 @@ async def cb_admin_change_bot_name(callback: types.CallbackQuery, state: FSMCont
         f"• Payment QR codes\n"
         f"• Bot settings panel\n\n"
         f"_Max 64 characters_",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [back_button("admin_bot_settings"), admin_cancel_button()]
         ]),
@@ -3774,12 +3741,11 @@ async def cb_admin_dynconf(callback: types.CallbackQuery, state: FSMContext):
     current = dyn.get(field, "?")
 
     await state.update_data(dynconf_field=field)
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         f"✏️ *Edit: {label}*\n\n"
         f"Current value: `{escape_md(str(current))}` {escape_md(unit)}\n\n"
         f"💡 {escape_md(hint)}\n\n"
         f"Send the new value:",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [back_button("admin_bot_settings"), admin_cancel_button()]
         ]),
@@ -3887,8 +3853,8 @@ async def cb_admin_manage_admins(callback: types.CallbackQuery):
 
     buttons.append([back_button("admin_bot_settings")])
 
-    await callback.message.edit_text(
-        text, parse_mode="MarkdownV2",
+    await _safe_edit_or_send(callback.message, 
+        text,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
     )
     await callback.answer()
@@ -3899,11 +3865,10 @@ async def cb_admin_manage_admins(callback: types.CallbackQuery):
 @error_handler
 async def cb_admin_add_admin(callback: types.CallbackQuery, state: FSMContext):
     """Ask for Telegram ID of new admin."""
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "👮 *Add New Admin*\n\n"
         "Send the *Telegram ID* of the user you want to add as admin\\.\n\n"
         "💡 The user can find their ID using @userinfobot",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [back_button("admin_manage_admins"), admin_cancel_button()]
         ]),
@@ -4139,9 +4104,8 @@ async def cb_admin_pay_edit(callback: types.CallbackQuery, state: FSMContext):
     label = PAYMENT_FIELD_LABELS.get(field, field)
     await state.set_data({"payment_field": field})
     await state.set_state(AdminStates.payment_field_input)
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         f"✏️ *Edit {escape_md(label)}*\n\nSend the new value:",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [back_button("admin_payments"), admin_cancel_button()]
         ]),
@@ -4167,9 +4131,8 @@ async def msg_payment_field_input(message: types.Message, state: FSMContext):
 @error_handler
 async def cb_admin_pay_upload_qr(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.payment_qr_upload)
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "📷 *Upload BharatPe QR Image*\n\nSend the QR code image as a photo:",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [back_button("admin_payments"), admin_cancel_button()]
         ]),
@@ -4271,11 +4234,10 @@ async def cb_admin_users_all(callback: types.CallbackQuery):
 
     buttons.append([back_button("admin_users")])
 
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         f"👥 *All Users* — Page {page}/{total_pages}\n"
         f"📊 Total: *{total}* users\n\n"
         f"Tap a user to inspect:",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
     )
     await callback.answer()
@@ -4458,11 +4420,11 @@ async def cb_admin_user_orders(callback: types.CallbackQuery):
 
     if not orders:
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_user_inspect:{user_id}")]])
-        await callback.message.edit_text(
+        await _safe_edit_or_send(callback.message, 
             f"📦 *Orders for* {user_name}\n"
             f"👤 ID: `{user_id}`\n\n"
             f"_No orders found\\._",
-            parse_mode="MarkdownV2", reply_markup=kb
+            reply_markup=kb
         )
         await callback.answer()
         return
@@ -4550,8 +4512,8 @@ async def cb_admin_user_orders(callback: types.CallbackQuery):
     buttons.append([InlineKeyboardButton(text="👤 Back to Profile", callback_data=f"admin_user_inspect:{user_id}")])
     buttons.append([back_button("admin_users")])
 
-    await callback.message.edit_text(
-        text, parse_mode="MarkdownV2",
+    await _safe_edit_or_send(callback.message, 
+        text,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
     )
     await callback.answer()
@@ -4596,8 +4558,8 @@ async def cb_admin_view_order_codes(callback: types.CallbackQuery):
         buttons.append([InlineKeyboardButton(text="👤 User Orders", callback_data=f"admin_user_orders:{user_id}")])
     buttons.append([back_button("admin_orders")])
 
-    await callback.message.edit_text(
-        "\n".join(lines), parse_mode="MarkdownV2",
+    await _safe_edit_or_send(callback.message, 
+        "\n".join(lines),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
     )
     await callback.answer()
@@ -4612,9 +4574,9 @@ async def cb_admin_user_referrals(callback: types.CallbackQuery):
 
     if not referrals:
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_user_inspect:{user_id}")]])
-        await callback.message.edit_text(
+        await _safe_edit_or_send(callback.message, 
             f"👥 *No referrals found for user* `{user_id}`",
-            parse_mode="MarkdownV2", reply_markup=kb
+            reply_markup=kb
         )
         await callback.answer()
         return
@@ -4627,8 +4589,8 @@ async def cb_admin_user_referrals(callback: types.CallbackQuery):
         lines.append(f"{status} {name} — {comm}")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[[back_button(f"admin_user_inspect:{user_id}")]])
-    await callback.message.edit_text(
-        "\n".join(lines), parse_mode="MarkdownV2", reply_markup=kb
+    await _safe_edit_or_send(callback.message, 
+        "\n".join(lines), reply_markup=kb
     )
     await callback.answer()
 
@@ -4668,10 +4630,9 @@ async def cb_admin_user_chg_ref(callback: types.CallbackQuery, state: FSMContext
     user_id = int(callback.data.split(":")[1])
     await state.set_data({"change_ref_for": user_id})
     await state.set_state(AdminStates.user_change_referrer)
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         f"🔄 *Change Referrer for user* `{user_id}`\n\n"
         f"Send the *Telegram ID* of the new referrer:",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [back_button(f"admin_user_inspect:{user_id}"), admin_cancel_button()]
         ]),
@@ -4729,14 +4690,14 @@ async def cb_admin_user_wallet(callback: types.CallbackQuery, state: FSMContext)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [back_button(f"admin_user_inspect:{user_id}"), admin_cancel_button()],
     ])
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         f"💰 *Edit Wallet for user* `{user_id}`\n\n"
         f"Current Balance: *{bal_str}*\n\n"
         f"Send the amount to *add* to the wallet:\n"
         f"• Positive number \\= add \\(e\\.g\\. `50`\\)\n"
         f"• Negative number \\= deduct \\(e\\.g\\. `\\-20`\\)\n"
         f"• `set:100` \\= set exact balance to ₹100",
-        parse_mode="MarkdownV2", reply_markup=kb,
+        reply_markup=kb,
     )
     await callback.answer()
 
@@ -4837,7 +4798,7 @@ async def _analytics_safe_edit(callback, text: str, reply_markup, page_name: str
     """Edit analytics message with MarkdownV2, falling back to plain text on parse error."""
     import re
     try:
-        await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=reply_markup)
+        await _safe_edit_or_send(callback.message, text, reply_markup=reply_markup)
     except Exception as e:
         error_msg = str(e).lower()
         if "not modified" in error_msg:
@@ -4847,7 +4808,7 @@ async def _analytics_safe_edit(callback, text: str, reply_markup, page_name: str
         try:
             plain = re.sub(r'\\(.)', r'\1', text)
             plain = re.sub(r'[*_`~]', '', plain)
-            await callback.message.edit_text(plain, reply_markup=reply_markup)
+            await _safe_edit_or_send(callback.message, plain, reply_markup=reply_markup)
         except Exception as e2:
             logger.error(f"Analytics {page_name} plain text also failed: {e2}")
             # Last resort: send a new message
@@ -5591,7 +5552,7 @@ async def cb_admin_support_settings(callback: types.CallbackQuery):
         [InlineKeyboardButton(text="🗑️ Reset to Default", callback_data="admin_support_reset")],
         [back_button("admin_panel")],
     ])
-    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    await _safe_edit_or_send(callback.message, text, reply_markup=kb)
     await callback.answer()
 
 
@@ -5600,11 +5561,10 @@ async def cb_admin_support_settings(callback: types.CallbackQuery):
 @error_handler
 async def cb_admin_support_edit_text(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.disclaimer_text_input)
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "✏️ *Edit Support Text*\n\n"
         "Send the new support text \\(e\\.g\\. username, contact info\\)\\.\n"
         "Use plain text \\— formatting will be applied automatically\\.",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [back_button("admin_support_settings"), admin_cancel_button()]
         ]),
@@ -5631,7 +5591,7 @@ async def msg_support_text(message: types.Message, state: FSMContext):
 @error_handler
 async def cb_admin_support_edit_btns(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.disclaimer_buttons_input)
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "📎 *Edit Support Buttons*\n\n"
         "Send inline buttons, *one per line* in this format:\n\n"
         "`Button Text \\| https://example\\.com`\n\n"
@@ -5639,7 +5599,6 @@ async def cb_admin_support_edit_btns(callback: types.CallbackQuery, state: FSMCo
         "`📺 Watch Video \\| https://t\\.me/channel/123`\n"
         "`💬 Support \\| https://t\\.me/supportbot`\n\n"
         "Send *clear* to remove all buttons\\.",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [back_button("admin_support_settings"), admin_cancel_button()]
         ]),
@@ -5739,7 +5698,7 @@ async def cb_admin_disclaimer_settings(callback: types.CallbackQuery):
         [InlineKeyboardButton(text="🗑️ Clear Disclaimer", callback_data="admin_discl_clear")],
         [back_button("admin_panel")],
     ])
-    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    await _safe_edit_or_send(callback.message, text, reply_markup=kb)
     await callback.answer()
 
 
@@ -5773,11 +5732,10 @@ async def cb_admin_discl_toggle_mode(callback: types.CallbackQuery):
 @error_handler
 async def cb_admin_discl_edit_content(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.disclaimer_content_input)
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "✏️ *Edit Disclaimer Text*\n\n"
         "Send the disclaimer text you want to show users\\.\n"
         "Use plain text \\— formatting will be applied automatically\\.",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [back_button("admin_disclaimer_settings"), admin_cancel_button()]
         ]),
@@ -5860,7 +5818,7 @@ async def cb_admin_channels_settings(callback: types.CallbackQuery):
         [InlineKeyboardButton(text="🗑️ Clear All", callback_data="admin_channels_clear")],
         [back_button("admin_panel")],
     ])
-    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    await _safe_edit_or_send(callback.message, text, reply_markup=kb)
     await callback.answer()
 
 
@@ -5869,7 +5827,7 @@ async def cb_admin_channels_settings(callback: types.CallbackQuery):
 @error_handler
 async def cb_admin_channels_edit(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.channels_input)
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "📢 *Edit Channel Links*\n\n"
         "Send channels, *one per line* in this format:\n\n"
         "`Channel Name \\| https://t\\.me/channel`\n\n"
@@ -5878,7 +5836,6 @@ async def cb_admin_channels_edit(callback: types.CallbackQuery, state: FSMContex
         "`🎁 Offers Channel \\| https://t\\.me/dreamxoffers`\n"
         "`💬 Discussion Group \\| https://t\\.me/dreamxchat`\n\n"
         "Send *clear* to remove all channels\\.",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [back_button("admin_channels_settings"), admin_cancel_button()]
         ]),
@@ -6024,7 +5981,7 @@ async def cb_admin_ban_message(callback: types.CallbackQuery):
         [InlineKeyboardButton(text="👁️ Preview", callback_data="admin_ban_msg_preview")],
         [back_button("admin_panel")],
     ])
-    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    await _safe_edit_or_send(callback.message, text, reply_markup=kb)
     await callback.answer()
 
 
@@ -6033,12 +5990,11 @@ async def cb_admin_ban_message(callback: types.CallbackQuery):
 @error_handler
 async def cb_admin_ban_msg_edit_text(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.ban_message_text_input)
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "✏️ *Edit Ban Message*\n\n"
         "Send the message that banned users will see\\.\n"
         "Use plain text \\— formatting will be applied automatically\\.\n\n"
         "💡 *Tip:* Include contact info or appeal instructions\\.",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[admin_cancel_button()]]),
     )
     await callback.answer()
@@ -6068,7 +6024,7 @@ async def msg_ban_message_text(message: types.Message, state: FSMContext):
 @error_handler
 async def cb_admin_ban_msg_edit_btns(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.ban_message_buttons_input)
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         "📎 *Edit Ban Message Buttons*\n\n"
         "Send inline buttons, *one per line* in this format:\n\n"
         "`Button Text \\| https://example\\.com`\n\n"
@@ -6076,7 +6032,6 @@ async def cb_admin_ban_msg_edit_btns(callback: types.CallbackQuery, state: FSMCo
         "`📩 Appeal Ban \\| https://t\\.me/supportbot`\n"
         "`📜 Rules \\| https://t\\.me/rules`\n\n"
         "Send *clear* to remove all buttons\\.",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[admin_cancel_button()]]),
     )
     await callback.answer()
@@ -6157,11 +6112,10 @@ async def cb_admin_ban_msg_preview(callback: types.CallbackQuery):
             pass
     kb_buttons.append([back_button("admin_ban_message")])
 
-    await callback.message.edit_text(
+    await _safe_edit_or_send(callback.message, 
         f"👁️ *Ban Message Preview:*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"{display}",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_buttons),
     )
     await callback.answer()

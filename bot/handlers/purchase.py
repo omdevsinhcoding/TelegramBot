@@ -29,7 +29,7 @@ from bot.payments.verifier import check_upi_status, verify_payment, verify_bhara
 from bot.keyboards.coupon_kb import payment_pending_kb
 from bot.keyboards.common import back_button
 from bot.database import queries as db
-from bot.utils.helpers import format_currency, escape_md
+from bot.utils.helpers import format_currency, escape_md, safe_edit_or_send
 from bot.utils.decorators import error_handler
 from bot.utils.logger import logger
 
@@ -174,8 +174,8 @@ async def cb_buy_qty(callback: types.CallbackQuery):
         f"💰 Total: *{amt}*\n\n"
         f"Choose your preferred payment method:"
     )
-    await callback.message.edit_text(
-        text, parse_mode="MarkdownV2",
+    await safe_edit_or_send(
+        callback.message, text,
         reply_markup=gateway_selection_kb(coupon_id, qty, wallet_balance=wallet, total=total, payment_settings=ps),
     )
     await callback.answer()
@@ -195,13 +195,13 @@ async def cb_buy_custom_qty(callback: types.CallbackQuery, state: FSMContext):
     title = escape_md(coupon["title"])
     price_str = escape_md(f"₹{coupon['discounted_price']}")
     stock_str = escape_md(str(coupon["stock"]))
-    await callback.message.edit_text(
+    await safe_edit_or_send(
+        callback.message,
         f"✏️ *Custom Quantity*\n\n"
         f"🏷️ {title}\n"
         f"📦 Available: {stock_str}\n"
         f"💰 Price: {price_str}/unit\n\n"
         f"Enter the quantity you want to buy:",
-        parse_mode="MarkdownV2",
     )
     await state.set_state(CustomQtyStates.waiting_qty)
     await callback.answer()
@@ -282,8 +282,8 @@ async def cb_buy_coupon(callback: types.CallbackQuery):
         f"💰 Amount: *{amt}*\n\n"
         f"Choose your preferred payment method:"
     )
-    await callback.message.edit_text(
-        text, parse_mode="MarkdownV2",
+    await safe_edit_or_send(
+        callback.message, text,
         reply_markup=gateway_selection_kb(coupon_id, wallet_balance=wallet, total=total, payment_settings=ps),
     )
     await callback.answer()
@@ -666,8 +666,8 @@ async def cb_skip_wallet(callback: types.CallbackQuery):
         f"Choose your preferred payment method:"
     )
     # Pass wallet_balance=0 to hide wallet options
-    await callback.message.edit_text(
-        text, parse_mode="MarkdownV2",
+    await safe_edit_or_send(
+        callback.message, text,
         reply_markup=gateway_selection_kb(coupon_id, qty, wallet_balance=0, total=total, payment_settings=ps),
     )
     await callback.answer()
@@ -1196,7 +1196,7 @@ async def cb_check_razorpay(callback: types.CallbackQuery):
         if success:
             text = await _build_success_message(order_id, coupon_id, amount, payment_id or link_id)
             kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
-            await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+            await safe_edit_or_send(callback.message, text, reply_markup=kb)
             logger.info(f"Razorpay VERIFIED: order={order_id}, payment_id={payment_id}")
         else:
             await callback.answer("❌ Order completion failed. Contact support.", show_alert=True)

@@ -114,3 +114,58 @@ async def safe_send_message(target, text: str, parse_mode: str = "MarkdownV2", *
                 pass  # Even plain text failed — nothing we can do
         raise  # Re-raise non-parse errors
 
+
+async def safe_edit_or_send(message, text: str, reply_markup=None, parse_mode="MarkdownV2"):
+    """Try to edit message text; if MarkdownV2 fails, retry as plain text.
+    If edit fails entirely (e.g. photo/document message), delete and send new.
+    
+    This is the STANDARD way to display text in callbacks. Every handler
+    that shows dynamic data from DB should use this instead of bare edit_text.
+    
+    Args:
+        message: The message to edit (typically callback.message)
+        text: MarkdownV2-formatted text
+        reply_markup: Optional InlineKeyboardMarkup
+        parse_mode: Parse mode (default MarkdownV2)
+    """
+    import re
+    from bot.utils.logger import logger
+
+    async def _try_send(txt, pm):
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        return await message.answer(txt, parse_mode=pm, reply_markup=reply_markup)
+
+    try:
+        await message.edit_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
+    except Exception as e:
+        err = str(e).lower()
+        if "message is not modified" in err:
+            return  # Content identical — silently ignore
+
+        if "parse" in err or "can't" in err or "markdown" in err or "bad request" in err:
+            # MarkdownV2 failed → retry plain
+            plain = re.sub(r'\\(.)', r'\1', text)
+            plain = re.sub(r'[*_`~]', '', plain)
+            try:
+                await message.edit_text(plain, parse_mode=None, reply_markup=reply_markup)
+            except Exception:
+                try:
+                    await _try_send(plain, None)
+                except Exception as e2:
+                    logger.error(f"safe_edit_or_send failed completely: {e2}")
+        else:
+            # Non-parse error (maybe message is a photo/doc) → send new
+            try:
+                await _try_send(text, parse_mode)
+            except Exception:
+                # Last resort: plain text new message
+                plain = re.sub(r'\\(.)', r'\1', text)
+                plain = re.sub(r'[*_`~]', '', plain)
+                try:
+                    await _try_send(plain, None)
+                except Exception as e3:
+                    logger.error(f"safe_edit_or_send failed completely: {e3}")
+

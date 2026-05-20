@@ -8,7 +8,7 @@ from bot.services.coupon_service import list_active_coupons, get_coupon_detail
 from bot.keyboards.coupon_kb import buying_menu_kb, coupon_detail_kb
 from bot.keyboards.common import back_button
 from bot.database import queries as db
-from bot.utils.helpers import format_currency, escape_md
+from bot.utils.helpers import format_currency, escape_md, safe_edit_or_send
 from bot.utils.decorators import error_handler
 
 router = Router()
@@ -32,9 +32,9 @@ async def cb_browse(callback: types.CallbackQuery):
     if not active_coupons and free_count == 0:
         from aiogram.types import InlineKeyboardMarkup
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
-        await callback.message.edit_text(
+        await safe_edit_or_send(
+            callback.message,
             "📭 *No coupons available right now\\.*\n\nCheck back later\\!",
-            parse_mode="MarkdownV2",
             reply_markup=kb,
         )
         await callback.answer()
@@ -45,9 +45,8 @@ async def cb_browse(callback: types.CallbackQuery):
         "━━━━━━━━━━━━━━━━━━━━\n\n"
         "👉 *Select a product:*" if not has_categories else "👉 *Select a category:*"
     )
-    await callback.message.edit_text(
-        text,
-        parse_mode="MarkdownV2",
+    await safe_edit_or_send(
+        callback.message, text,
         reply_markup=buying_menu_kb(active_coupons, free_count, categorized_data=categorized),
     )
     await callback.answer()
@@ -71,12 +70,12 @@ async def cb_browse_category(callback: types.CallbackQuery):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="◀️ Back to Shop", callback_data="browse_coupons")]
         ])
-        await callback.message.edit_text(
+        await safe_edit_or_send(
+            callback.message,
             f"📁 *{escape_md(cat['name'])}*\n"
             f"━━━━━━━━━━━━━━━━━━━━\n\n"
             f"📭 *This category is currently empty\\.*\n\n"
             f"_No products available here yet\\._",
-            parse_mode="MarkdownV2",
             reply_markup=kb,
         )
         await callback.answer()
@@ -88,9 +87,8 @@ async def cb_browse_category(callback: types.CallbackQuery):
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"👉 *Select a product:*"
     )
-    await callback.message.edit_text(
-        text,
-        parse_mode="MarkdownV2",
+    await safe_edit_or_send(
+        callback.message, text,
         reply_markup=category_coupons_kb(coupons, cat["name"]),
     )
     await callback.answer()
@@ -125,9 +123,8 @@ async def cb_category_page(callback: types.CallbackQuery):
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"👉 *Select a product:*"
     )
-    await callback.message.edit_text(
-        text,
-        parse_mode="MarkdownV2",
+    await safe_edit_or_send(
+        callback.message, text,
         reply_markup=category_coupons_kb(coupons, cat_name, page),
     )
     await callback.answer()
@@ -209,7 +206,7 @@ async def cb_coupon_detail(callback: types.CallbackQuery):
             price=float(coupon["discounted_price"])
         )
 
-    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    await safe_edit_or_send(callback.message, text, reply_markup=kb)
     await callback.answer()
 
 

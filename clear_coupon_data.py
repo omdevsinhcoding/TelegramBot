@@ -132,6 +132,14 @@ async def main():
         result = await conn.execute("DELETE FROM coupon_categories")
         print(f"  🗑️  Deleted coupon_categories: {result}")
 
+        # ── Step 9: Clear new tracking tables ──
+        for table in ["coupon_stock_logs", "stock_alerts_sent", "admin_expenses"]:
+            try:
+                result = await conn.execute(f"DELETE FROM {table}")
+                print(f"  🗑️  Deleted {table}: {result}")
+            except Exception:
+                pass  # Table may not exist yet
+
         # ── Step 9: Reset sequences ──
         sequences = [
             ("coupons_id_seq", "coupons"),

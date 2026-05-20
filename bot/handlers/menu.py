@@ -11,7 +11,7 @@ from aiogram.fsm.state import StatesGroup, State
 from bot.keyboards.main_menu import main_menu_kb, main_menu_inline_kb, get_fresh_main_menu_kb
 from bot.keyboards.common import back_button
 from bot.database import queries as db
-from bot.utils.helpers import escape_md
+from bot.utils.helpers import escape_md, safe_edit_or_send
 from bot.utils.decorators import error_handler
 from bot.config import Config
 
@@ -523,7 +523,7 @@ async def cb_show_support(callback: types.CallbackQuery):
 
     buttons.append([back_button("back_home")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    await safe_edit_or_send(callback.message, text, reply_markup=kb)
     await callback.answer()
 
 
@@ -564,7 +564,7 @@ async def cb_show_channels(callback: types.CallbackQuery):
 
     buttons.append([back_button("back_home")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    await safe_edit_or_send(callback.message, text, reply_markup=kb)
     await callback.answer()
 
 
@@ -841,9 +841,8 @@ async def cb_buy_page(callback: types.CallbackQuery):
         "━━━━━━━━━━━━━━━━━━━━\n\n"
         "👉 *Select a product:*" if not has_categories else "👉 *Select a category:*"
     )
-    await callback.message.edit_text(
-        text,
-        parse_mode="MarkdownV2",
+    await safe_edit_or_send(
+        callback.message, text,
         reply_markup=buying_menu_kb(coupons, free_count, page, categorized_data=categorized),
     )
     await callback.answer()
@@ -869,9 +868,8 @@ async def cb_coupon_page(callback: types.CallbackQuery):
 
     coupons = await list_active_coupons()
     text = "🛒 *Available Coupons*\n\nSelect a coupon to view details:"
-    await callback.message.edit_text(
-        text,
-        parse_mode="MarkdownV2",
+    await safe_edit_or_send(
+        callback.message, text,
         reply_markup=coupons_list_kb(coupons, page),
     )
     await callback.answer()
@@ -937,9 +935,8 @@ async def cb_free_coupons_list(callback: types.CallbackQuery):
         return
 
     text = "🎁 *Free Coupons \\& Giveaways*\n\nClaim your free coupons below:"
-    await callback.message.edit_text(
-        text,
-        parse_mode="MarkdownV2",
+    await safe_edit_or_send(
+        callback.message, text,
         reply_markup=free_coupons_list_kb(free_coupons),
     )
     await callback.answer()
@@ -1067,7 +1064,7 @@ async def cb_claim_free_coupon(callback: types.CallbackQuery):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [back_button("free_coupons_list")],
         ])
-        await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+        await safe_edit_or_send(callback.message, text, reply_markup=kb)
         await callback.answer("🎉 You won! Check your codes!")
     else:
         await callback.answer(
@@ -1089,7 +1086,7 @@ async def cb_help(callback: types.CallbackQuery):
         "🔒 All payments are verified & secure\\."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("back_home")]])
-    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    await safe_edit_or_send(callback.message, text, reply_markup=kb)
     await callback.answer()
 
 
