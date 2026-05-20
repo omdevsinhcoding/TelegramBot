@@ -74,6 +74,33 @@ async def run_compat_migrations(conn: asyncpg.Connection):
     print("  Compatibility migrations complete.")
 
 
+async def run_orders_fk_migration(conn: asyncpg.Connection):
+    """Make orders.coupon_id nullable so deleting a coupon preserves order history."""
+    print("\n  Running orders FK migration...")
+
+    # 1. Drop NOT NULL on coupon_id
+    try:
+        await conn.execute("ALTER TABLE orders ALTER COLUMN coupon_id DROP NOT NULL;")
+        print("  [OK]  orders.coupon_id is now nullable")
+    except Exception:
+        print("  [SKIP] orders.coupon_id already nullable or N/A")
+
+    # 2. Update FK to ON DELETE SET NULL (drop old FK, add new one)
+    try:
+        await conn.execute("ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_coupon_id_fkey;")
+        await conn.execute("""
+            ALTER TABLE orders
+            ADD CONSTRAINT orders_coupon_id_fkey
+            FOREIGN KEY (coupon_id)
+            REFERENCES coupons(id) ON DELETE SET NULL;
+        """)
+        print("  [OK]  orders FK updated to ON DELETE SET NULL")
+    except Exception as e:
+        print(f"  [SKIP] orders FK already correct or N/A: {e}")
+
+    print("  Orders FK migration complete.")
+
+
 async def main():
     url = os.getenv("DATABASE_URL")
     if not url:
@@ -92,6 +119,7 @@ async def main():
 
     await run_schema(conn)
     await run_compat_migrations(conn)
+    await run_orders_fk_migration(conn)
 
     await conn.close()
     print("\nDatabase setup complete! Connection closed.")

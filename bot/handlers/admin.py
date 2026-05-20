@@ -135,9 +135,9 @@ class AdminStates(StatesGroup):
 async def cb_admin_fsm_cancel(callback: types.CallbackQuery, state: FSMContext):
     """Cancel any active admin FSM operation via inline ❌ button."""
     await state.clear()
-    await callback.message.edit_text(
+    await _safe_edit_or_send(
+        callback.message,
         "❌ *Operation cancelled\\.*",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [back_button("admin_panel")]
         ]),
@@ -562,23 +562,27 @@ async def cb_delete_exec(callback: types.CallbackQuery):
     coupon_id = int(callback.data.split(":")[1])
     try:
         pool = await db.get_pool()
-        # Delete in FK order: transactions → orders → coupon_codes → coupon
-        # 1. Delete transactions that reference orders for this coupon
-        await pool.execute(
-            "DELETE FROM transactions WHERE order_id IN (SELECT order_id FROM orders WHERE coupon_id = $1)",
-            coupon_id,
-        )
-        # 2. Delete orders referencing this coupon
-        await pool.execute("DELETE FROM orders WHERE coupon_id = $1", coupon_id)
-        # 3. Delete coupon codes (also has ON DELETE CASCADE but be explicit)
-        await pool.execute("DELETE FROM coupon_codes WHERE coupon_id = $1", coupon_id)
-        # 4. Delete the coupon itself
-        await remove_coupon(coupon_id)
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                # PRESERVE order history — NULL out FK references instead of deleting
+                # 1. Detach orders from this coupon (keep order records intact)
+                await conn.execute(
+                    "UPDATE orders SET coupon_id = NULL WHERE coupon_id = $1",
+                    coupon_id,
+                )
+                # 2. Delete coupon codes (these are the actual voucher codes, not order records)
+                await conn.execute("DELETE FROM coupon_codes WHERE coupon_id = $1", coupon_id)
+                # 3. Detach admin extractions
+                await conn.execute(
+                    "DELETE FROM admin_extractions WHERE coupon_id = $1", coupon_id
+                )
+                # 4. Delete the coupon itself
+                await conn.execute("DELETE FROM coupons WHERE id = $1", coupon_id)
         await db.add_admin_log(
             callback.from_user.id, "delete_coupon", "coupon", str(coupon_id)
         )
-        logger.info(f"Admin {callback.from_user.id} deleted coupon {coupon_id}")
-        await callback.answer("Coupon deleted.", show_alert=True)
+        logger.info(f"Admin {callback.from_user.id} deleted coupon {coupon_id} (orders preserved)")
+        await callback.answer("Coupon deleted (order history preserved).", show_alert=True)
     except Exception as e:
         logger.error(f"Failed to delete coupon {coupon_id}: {e}")
         await callback.answer(f"Delete failed: {str(e)[:100]}", show_alert=True)
@@ -1402,8 +1406,8 @@ async def cb_admin_orders(callback: types.CallbackQuery):
     buttons.append([InlineKeyboardButton(text="🔍 Search Order ID", callback_data="admin_order_search")])
     buttons.append([back_button("admin_panel")])
 
-    await callback.message.edit_text(
-        text, parse_mode="MarkdownV2",
+    await _safe_edit_or_send(
+        callback.message, text,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
     )
     await callback.answer()
@@ -1495,8 +1499,8 @@ async def cb_admin_order_user(callback: types.CallbackQuery):
     buttons.append([InlineKeyboardButton(text="👤 View User Profile", callback_data=f"admin_user_inspect:{user_id}")])
     buttons.append([back_button("admin_orders")])
 
-    await callback.message.edit_text(
-        text, parse_mode="MarkdownV2",
+    await _safe_edit_or_send(
+        callback.message, text,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
     )
     await callback.answer()
@@ -1607,8 +1611,8 @@ async def cb_admin_order_detail(callback: types.CallbackQuery):
     ])
     buttons.append([back_button("admin_orders")])
 
-    await callback.message.edit_text(
-        text, parse_mode="MarkdownV2",
+    await _safe_edit_or_send(
+        callback.message, text,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
     )
     await callback.answer()
@@ -1715,7 +1719,7 @@ async def cb_admin_logs(callback: types.CallbackQuery):
     buttons.append([back_button("admin_panel")])
 
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
+    await _safe_edit_or_send(callback.message, text, reply_markup=kb)
     await callback.answer()
 
 
@@ -2646,10 +2650,7 @@ async def cb_admin_referral_settings(callback: types.CallbackQuery):
     buttons.append([back_button("admin_panel")])
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    try:
-        await callback.message.edit_text(text, parse_mode="MarkdownV2", reply_markup=kb)
-    except Exception as e:
-        logger.debug(f"edit_text failed in referral settings: {e}")
+    await _safe_edit_or_send(callback.message, text, reply_markup=kb)
     await callback.answer()
 
 
@@ -2790,9 +2791,9 @@ async def cb_admin_del_ref(callback: types.CallbackQuery):
     # Refresh the referral list for the same referrer
     refs = await db.get_referrals_for_user(referrer_id)
     if not refs:
-        await callback.message.edit_text(
+        await _safe_edit_or_send(
+            callback.message,
             msg + f"\n\nNo more referrals for `{referrer_id}`\\.",
-            parse_mode="MarkdownV2",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [back_button("admin_referral_settings")]
             ])
@@ -2823,8 +2824,8 @@ async def cb_admin_del_ref(callback: types.CallbackQuery):
         f"*Remaining referrals for* `{referrer_id}`:\n"
         + "\n".join(lines)
     )
-    await callback.message.edit_text(body, parse_mode="MarkdownV2",
-                                     reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    await _safe_edit_or_send(callback.message, body,
+                              reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 
 @router.callback_query(F.data.startswith("admin_del_ref_all:"))
@@ -2854,11 +2855,11 @@ async def cb_admin_del_ref_all(callback: types.CallbackQuery):
         f"✅ Removed {count} referral(s). Reversed ₹{total_reversed:.2f} from wallet.",
         show_alert=True
     )
-    await callback.message.edit_text(
+    await _safe_edit_or_send(
+        callback.message,
         f"✅ *All {count} referral\\(s\\) deleted* for `{referrer_id}`\\."
         f"\n💰 Total reversed: ₹{escape_md(str(round(total_reversed, 2)))}\\."
         f"\n\nThe user can now be re\\-referred for fresh testing\\.",
-        parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [back_button("admin_referral_settings")]
         ])
@@ -3310,9 +3311,7 @@ async def cb_admin_bot_settings(callback: types.CallbackQuery):
         [back_button("admin_panel")],
     ])
 
-    await callback.message.edit_text(
-        text, parse_mode="MarkdownV2", reply_markup=kb
-    )
+    await _safe_edit_or_send(callback.message, text, reply_markup=kb)
     await callback.answer()
 
 
@@ -4052,8 +4051,8 @@ async def cb_admin_payments(callback: types.CallbackQuery):
         [back_button("admin_panel")],
     ]
 
-    await callback.message.edit_text(text, parse_mode="MarkdownV2",
-                                      reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    await _safe_edit_or_send(callback.message, text,
+                              reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
     await callback.answer()
 
 
@@ -4199,8 +4198,8 @@ async def cb_admin_users(callback: types.CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text=f"📋 All Users ({user_count})", callback_data="admin_users_all:1")],
         [admin_cancel_button()],
     ]
-    await callback.message.edit_text(text, parse_mode="MarkdownV2",
-                                      reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    await _safe_edit_or_send(callback.message, text,
+                              reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
     await callback.answer()
 
 
@@ -4413,8 +4412,8 @@ async def cb_admin_user_inspect(callback: types.CallbackQuery):
         [back_button("admin_users")],
     ]
 
-    await callback.message.edit_text(text, parse_mode="MarkdownV2",
-                                      reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    await _safe_edit_or_send(callback.message, text,
+                              reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
     await callback.answer()
 
 
@@ -4883,11 +4882,31 @@ async def cb_admin_analytics(callback: types.CallbackQuery):
     rewards_given = await db.get_total_referral_rewards_given()
     gateway_revenue = revenue - wallet_used  # actual money received
 
-    # Admin count — unified source: seed (.env) + DB admins, deduplicated
-    admin_count = await db.get_admin_count()
+    # Promotional losses
+    total_promo_loss = 0
+    try:
+        promo_losses = await db.get_total_promotional_losses()
+        total_promo_loss = promo_losses.get("_grand_total", 0)
+    except Exception:
+        pass
 
-    # Per-admin referral loss (equally split among ALL active admins)
-    loss_per_admin = (wallet_used / admin_count) if admin_count > 0 else 0
+    # Calculate NET PROFIT
+    total_loss = wallet_used + total_promo_loss
+    net_profit = gateway_revenue - total_promo_loss
+
+    # Profit/Loss indicator
+    if net_profit > 0:
+        profit_icon = "📈"
+        profit_label = "NET PROFIT"
+    elif net_profit < 0:
+        profit_icon = "📉"
+        profit_label = "NET LOSS"
+    else:
+        profit_icon = "➖"
+        profit_label = "BREAK EVEN"
+
+    # Admin count
+    admin_count = await db.get_admin_count()
 
     # Payment method breakdown
     pay_methods = await db.get_payment_method_stats()
@@ -4905,62 +4924,27 @@ async def cb_admin_analytics(callback: types.CallbackQuery):
     text = (
         f"📊 *ANALYTICS DASHBOARD*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🏪 *STORE OVERVIEW*\n"
-        f"┌──────────────────\n"
-        f"│ 👥 Users: *{user_count}*\n"
-        f"│ 📦 Total Stock: *{total_stock}*\n"
-        f"│ 👑 Active Admins: *{admin_count}*\n"
-        f"└──────────────────\n\n"
-        f"💵 *REVENUE BREAKDOWN*\n"
-        f"┌──────────────────\n"
-        f"│ 💰 Gross Revenue: *{revenue_str}*\n"
-        f"│ 🏦 Gateway Income: *{escape_md(format_currency(gateway_revenue))}*\n"
-        f"│ 🎁 Wallet Payments: *{escape_md(format_currency(wallet_used))}*\n"
-        f"│ 🔻 Referral Rewards Pool: *{escape_md(format_currency(rewards_given))}*\n"
-    )
-    if admin_count > 0 and wallet_used > 0:
-        text += f"│ 📉 Loss/Admin: *{escape_md(format_currency(loss_per_admin))}*\n"
-    text += (
-        f"└──────────────────\n\n"
-        f"📋 *ORDER STATUS*\n"
-        f"┌──────────────────\n"
-        f"│ 📊 Total: *{escape_md(str(stats['total_orders']))}*\n"
-        f"│ ✅ Paid: *{escape_md(str(stats['total_paid']))}*\n"
-        f"│ 🟡 Pending: *{escape_md(str(stats['total_pending']))}*\n"
-        f"│ ⏰ Expired: *{escape_md(str(stats['total_expired']))}*\n"
-        f"└──────────────────\n\n"
+        f"{profit_icon} *{profit_label}: {escape_md(format_currency(abs(net_profit)))}*\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"💵 *PAISA KAHAN SE AAYA*\n"
+        f"  🏦 Gateway se mila: *{escape_md(format_currency(gateway_revenue))}*\n"
+        f"  💰 Wallet se pay hua: *{escape_md(format_currency(wallet_used))}*\n"
+        f"  📊 Total Revenue: *{revenue_str}*\n\n"
+        f"💸 *PAISA KAHAN GAYA \\(Losses\\)*\n"
+        f"  🎁 Referral Rewards: *{escape_md(format_currency(rewards_given))}*\n"
+        f"  🔻 Promotions/Giveaways: *{escape_md(format_currency(total_promo_loss))}*\n"
+        f"  💸 Total Loss: *{escape_md(format_currency(total_loss))}*\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🏪 *STORE*\n"
+        f"  👥 Users: *{user_count}* \\| 👑 Admins: *{admin_count}*\n"
+        f"  📦 Stock: *{total_stock}* coupons\n\n"
+        f"📋 *ORDERS*\n"
+        f"  📊 Total: *{escape_md(str(stats['total_orders']))}*\n"
+        f"  ✅ Paid: *{escape_md(str(stats['total_paid']))}* \\| 🟡 Pending: *{escape_md(str(stats['total_pending']))}* \\| ⏰ Expired: *{escape_md(str(stats['total_expired']))}*\n\n"
         f"💳 *PAYMENT METHODS*\n"
-        f"┌──────────────────\n"
-        f"{methods_text}\n"
-        f"└──────────────────\n\n"
+        f"{methods_text}\n\n"
+        f"_Navigate below for details_ ⬇️"
     )
-
-    # Promotional loss summary
-    try:
-        promo_losses = await db.get_total_promotional_losses()
-        grand_loss = promo_losses.get("_grand_total", 0)
-        if grand_loss > 0:
-            text += (
-                f"🔻 *PROMOTIONAL LOSSES*\n"
-                f"┌──────────────────\n"
-                f"│ 💸 Total Losses: *{escape_md(format_currency(grand_loss))}*\n"
-            )
-            # Show top 3 loss types
-            sorted_types = sorted(
-                [(k, v) for k, v in promo_losses.items() if not k.startswith("_")],
-                key=lambda x: x[1]["amount"], reverse=True
-            )[:3]
-            for loss_type, data in sorted_types:
-                type_name = escape_md(loss_type.replace("_", " ").title())
-                amt = escape_md(format_currency(data["amount"]))
-                text += f"│   📉 {type_name}: *{amt}*\n"
-            text += (
-                f"└──────────────────\n\n"
-            )
-    except Exception:
-        pass
-
-    text += f"_Navigate below for detailed breakdowns_ ⬇️"
 
     await _analytics_safe_edit(
         callback, text, _analytics_nav_kb("admin_analytics"), "overview"

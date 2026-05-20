@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS orders (
     id              SERIAL PRIMARY KEY,
     order_id        VARCHAR(64) UNIQUE NOT NULL,
     user_id         BIGINT NOT NULL REFERENCES users(telegram_id),
-    coupon_id       INTEGER NOT NULL REFERENCES coupons(id),
+    coupon_id       INTEGER REFERENCES coupons(id) ON DELETE SET NULL,
     amount          NUMERIC(10, 2) NOT NULL,
     quantity        INTEGER DEFAULT 1,
     status          order_status DEFAULT 'pending',

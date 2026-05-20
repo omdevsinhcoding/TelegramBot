@@ -44,13 +44,17 @@ async def on_startup(bot: Bot):
     except Exception as e:
         logger.warning(f"Could not load DB admins: {e}")
 
-    # Sync all coupon stocks with actual code counts (fixes stale stock data)
-    try:
-        from bot.database import queries as db
-        await db.sync_all_coupon_stocks()
-        logger.info("Startup stock sync completed.")
-    except Exception as e:
-        logger.warning(f"Startup stock sync failed (non-critical): {e}")
+    # Sync all coupon stocks in background (non-blocking — bot starts accepting messages immediately)
+    async def _background_stock_sync():
+        await asyncio.sleep(2)  # Let bot finish initialization first
+        try:
+            from bot.database import queries as db2
+            await db2.sync_all_coupon_stocks()
+            logger.info("Background stock sync completed.")
+        except Exception as e:
+            logger.warning(f"Background stock sync failed (non-critical): {e}")
+
+    asyncio.create_task(_background_stock_sync())
 
     # Start lightweight order expiry task (NO payment API polling)
     asyncio.create_task(expire_orders_loop(bot))
