@@ -3551,26 +3551,74 @@ async def msg_force_channel_input(message: types.Message, state: FSMContext):
     valid = []
     errors = []
     
+    bot_me = await message.bot.get_me()
+    
     for ch in new_channels:
         try:
             chat_id = int(ch) if ch.lstrip("-").isdigit() else ch
+            
+            # Step 1: Check if channel exists
             chat_info = await message.bot.get_chat(chat_id)
-            # Try to generate invite link (ensures bot is admin)
+            chat_title = chat_info.title or str(ch)
+            
+            # Step 2: Check if bot is admin in this channel
+            bot_member = await message.bot.get_chat_member(chat_id=chat_id, user_id=bot_me.id)
+            if bot_member.status not in ("administrator", "creator"):
+                errors.append({
+                    "channel": ch,
+                    "title": chat_title,
+                    "reason": "not_admin",
+                })
+                continue
+            
+            # Step 3: Try to generate invite link (admin with invite permission)
             try:
                 await message.bot.export_chat_invite_link(chat_id)
             except Exception:
+                # Bot is admin but may not have invite link permission — still acceptable
                 pass
-            valid.append(ch)
+            
+            valid.append({"id": ch, "title": chat_title})
+            
         except Exception as e:
-            errors.append(f"{ch}: {e}")
+            err_str = str(e)
+            if "chat not found" in err_str.lower():
+                errors.append({"channel": ch, "title": ch, "reason": "not_found"})
+            elif "bot is not a member" in err_str.lower():
+                errors.append({"channel": ch, "title": ch, "reason": "not_member"})
+            else:
+                errors.append({"channel": ch, "title": ch, "reason": f"error: {err_str}"})
     
     if not valid:
-        err_msg = escape_md(str(errors[0]).split(":")[-1].strip() if errors else "Unknown")
+        # Build detailed error message
+        error_lines = []
+        for err in errors:
+            ch_esc = escape_md(str(err["channel"]))
+            title_esc = escape_md(err["title"])
+            if err["reason"] == "not_admin":
+                error_lines.append(f"❌ *{title_esc}* \\(`{ch_esc}`\\)\n   → Bot is NOT admin\\. Add bot as administrator first\\!")
+            elif err["reason"] == "not_found":
+                error_lines.append(f"❌ `{ch_esc}`\n   → Channel not found\\. Check the ID/username\\.")
+            elif err["reason"] == "not_member":
+                error_lines.append(f"❌ `{ch_esc}`\n   → Bot is not a member\\. Add bot to the channel first\\!")
+            else:
+                reason_esc = escape_md(err["reason"])
+                error_lines.append(f"❌ `{ch_esc}`\n   → {reason_esc}")
+        
+        error_text = "\n\n".join(error_lines)
         await message.answer(
-            f"❌ Could not verify any channel\\.\n\n"
-            f"Make sure the bot is *admin* in the channel and the ID is correct\\.\n\n"
-            f"Error: `{err_msg}`\n\nTry again:",
-            parse_mode="MarkdownV2"
+            f"🚫 *Could not add any channel\\!*\n\n"
+            f"{error_text}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"💡 *Steps to fix:*\n"
+            f"1️⃣ Open your channel settings\n"
+            f"2️⃣ Go to *Administrators*\n"
+            f"3️⃣ Add `@{escape_md(bot_me.username)}` as admin\n"
+            f"4️⃣ Come back and try again\n",
+            parse_mode="MarkdownV2",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [back_button("admin_force_join"), admin_cancel_button()]
+            ]),
         )
         return
     
@@ -3581,19 +3629,20 @@ async def msg_force_channel_input(message: types.Message, state: FSMContext):
     
     # Normalize for dedup
     for v in valid:
-        if v not in existing:
-            existing.append(v)
+        if v["id"] not in existing:
+            existing.append(v["id"])
     
     save_val = ",".join(existing)
     await db.update_bot_settings(force_channel=save_val)
     await state.clear()
     
-    result = f"✅ Force Join updated\\!\n\nTotal channels: *{len(existing)}*"
-    added = escape_md(", ".join(valid))
-    result += f"\nAdded: `{added}`"
+    # Build success message
+    added_lines = "\n".join(f"✅ {escape_md(v['title'])} \\(`{escape_md(v['id'])}`\\)" for v in valid)
+    result = f"✅ *Force Join Updated\\!*\n\nTotal channels: *{len(existing)}*\n\n{added_lines}"
+    
     if errors:
-        skipped = escape_md(", ".join(e.split(":")[0] for e in errors))
-        result += f"\n\n⚠️ Skipped invalid: {skipped}"
+        skipped_lines = "\n".join(f"⚠️ {escape_md(e['title'])} — {escape_md(e['reason'])}" for e in errors)
+        result += f"\n\n*Skipped:*\n{skipped_lines}"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[[back_button("admin_force_join")]])
     await message.answer(result, parse_mode="MarkdownV2", reply_markup=kb)
