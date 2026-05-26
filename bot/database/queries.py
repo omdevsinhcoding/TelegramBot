@@ -273,7 +273,7 @@ async def release_all_reservations() -> tuple[int, list]:
 
     # 0. Snapshot all pending orders BEFORE expiring (we need user_id for notifications)
     affected_rows = await pool.fetch("""
-        SELECT o.order_id, o.user_id, COALESCE(c.title, 'your coupon') AS coupon_title
+        SELECT o.order_id, o.user_id, COALESCE(o.display_title, c.title, 'your coupon') AS coupon_title
         FROM orders o
         LEFT JOIN coupons c ON o.coupon_id = c.id
         WHERE o.status = 'pending'
@@ -438,7 +438,7 @@ async def get_user_orders(telegram_id: int, limit: int = 10, offset: int = 0, ex
     pool = await get_pool()
     cancel_filter = "AND o.status NOT IN ('cancelled', 'expired')" if exclude_cancelled else ""
     return await pool.fetch(f"""
-        SELECT o.*, c.title as coupon_title,
+        SELECT o.*, COALESCE(o.display_title, c.title, 'Unknown') as coupon_title,
                COALESCE(cc.code_count, 0) as code_count
         FROM orders o
         LEFT JOIN coupons c ON c.id = o.coupon_id
@@ -489,7 +489,7 @@ async def get_user_all_orders(user_id: int, limit: int = 20):
     """Get all orders for a specific user (admin view - all statuses)."""
     pool = await get_pool()
     return await pool.fetch("""
-        SELECT o.*, c.title as coupon_title
+        SELECT o.*, COALESCE(o.display_title, c.title, 'Unknown') as coupon_title
         FROM orders o
         LEFT JOIN coupons c ON o.coupon_id = c.id
         WHERE o.user_id = $1
@@ -502,7 +502,7 @@ async def get_order_by_id_admin(order_id: str):
     """Get any order by ID (admin can see all orders)."""
     pool = await get_pool()
     return await pool.fetchrow("""
-        SELECT o.*, c.title as coupon_title, u.full_name, u.username
+        SELECT o.*, COALESCE(o.display_title, c.title, 'Unknown') as coupon_title, u.full_name, u.username
         FROM orders o
         LEFT JOIN coupons c ON o.coupon_id = c.id
         LEFT JOIN users u ON o.user_id = u.telegram_id

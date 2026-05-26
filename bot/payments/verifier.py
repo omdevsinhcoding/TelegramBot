@@ -3,7 +3,7 @@ DreamX Coupon Bot — Payment Verification Module
 
 Two payment gateways:
 
-1. Paytm (from user's Python script):
+1. Paytm (from user's working Python script):
    GET https://securegw.paytm.in/order/status?JsonData={"MID":"...","ORDERID":"..."}
    Response: flat JSON with STATUS, TXNAMOUNT, MID, ORDERID, TXNID, BANKTXNID
 
@@ -49,13 +49,16 @@ def _amounts_match(a: float, b: float) -> bool:
 
 # ══════════════════════════════════════════════════════════════
 # PAYTM — GET /order/status with JsonData param
+# Mirrors working Python script exactly
 # ══════════════════════════════════════════════════════════════
 
 async def check_paytm_status(order_id: str) -> dict:
     """
     Check payment status via Paytm GET API.
-    Mirrors user's Python script:
-      requests.get(STATUS_API_URL, params={"JsonData": json.dumps({"MID":..,"ORDERID":..})})
+    Mirrors working Python script:
+      payload = {"MID": MERCHANT_MID, "ORDERID": txn_ref_id}
+      json_data = json.dumps(payload)
+      response = requests.get(STATUS_API_URL, params={"JsonData": json_data})
     """
     from bot.database import queries as db
     ps = await db.get_payment_settings()

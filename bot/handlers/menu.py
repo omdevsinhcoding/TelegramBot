@@ -997,25 +997,28 @@ async def cb_claim_free_coupon(callback: types.CallbackQuery):
         order_id = generate_order_id()
         oid_esc = ""
         try:
-            # Use coupon_id=0 placeholder for free coupons (they use free_coupon_codes table)
-            # We need a valid coupon_id for FK — try to find one, else skip
+            # Use coupon_id=NULL for giveaway orders (no real coupon association)
+            # Store actual giveaway title in display_title so Order History shows correct name
             pool = await db.get_pool()
-            # Use a dummy coupon_id — create a lightweight order
             await pool.execute("""
-                INSERT INTO orders (order_id, user_id, coupon_id, amount, quantity, status, source, paid_at, expires_at)
-                VALUES ($1, $2, (SELECT id FROM coupons LIMIT 1), 0, $3, 'delivered', 'giveaway', NOW(), NOW() + interval '1 year')
-            """, order_id, user_id, len(codes))
+                INSERT INTO orders (order_id, user_id, coupon_id, amount, quantity, status, source, display_title, paid_at, expires_at)
+                VALUES ($1, $2, NULL, 0, $3, 'delivered', 'giveaway', $4, NOW(), NOW() + interval '1 year')
+            """, order_id, user_id, len(codes), fc["title"])
 
             # Link codes: store them in coupon_codes for this order so View Codes works
-            for c in codes:
-                try:
-                    await pool.execute(
-                        "INSERT INTO coupon_codes (coupon_id, code, is_sold, sold_to, order_id, sold_at) "
-                        "VALUES ((SELECT id FROM coupons LIMIT 1), $1, TRUE, $2, $3, NOW())",
-                        c, user_id, order_id
-                    )
-                except Exception:
-                    pass
+            # coupon_codes.coupon_id is NOT NULL, so we use a placeholder coupon_id
+            # (View Codes queries by order_id, so the coupon_id doesn't affect display)
+            placeholder_coupon_id = await pool.fetchval("SELECT id FROM coupons LIMIT 1")
+            if placeholder_coupon_id:
+                for c in codes:
+                    try:
+                        await pool.execute(
+                            "INSERT INTO coupon_codes (coupon_id, code, is_sold, sold_to, order_id, sold_at) "
+                            "VALUES ($1, $2, TRUE, $3, $4, NOW())",
+                            placeholder_coupon_id, c, user_id, order_id
+                        )
+                    except Exception:
+                        pass
 
             oid_esc = escape_md(order_id)
         except Exception as e:

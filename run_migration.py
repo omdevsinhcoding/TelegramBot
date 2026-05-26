@@ -192,6 +192,21 @@ async def run_v9_stock_expense_migration(conn: asyncpg.Connection):
     print("  v9 migration complete.")
 
 
+async def run_v10_display_title_migration(conn: asyncpg.Connection):
+    """Add display_title column to orders for giveaway/custom title support (v10)."""
+    print("\n  Running v10 display_title migration...")
+
+    try:
+        await conn.execute("""
+            ALTER TABLE orders ADD COLUMN display_title TEXT;
+        """)
+        print("  [OK]  orders.display_title column added")
+    except Exception:
+        print("  [SKIP] orders.display_title already exists")
+
+    print("  v10 migration complete.")
+
+
 async def main():
     url = os.getenv("DATABASE_URL")
     if not url:
@@ -212,6 +227,7 @@ async def main():
     await run_compat_migrations(conn)
     await run_orders_fk_migration(conn)
     await run_v9_stock_expense_migration(conn)
+    await run_v10_display_title_migration(conn)
 
     await conn.close()
     print("\nDatabase setup complete! Connection closed.")

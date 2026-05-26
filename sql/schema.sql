@@ -75,9 +75,17 @@ CREATE TABLE IF NOT EXISTS orders (
     expires_at      TIMESTAMPTZ,
     qr_message_id   BIGINT,
     source          VARCHAR(32) DEFAULT 'purchase',
+    display_title   TEXT,                           -- custom title override (used by giveaway/free orders)
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Add display_title column if missing (safe for existing databases)
+DO $$ BEGIN
+    ALTER TABLE orders ADD COLUMN display_title TEXT;
+EXCEPTION
+    WHEN duplicate_column THEN null;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_orders_user ON orders (user_id);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders (status);

@@ -20,7 +20,7 @@ from bot.utils.logger import logger
 def generate_unique_txn_id() -> str:
     """
     Generate unique ORDERID/txn_ref_id.
-    Mirrors: TXN_{timestamp}_{random_8_chars}
+    Mirrors working Python script: f"TXN_{timestamp}_{random_8_chars}"
     This is the transaction reference used as ORDERID for Paytm status checks.
     """
     timestamp = int(time.time())
@@ -64,6 +64,8 @@ async def generate_upi_intent_url(
         )
         if paytmqr:
             url += f"&paytmqr={paytmqr}"
+        else:
+            logger.warning("[PAYTM] ⚠️ paytm_qr_code is EMPTY! Payment verification WILL FAIL. Set it in Admin Panel.")
         url += (
             f"&tr={txn_ref_id}"
             f"&tn={note}"
